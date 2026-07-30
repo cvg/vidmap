@@ -1,0 +1,5 @@
+keyframes:
+  selection:
+    intrinsics_source: ground_truth
+use_geocalib: false
+view_graph_calibration: false

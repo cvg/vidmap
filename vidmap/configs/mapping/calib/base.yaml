@@ -1,0 +1,9 @@
+mapper:
+  ba:
+    annealing:
+      prior_std_factor: null
+    intrinsics:
+      prior_std_factor: 1.0
+  vgc:
+    filter:
+      enabled: false

@@ -1,0 +1,137 @@
+{
+  "dataset_page": "https://projects.asl.ethz.ch/datasets/euroc-mav/",
+  "research_collection": "https://www.research-collection.ethz.ch/items/bcaf173e-5dac-484b-bc37-faf97a594f1f",
+  "rights": "https://rightsstatements.org/page/InC-NC/1.0/",
+  "archives": {
+    "machine_hall": {
+      "filename": "machine_hall.zip",
+      "url": "https://www.research-collection.ethz.ch/server/api/core/bitstreams/7b2419c1-62b5-4714-b7f8-485e5fe3e5fe/content",
+      "size": 12683729426,
+      "sha256": "5ed7d07903f8d19b6c8808e2ae8a0872b281f6e34ef5497023b8ac58c3de0f6f"
+    },
+    "vicon_room1": {
+      "filename": "vicon_room1.zip",
+      "url": "https://www.research-collection.ethz.ch/server/api/core/bitstreams/02ecda9a-298f-498b-970c-b7c44334d880/content",
+      "size": 6042263426,
+      "sha256": "fe73c27be6dc8ac00493b78b750d36b144daf49eea7fdf3163e934527c1b5297"
+    },
+    "vicon_room2": {
+      "filename": "vicon_room2.zip",
+      "url": "https://www.research-collection.ethz.ch/server/api/core/bitstreams/ea12bc01-3677-4b4c-853d-87c7870b8c44/content",
+      "size": 6013384949,
+      "sha256": "6daf2cbc2de9a6bc4e02866c99ed01c29a5c7c164756f06c4f72656192977cfc"
+    }
+  },
+  "sequences": {
+    "machine_hall-MH_01_easy": {
+      "archive": "machine_hall",
+      "member": "machine_hall/MH_01_easy/MH_01_easy.zip",
+      "size": 1571292346,
+      "sha256": "5f4ecbc563e7bf04950efab76fc3b14e126d4c91a1dd1134c33124fe18a4bfc6",
+      "raw_cam0_images": 3682,
+      "canonical_images": 3638,
+      "first_image": "1403636580863555584.png",
+      "last_image": "1403636762713555456.png"
+    },
+    "machine_hall-MH_02_easy": {
+      "archive": "machine_hall",
+      "member": "machine_hall/MH_02_easy/MH_02_easy.zip",
+      "size": 1292413952,
+      "sha256": "7439b07f0b34a499494c63f08b958c7948132468bce7d4952aeb082720aebd51",
+      "raw_cam0_images": 3040,
+      "canonical_images": 2999,
+      "first_image": "1403636859551666432.png",
+      "last_image": "1403637009451666432.png"
+    },
+    "machine_hall-MH_03_medium": {
+      "archive": "machine_hall",
+      "member": "machine_hall/MH_03_medium/MH_03_medium.zip",
+      "size": 1105301873,
+      "sha256": "0f1707dfd6c9cda2c38302f4f7a47abb9a01a622a515dcbd6863730f0990f442",
+      "raw_cam0_images": 2700,
+      "canonical_images": 2630,
+      "first_image": "1403637132938319104.png",
+      "last_image": "1403637264388318976.png"
+    },
+    "machine_hall-MH_04_difficult": {
+      "archive": "machine_hall",
+      "member": "machine_hall/MH_04_difficult/MH_04_difficult.zip",
+      "size": 726518489,
+      "sha256": "b1a73e16ee8c7ce275844af3f06c7ecf647171e78983f903fd1fb1c47866bd3d",
+      "raw_cam0_images": 2033,
+      "canonical_images": 1976,
+      "first_image": "1403638128945096960.png",
+      "last_image": "1403638227695097088.png"
+    },
+    "machine_hall-MH_05_difficult": {
+      "archive": "machine_hall",
+      "member": "machine_hall/MH_05_difficult/MH_05_difficult.zip",
+      "size": 828426215,
+      "sha256": "7accb582d42c6826adb30c7d0f090dbf413202efdce495bb10b297d27800d19a",
+      "raw_cam0_images": 2273,
+      "canonical_images": 2221,
+      "first_image": "1403638519527829504.png",
+      "last_image": "1403638630527829504.png"
+    },
+    "vicon_room1-V1_01_easy": {
+      "archive": "vicon_room1",
+      "member": "vicon_room1/V1_01_easy/V1_01_easy.zip",
+      "size": 1149702102,
+      "sha256": "a920fe5b5e69a6ad19b32f1cfaf90ac2f59d45dfd1ca18cc9722e07684ba45fa",
+      "raw_cam0_images": 2912,
+      "canonical_images": 2871,
+      "first_image": "1403715274312143104.png",
+      "last_image": "1403715417812143104.png"
+    },
+    "vicon_room1-V1_02_medium": {
+      "archive": "vicon_room1",
+      "member": "vicon_room1/V1_02_medium/V1_02_medium.zip",
+      "size": 668079368,
+      "sha256": "0cf5d44baf7aac5d6d705dfb6c5abdd097139bc95aa252dc0c00c66d479ebfc2",
+      "raw_cam0_images": 1710,
+      "canonical_images": 1671,
+      "first_image": "1403715524912143104.png",
+      "last_image": "1403715608412143104.png"
+    },
+    "vicon_room1-V1_03_difficult": {
+      "archive": "vicon_room1",
+      "member": "vicon_room1/V1_03_difficult/V1_03_difficult.zip",
+      "size": 801343542,
+      "sha256": "3a29beda3c9467dcab08bfa181ed924c3397c2bdb3a780baaef6eb12955d82a4",
+      "raw_cam0_images": 2149,
+      "canonical_images": 2094,
+      "first_image": "1403715888384058112.png",
+      "last_image": "1403715993034057984.png"
+    },
+    "vicon_room2-V2_01_easy": {
+      "archive": "vicon_room2",
+      "member": "vicon_room2/V2_01_easy/V2_01_easy.zip",
+      "size": 883081407,
+      "sha256": "06875e7591a883c7bfadc4604c41dce4837a475fe272e0337650141bc9530262",
+      "raw_cam0_images": 2280,
+      "canonical_images": 2240,
+      "first_image": "1413393213505760512.png",
+      "last_image": "1413393325455760384.png"
+    },
+    "vicon_room2-V2_02_medium": {
+      "archive": "vicon_room2",
+      "member": "vicon_room2/V2_02_medium/V2_02_medium.zip",
+      "size": 898452319,
+      "sha256": "6bbaae64fa28d888533f8659284d5a7b4cd0278ec8f5d2548a919e296518edd2",
+      "raw_cam0_images": 2348,
+      "canonical_images": 2309,
+      "first_image": "1413393887255760384.png",
+      "last_image": "1413394002655760384.png"
+    },
+    "vicon_room2-V2_03_difficult": {
+      "archive": "vicon_room2",
+      "member": "vicon_room2/V2_03_difficult/V2_03_difficult.zip",
+      "size": 820796031,
+      "sha256": "98f78ae99e35a93af3f641c62d29d8826a63d013ffa89263a363ab03aab4ad7e",
+      "raw_cam0_images": 1922,
+      "canonical_images": 1890,
+      "first_image": "1413394882805760512.png",
+      "last_image": "1413394997605760512.png"
+    }
+  }
+}

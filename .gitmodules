@@ -1,0 +1,9 @@
+[submodule "third_party/RoMaV2"]
+	path = third_party/RoMaV2
+	url = https://github.com/Parskatt/RoMaV2.git
+[submodule "third_party/Depth-Anything-3"]
+	path = third_party/Depth-Anything-3
+	url = https://github.com/ByteDance-Seed/Depth-Anything-3.git
+[submodule "third_party/MegaLoc"]
+	path = third_party/MegaLoc
+	url = https://github.com/gmberton/MegaLoc.git

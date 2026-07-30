@@ -1,0 +1,6 @@
+keyframes:
+  selection:
+    force_gt_keyframes: true
+    intrinsics_source: ground_truth
+use_geocalib: false
+view_graph_calibration: false

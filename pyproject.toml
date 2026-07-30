@@ -1,0 +1,104 @@
+[build-system]
+requires = [
+  "scikit-build-core>=0.11,<0.12",
+  "pybind11==3.0.2",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "vidmap"
+dynamic = ["version"]
+description = "Video-based Structure-from-Motion"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy==1.26.4",
+  "scipy==1.15.3",
+  "pillow==11.3.0",
+  "opencv-python==4.11.0.86",
+  "h5py==3.14.0",
+  "pydantic==2.11.7",
+  "hydra-core==1.3.2",
+  "omegaconf==2.3.0",
+  "pyyaml==6.0.2",
+  "tqdm==4.67.1",
+  "natsort==8.4.0",
+  "evo==1.31.1",
+  "matplotlib==3.10.3",
+  "huggingface-hub==0.36.0",
+  "safetensors==0.5.3",
+  "einops==0.8.1",
+  "addict==2.4.0",
+  "requests==2.32.4",
+  "tomli==2.2.1; python_version < '3.11'",
+  "poselib @ git+https://github.com/PoseLib/PoseLib.git@48b0fdd032534f1d76ffb5bc1536b337d5517c50",
+  "lightglue @ git+https://github.com/cvg/LightGlue.git@c2f8561576f0160b2cdaa3e4634b6b61d6cf6cb8",
+  "geocalib @ git+https://github.com/cvg/GeoCalib.git@982f625d822fbb2b50c65d123fd1362a5c01ec2c",
+]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.28"
+cmake.source-dir = "extensions/colmap"
+cmake.build-type = "Release"
+cmake.define.BUILD_TESTING = "OFF"
+build.tool-args = ["-j8"]
+wheel.exclude = [
+  "depth_anything_3/app/**",
+  "depth_anything_3/bench/**",
+  "depth_anything_3/cli.py",
+  "depth_anything_3/services/**",
+  "romav2/benchmarks/**",
+]
+wheel.license-files = [
+  "third_party/Depth-Anything-3/LICENSE",
+  "third_party/MegaLoc/LICENSE",
+  "third_party/RoMaV2/LICENSE",
+]
+sdist.exclude = ["**"]
+sdist.include = [
+  "/pyproject.toml",
+  "/README.md",
+  "/extensions/colmap/src/**/*.cc",
+  "/extensions/colmap/src/**/*.h",
+  "/extensions/colmap/python/vidmap_native/*.py",
+  "/extensions/colmap/CMakeLists.txt",
+  "/third_party/Depth-Anything-3/LICENSE",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/api.py",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/cfg.py",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/configs/*.yaml",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/model/**/*.py",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/registry.py",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/specs.py",
+  "/third_party/Depth-Anything-3/src/depth_anything_3/utils/**/*.py",
+  "/third_party/MegaLoc/LICENSE",
+  "/third_party/MegaLoc/megaloc_model.py",
+  "/third_party/RoMaV2/LICENSE",
+  "/third_party/RoMaV2/src/romav2/*.py",
+  "/third_party/RoMaV2/src/romav2/vit/*.py",
+  "/vidmap/**/*.py",
+  "/vidmap/configs/**/*.yaml",
+  "/vidmap/datasets/assets/**/*.gz",
+  "/vidmap/datasets/assets/**/*.json",
+  "/vidmap/datasets/assets/**/*.tar.gz",
+  "/vidmap/datasets/assets/**/*.tsv",
+  "/vidmap/datasets/assets/**/*.yaml",
+]
+
+[tool.scikit-build.wheel.packages]
+vidmap = "vidmap"
+vidmap_native = "extensions/colmap/python/vidmap_native"
+depth_anything_3 = "third_party/Depth-Anything-3/src/depth_anything_3"
+MegaLoc = "third_party/MegaLoc"
+romav2 = "third_party/RoMaV2/src/romav2"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "extensions/colmap/python/vidmap_native/_version.py"
+
+[tool.black]
+line-length = 119
+
+[tool.isort]
+profile = "black"
+line_length = 119

@@ -1,0 +1,1 @@
+"""Global-positioning stage."""

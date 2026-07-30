@@ -1,0 +1,1 @@
+"""Validated native mapping integration."""

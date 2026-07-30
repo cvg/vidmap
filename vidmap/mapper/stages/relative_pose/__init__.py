@@ -1,0 +1,1 @@
+"""Relative-pose estimation stage."""

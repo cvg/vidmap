@@ -1,0 +1,673 @@
+{
+  "base_url": "https://cvg-data.inf.ethz.ch/lamar/raw/{scene}/sessions/",
+  "scenes": {
+    "CAB": {
+      "archives": [
+        {
+          "filename": "ios_2021-06-02_14.21.49.zip",
+          "sha256": "6d31666bb6a2e5d09f3237d5ab2d900131a2aaeed39d4b499534a60c054332bf",
+          "size": 4333024739
+        },
+        {
+          "filename": "ios_2021-06-02_14.31.38.zip",
+          "sha256": "b198da8158ccbd51f4663e460ed16abd0c293b97bc55ed04c3ec6205165a36bf",
+          "size": 2362729927
+        },
+        {
+          "filename": "ios_2021-06-02_14.48.13.zip",
+          "sha256": "ca3b9a9dae534885b165137f49341195d7694c41b9278e41d52ea7f5b20b9536",
+          "size": 3349591350
+        },
+        {
+          "filename": "ios_2021-06-02_14.59.05.zip",
+          "sha256": "a6e897e1a89bc21a8fcddaf94675b848dbce1b70ebc23d516613d94f64c3a7ec",
+          "size": 280021049
+        },
+        {
+          "filename": "ios_2021-06-02_15.00.23.zip",
+          "sha256": "c6ccc9d5ba11b191ecb62648fdedeb285a77055f2c3459dca04fb5a41c34d2c6",
+          "size": 4530477037
+        },
+        {
+          "filename": "ios_2021-06-03_12.16.58.zip",
+          "sha256": "004a19801396dcf781aa30e7bead0d84b7e0885342ebc240ece1aa6ffb6b74e6",
+          "size": 360464871
+        },
+        {
+          "filename": "ios_2022-01-12_15.50.47.zip",
+          "sha256": "edb2cb2913b72b1056bd06f70e25d3bf35eff3a70a0aa3de07b62918ff311b27",
+          "size": 2312255132
+        },
+        {
+          "filename": "ios_2022-01-12_16.27.04.zip",
+          "sha256": "e227b87d24e154920d80c3fac7bfb1e123617238cb49800d95b63c006bcae623",
+          "size": 706783766
+        },
+        {
+          "filename": "ios_2022-01-12_16.32.48.zip",
+          "sha256": "a05b028ec3667da22fb4024da5b14ca7d950f565bea64ef8d96cd92cb96ed58c",
+          "size": 710657826
+        },
+        {
+          "filename": "ios_2022-01-20_14.30.40.zip",
+          "sha256": "02541aa20ceb53c0cf155c74d63d542824696669fef2c6d70a7bcd4c07afee7e",
+          "size": 852811966
+        },
+        {
+          "filename": "ios_2022-01-20_14.45.26.zip",
+          "sha256": "4a1a3f696e52ab8f0f252c528dd336f1db7e2637999530d8d267614d31a193d6",
+          "size": 1080248130
+        },
+        {
+          "filename": "ios_2022-01-20_14.51.09.zip",
+          "sha256": "559ad6d97ef0bc3eec05bc90358e6f00cca30c042a94c1b65784b19bb447c305",
+          "size": 614825086
+        },
+        {
+          "filename": "ios_2022-01-20_15.01.57.zip",
+          "sha256": "dffc2d8a14d6d1b0cca933cf96136ec08d70c3b0d4ab26cea84e8a20d494e1b9",
+          "size": 771906512
+        },
+        {
+          "filename": "ios_2022-01-20_15.56.19.zip",
+          "sha256": "2169de2307586346f6e8c559f280737fb4ecc183e946c1cf689020e6ee618cbd",
+          "size": 671621208
+        },
+        {
+          "filename": "ios_2022-01-20_16.08.05.zip",
+          "sha256": "82290966410b08b91273a392d0e944d672e691ddbee52196ab0650eab6df841f",
+          "size": 686034898
+        },
+        {
+          "filename": "ios_2022-01-20_16.13.52.zip",
+          "sha256": "d3c3671b1603e477cbd28bf353c1ea0b6d87235a2337f6d0138000a65db8bfa1",
+          "size": 716875986
+        },
+        {
+          "filename": "ios_2022-01-20_16.30.16.zip",
+          "sha256": "c0057415b3a580fd4a5b0e35a7deb4f60c386a6017aecd2046f3e5a47b41fdab",
+          "size": 943958603
+        },
+        {
+          "filename": "ios_2022-01-20_16.36.03.zip",
+          "sha256": "070d8bb95123c056f1c51b121bc3122d622fba901b7a7ac27a2354add39cfa58",
+          "size": 675771915
+        },
+        {
+          "filename": "ios_2022-02-27_17.44.49.zip",
+          "sha256": "2553527dd6f1b2f4e76ed8daeaf2a304fa9fa0152b5ca8692068a73992d53af1",
+          "size": 634472063
+        },
+        {
+          "filename": "ios_2022-02-27_17.56.28.zip",
+          "sha256": "7bc3afd6079271c3bc67f69433d82cf1460395cd171fdb982ab9991d41eaca75",
+          "size": 856858793
+        },
+        {
+          "filename": "ios_2022-02-27_18.02.06.zip",
+          "sha256": "353a8775ebd33942649f9df9ec6f58f79a2704dc1858f616901dda525c1705c0",
+          "size": 406395868
+        },
+        {
+          "filename": "ios_2022-02-27_20.29.13.zip",
+          "sha256": "db56ed4538ecc40d85acb4d555ec5dd049f3e8df16f223d186e5a67e0788d856",
+          "size": 759255050
+        },
+        {
+          "filename": "ios_2022-02-27_20.35.36.zip",
+          "sha256": "11f62ca8a280b85949a67d7ec65fee961d653eef05a35b445018b40a005e6251",
+          "size": 759744461
+        },
+        {
+          "filename": "ios_2022-02-27_20.41.27.zip",
+          "sha256": "d74d39ff4a897f7d97758fce4649742e8e19a8027d2d6ca3285ce0037a8b524c",
+          "size": 695240025
+        },
+        {
+          "filename": "ios_2022-02-27_20.47.36.zip",
+          "sha256": "3df1e578d6789503a9c998b2c65c08a0c244b6cf49a0ead4eac667eff1af5103",
+          "size": 642750421
+        },
+        {
+          "filename": "ios_2022-06-20_15.32.23.zip",
+          "sha256": "b1bdd8f551409c3f845bd3b1e6da2e2ba85d1ce2e64f36d04c93409ac9c0fe19",
+          "size": 548096510
+        },
+        {
+          "filename": "ios_2022-06-20_15.57.17.zip",
+          "sha256": "dccecf6449c175a9a35f0e18cfa72ea079c810ca1ba2d09e174f33a1436c4c1a",
+          "size": 342711966
+        },
+        {
+          "filename": "ios_2022-06-20_16.02.21.zip",
+          "sha256": "cf7c8a463cfff69927afbf10377851120b546ebb323ded7568800e73a3a22691",
+          "size": 558603920
+        },
+        {
+          "filename": "ios_2022-06-20_16.07.07.zip",
+          "sha256": "bdcf1fb6f18eda4f8b2cea3da68323ccf9b0b64e6911da7b0e3bbeb4b3157ec8",
+          "size": 588023646
+        },
+        {
+          "filename": "ios_2022-06-20_17.25.58.zip",
+          "sha256": "6811f33973332998914d32c202f88a5e21ea6df9b5dfb5b8571df814b66a2b91",
+          "size": 854638724
+        },
+        {
+          "filename": "ios_2022-06-20_17.54.19.zip",
+          "sha256": "48d99dc3646f672588d6289b28e36572178f79f8ad1d4e8e564401c374946c99",
+          "size": 413171879
+        },
+        {
+          "filename": "ios_2022-06-20_18.24.49.zip",
+          "sha256": "594a9e78449605a42008c2eb168daa7e961eb8622a090773a245f4ffdcea3fe3",
+          "size": 169132056
+        },
+        {
+          "filename": "ios_2022-06-20_18.27.53.zip",
+          "sha256": "e4c5ab26db657b0f08527f0dce9b9002d31860cea368e29cff5ebc605af545e3",
+          "size": 179652520
+        },
+        {
+          "filename": "ios_2022-06-20_18.31.40.zip",
+          "sha256": "8b132d311de3413b9508fcb5a917c01de3b63a43ffc9d6e54ccf1cfb3e3a5295",
+          "size": 212643136
+        },
+        {
+          "filename": "ios_2022-06-20_18.44.33.zip",
+          "sha256": "359881f3bb334235b60b65b04e325cc53e7a96e09c991b3a3629a2963d3995d2",
+          "size": 726585367
+        },
+        {
+          "filename": "ios_2022-06-20_19.00.23.zip",
+          "sha256": "ef0672b21275f80b604a335382eecfb6bad01f60d4bdba6fe6cc2b95c107eb0d",
+          "size": 330438311
+        },
+        {
+          "filename": "ios_2022-06-22_13.33.34.zip",
+          "sha256": "d1eec63d45154cc4ebba77dbd686b97d8961700494cb7eebc57471fba6cdb376",
+          "size": 467505650
+        },
+        {
+          "filename": "ios_2022-07-03_13.26.22.zip",
+          "sha256": "111969e4da1d124dd7ddc629a1baaa5626c09df3dce87fdf14b2073b8d0b07a6",
+          "size": 551182024
+        },
+        {
+          "filename": "ios_2022-07-03_13.31.32.zip",
+          "sha256": "61e5327b5eef8cf9a7970958762f69b04cf2d1d6c35d0a3021b421333c98106d",
+          "size": 682334564
+        },
+        {
+          "filename": "ios_2022-07-03_14.07.18.zip",
+          "sha256": "f355ad31a38e1f954ea42edca75d6232c79daaf0ab79f4698bf789681c510e87",
+          "size": 633776411
+        },
+        {
+          "filename": "ios_2022-07-03_14.12.33.zip",
+          "sha256": "0b5381e06480eb993d6e82463e38d715b38b3182247cd95405bd9d19f1a78e64",
+          "size": 652054521
+        },
+        {
+          "filename": "ios_2022-09-22_23.15.33.zip",
+          "sha256": "17bf11443e8baf14290475506dbf8cd669b0ae0584dd6c0cbed8ca0f433342bb",
+          "size": 437781522
+        },
+        {
+          "filename": "ios_2022-09-22_23.21.08.zip",
+          "sha256": "7896b0be68a4277800a94da8eaaa73c8603541d584fae9164bbfd04bb17455ba",
+          "size": 388324763
+        },
+        {
+          "filename": "ios_2022-09-22_23.26.29.zip",
+          "sha256": "9da252261d3a34f3c4ed87dd65b12573ced6d81d66e6ed5144a8eea291cda2b6",
+          "size": 349290245
+        },
+        {
+          "filename": "ios_2022-09-22_23.32.03.zip",
+          "sha256": "603d6d4a885d74b44b9cfa2ba0c4a9069b65c61c6a972b7bd346c3f933bc3330",
+          "size": 420812663
+        },
+        {
+          "filename": "ios_2022-09-22_23.37.41.zip",
+          "sha256": "95f1c6b1cffd969f952129359b2205e3ceb780245927d61acdb126b2d803c506",
+          "size": 414112945
+        },
+        {
+          "filename": "ios_2022-09-22_23.43.06.zip",
+          "sha256": "b010ee9937c6046776e375599e338c09fce8e9599e7e3d2eafd08f5e7984ba37",
+          "size": 407927752
+        }
+      ]
+    },
+    "HGE": {
+      "archives": [
+        {
+          "filename": "ios_2021-05-04_22.18.12.zip",
+          "sha256": "33aa5bf1ce7d2b38f0d7b05bf31f1a63975ca4c6c90c00cfe3b31dce69571ca7",
+          "size": 358099261
+        },
+        {
+          "filename": "ios_2021-05-04_22.31.41.zip",
+          "sha256": "683e419ec252a4e2ecc5926792d507f72a49c79091c112deea2692cfd3e03a50",
+          "size": 116117051
+        },
+        {
+          "filename": "ios_2021-05-04_22.35.56.zip",
+          "sha256": "b34fa38e9e64fc02279346f0d7f05f3226fdb78489808b33c5d2be8e02ea6494",
+          "size": 19374860
+        },
+        {
+          "filename": "ios_2022-01-12_14.59.02.zip",
+          "sha256": "8bea1e473be5044e1f77c48ffa167f684d1b0e435a06018e23bd6e1c73c580f0",
+          "size": 1883455722
+        },
+        {
+          "filename": "ios_2022-01-12_15.15.53.zip",
+          "sha256": "65987d8ee14289508e268b20b64c527b77887393c37b70212b3d016ae8dbac40",
+          "size": 856869862
+        },
+        {
+          "filename": "ios_2022-01-12_15.40.44.zip",
+          "sha256": "c247e7fe5e26f67cc28e4e59e53bb974463dd4add4e4b069ad9d408c91795e78",
+          "size": 1557497565
+        },
+        {
+          "filename": "ios_2022-01-18_16.58.37.zip",
+          "sha256": "7e9cd4200a7062cf59a14f7e060cd14985d34453dda08e5f199befccd7c99174",
+          "size": 811477520
+        },
+        {
+          "filename": "ios_2022-01-18_17.05.03.zip",
+          "sha256": "446a589ee4d72fe7e762dfc1ffd3d4601cf43f86ce93538259ff9469ae06bd5e",
+          "size": 905474657
+        },
+        {
+          "filename": "ios_2022-01-18_17.10.39.zip",
+          "sha256": "c5054b8ef14d892c6b037f362c64850680cb9384651ee03d0dab7de6a5bf2490",
+          "size": 828992010
+        },
+        {
+          "filename": "ios_2022-01-18_17.27.41.zip",
+          "sha256": "a3787f10f627866098ee8e784393052b0bcb91ce665bfaf876edb43e38a04e44",
+          "size": 788769256
+        },
+        {
+          "filename": "ios_2022-01-18_17.33.12.zip",
+          "sha256": "1305aec504a12b76941a83f9e1d7e815dadc3ff03712beccaf27fe4e776321f3",
+          "size": 920144785
+        },
+        {
+          "filename": "ios_2022-01-18_17.39.34.zip",
+          "sha256": "52927a397beaf8c1fafbd6125c100468ac38e26c60fc5c2767261e3e75a0fe63",
+          "size": 683112934
+        },
+        {
+          "filename": "ios_2022-01-18_17.45.22.zip",
+          "sha256": "ddc1cde45b2124aaf790c2dd65386c4e3ec84801122c2a05ddf66bd13dd559b0",
+          "size": 99840934
+        },
+        {
+          "filename": "ios_2022-01-18_17.46.18.zip",
+          "sha256": "5bd4fb20710a7d2f1a1969a0ae4843f010d5928d835bef2005bc9b22cc6710b8",
+          "size": 720278714
+        },
+        {
+          "filename": "ios_2022-01-20_16.52.33.zip",
+          "sha256": "c9ce888dea81ef197c8ea713518ff8a76ec97514fc1001899537614316655ebf",
+          "size": 720148508
+        },
+        {
+          "filename": "ios_2022-01-20_17.30.07.zip",
+          "sha256": "e8aa7cb5f7347b544d6406a9cd26995edeaf61af712212f6b399253ffb3ab68b",
+          "size": 708774801
+        },
+        {
+          "filename": "ios_2022-01-20_17.35.39.zip",
+          "sha256": "c5dbd261a4f544a4d3662fdccf929b2e01d87e24b8814371624032b7d9819b38",
+          "size": 760879616
+        },
+        {
+          "filename": "ios_2022-01-20_17.41.01.zip",
+          "sha256": "2ab0602d6d10aa034c8534ffa62a07aa4c598055cef19aaaf4df9105c9b3b9a4",
+          "size": 778357807
+        },
+        {
+          "filename": "ios_2022-01-25_14.29.03.zip",
+          "sha256": "4b4da854760fd7227beaf3e53eeb8f9d401c3b983112e74ea444a1896d840109",
+          "size": 757003930
+        },
+        {
+          "filename": "ios_2022-01-25_14.34.24.zip",
+          "sha256": "d5122c23d56da5ab7847982a2ceff150a762a1bcfb5372d58df889554e978a1a",
+          "size": 718337354
+        },
+        {
+          "filename": "ios_2022-01-25_14.40.06.zip",
+          "sha256": "b22a55b4bd0914c19957f90463a2ea88864966ce0884c90d677c2d59545d9b84",
+          "size": 747294963
+        },
+        {
+          "filename": "ios_2022-01-25_14.52.32.zip",
+          "sha256": "fd11424ac035714575ac26af648bae18ed24b7197f875dd1b22044da8fba1887",
+          "size": 1154911569
+        },
+        {
+          "filename": "ios_2022-01-25_14.57.49.zip",
+          "sha256": "7d3fd72be2cd8fc048068115a38bc9936c8f996476e2bfbfdb936f246858b9c6",
+          "size": 674901715
+        },
+        {
+          "filename": "ios_2022-01-25_15.13.54.zip",
+          "sha256": "800fb109dabfb393981e481d39a7953e48646427161b0b7424e80374b723bc00",
+          "size": 731154203
+        },
+        {
+          "filename": "ios_2022-01-25_15.19.07.zip",
+          "sha256": "fb9aaf99095ec5c29d75e01db41d03f8c64138a354b23904cf91aca57da51491",
+          "size": 779771313
+        },
+        {
+          "filename": "ios_2022-02-16_18.11.44.zip",
+          "sha256": "2ca921515cfd9ef9d02b00c87cd0e4fd8302e7793aa3f9d8c409648427a3d861",
+          "size": 164076256
+        },
+        {
+          "filename": "ios_2022-02-16_18.41.33.zip",
+          "sha256": "f825c6081a8a703d60371060ea7e3a713c9740cc7b39612f52a83e62e87ab63f",
+          "size": 422946626
+        },
+        {
+          "filename": "ios_2022-02-16_18.46.58.zip",
+          "sha256": "0b17b5f726406f4a7ce09e2bc42c4393c65869a70eabfcbacb951f61b0d77b72",
+          "size": 644355008
+        },
+        {
+          "filename": "ios_2022-02-16_19.10.30.zip",
+          "sha256": "3a990d67afb866123a8321430a37288f6c06e6f04562983f34c00121dc827ac0",
+          "size": 389530117
+        },
+        {
+          "filename": "ios_2022-06-13_10.45.07.zip",
+          "sha256": "ac9470c3e6597638a5489b5623411569056b0274a2437c740dafe7b0470006df",
+          "size": 790725944
+        },
+        {
+          "filename": "ios_2022-06-13_15.59.36.zip",
+          "sha256": "0c71eeca7d7c2e8b81b0bd7e248fa6c407c1139eb8dfc3973586b8f43e4d9dbb",
+          "size": 867917188
+        },
+        {
+          "filename": "ios_2022-06-14_17.12.28.zip",
+          "sha256": "ea0fbaad25dd2f21c54b4a756c7bf37aec0d7833c5428182672e44016fe4e7b8",
+          "size": 5174182794
+        },
+        {
+          "filename": "ios_2022-06-21_11.43.41.zip",
+          "sha256": "966b807e8ffdaad4e6ee266cb60d685f22e58cfab33ea37ad276a7aa7f94afbb",
+          "size": 603849724
+        },
+        {
+          "filename": "ios_2022-06-24_14.59.11.zip",
+          "sha256": "e0f85c5ce979722d81ba203a83bcc1e5b658dabebf9b51e83a048d0325f75bd7",
+          "size": 695055705
+        },
+        {
+          "filename": "ios_2022-06-30_15.55.53.zip",
+          "sha256": "f258ec103d0aaedf8a812afa9f7b40d5516c2f4fea5d70b940e1c3ac15f7ac09",
+          "size": 727056300
+        },
+        {
+          "filename": "ios_2022-06-30_17.27.50.zip",
+          "sha256": "e4d446f54a6110ef3c8e364582adad1e62308efa7f45ca05b15f388fd7d5630b",
+          "size": 719759943
+        },
+        {
+          "filename": "ios_2022-07-01_15.18.09.zip",
+          "sha256": "eb22b27b4822fd4fcc3d9dbc5023028ac3c79204ce941355da8d74e929576c03",
+          "size": 405973998
+        },
+        {
+          "filename": "ios_2022-07-01_15.45.08.zip",
+          "sha256": "ba8d05a1c3045d01d881dbf55822f1aebd970bf7b24596167d1257fc90cbd445",
+          "size": 725146284
+        },
+        {
+          "filename": "ios_2022-07-01_15.58.10.zip",
+          "sha256": "1ec6cad5911970144bc553709c598261be0ee3cc3918502060d0e17f07b24d2e",
+          "size": 273352392
+        },
+        {
+          "filename": "ios_2022-07-03_16.00.37.zip",
+          "sha256": "831934140cdf77dd255e7b9bd75f22e87cdde506a8347b357ccc018271806d0f",
+          "size": 926835177
+        },
+        {
+          "filename": "ios_2022-07-03_16.11.10.zip",
+          "sha256": "84a306286350c4a0163e4c0b0937ae996eaacca2c7045354ed56f63a4e952751",
+          "size": 678403224
+        }
+      ]
+    },
+    "LIN": {
+      "archives": [
+        {
+          "filename": "ios_2021-06-02_11.04.35.zip",
+          "sha256": "78b3defde88efb73cb98ba0501ed83eb664f6beb7639fc3bad70b8481202fe1a",
+          "size": 420628786
+        },
+        {
+          "filename": "ios_2021-06-02_11.10.43.zip",
+          "sha256": "0f869214a1f47c48ed3d8d900b2d96f74c894081b815da0cce73f9487b13f747",
+          "size": 522379282
+        },
+        {
+          "filename": "ios_2021-06-02_11.12.32.zip",
+          "sha256": "fe5fd0bc0d2cb3071a1e712d7d5615e48eaa1dd9a63d4368d5b0ea5fd7fab576",
+          "size": 496337285
+        },
+        {
+          "filename": "ios_2021-06-02_11.13.01.zip",
+          "sha256": "c51f2fb9dbfe14a17f428d83babfe8455a818e7a1a4fb5ec54cd1d76d810b5cd",
+          "size": 414639991
+        },
+        {
+          "filename": "ios_2021-06-02_11.15.20.zip",
+          "sha256": "f38f96a572e614ca43d373085e8e39513c73830e476b857440e3bfba52da43ef",
+          "size": 465805816
+        },
+        {
+          "filename": "ios_2021-06-02_11.16.54.zip",
+          "sha256": "ea4f7333986f872dee5e36c7b95d0b4a6c6406d71c87cf79cac992f8ab6edc0f",
+          "size": 504637478
+        },
+        {
+          "filename": "ios_2022-01-19_16.43.36.zip",
+          "sha256": "2fc3f2c35a18cb0c7a3de321d881ac9637207ad417cf7e4c69e3b7ed35ddecc8",
+          "size": 773306859
+        },
+        {
+          "filename": "ios_2022-01-19_16.58.38.zip",
+          "sha256": "58ffd9a06fa775552379a5287d18b2e3189769421bf75452f43980d517c4d540",
+          "size": 822000739
+        },
+        {
+          "filename": "ios_2022-01-19_17.05.18.zip",
+          "sha256": "53736d339f87781064b19887883c488e4c8a23a3d13ade1c1aa38509fef343f8",
+          "size": 827121408
+        },
+        {
+          "filename": "ios_2022-01-19_17.13.06.zip",
+          "sha256": "cc67e521d87b2441c5ae3f0844359b045136d642eb6f957ef62bd6d0814bc895",
+          "size": 874979685
+        },
+        {
+          "filename": "ios_2022-01-19_17.22.39.zip",
+          "sha256": "ff9b541225f7e7cf3560292798ee5415a6d45ab30e1b8fffd87f4cbb048b80dc",
+          "size": 1038959394
+        },
+        {
+          "filename": "ios_2022-01-19_17.30.55.zip",
+          "sha256": "81d52210e369c3553b9a516d9e28fdea9b717d4e327ca5aa631b41f554fc1af2",
+          "size": 877864244
+        },
+        {
+          "filename": "ios_2022-02-10_14.47.24.zip",
+          "sha256": "cd0af3e7cc0e78a1fe7cb210540ca6e2e4a601e5b768889e1c941fa5794e97b2",
+          "size": 1348608244
+        },
+        {
+          "filename": "ios_2022-02-10_15.00.57.zip",
+          "sha256": "59cc3fe5959cd9ced47f7e3a28a1a48b50f65fc7bc14c43b5d9a2924d59a22b0",
+          "size": 223179448
+        },
+        {
+          "filename": "ios_2022-03-01_19.55.58.zip",
+          "sha256": "4ba8c86be50315d611c580ed704e1243b9dd2bb479353d51ceb129219eab6275",
+          "size": 594658063
+        },
+        {
+          "filename": "ios_2022-03-01_20.00.31.zip",
+          "sha256": "e5f39da528287aeeb7e7d3837d95805b437a64b42e56f41dbf530b2d87f36d3b",
+          "size": 809857814
+        },
+        {
+          "filename": "ios_2022-06-15_15.09.16.zip",
+          "sha256": "c679c7783fa4f2af1c193c6064002bd79a1f45ce2212fb94432cf8ef5d64951a",
+          "size": 684385156
+        },
+        {
+          "filename": "ios_2022-06-15_15.16.19.zip",
+          "sha256": "4f4d481071b024ad466f8bf92eccf778bb4897dbc4ca9562a5cb3b87c653cbb8",
+          "size": 899528967
+        },
+        {
+          "filename": "ios_2022-06-15_15.21.25.zip",
+          "sha256": "7c29f70843bceaeb23c3bed3797145ba95c092a8e5eb69d14eaf8778dcc188ba",
+          "size": 394284725
+        },
+        {
+          "filename": "ios_2022-06-15_16.02.11.zip",
+          "sha256": "d00ebe327d5bfb0ad6c2812dfa48565083095c2d7e1736d7073cbfd3924b8ca2",
+          "size": 318242007
+        },
+        {
+          "filename": "ios_2022-06-16_08.53.38.zip",
+          "sha256": "a00e42d21c613c1e67e7052936b23313c658a3915a9258f80f21df135fe3e7ff",
+          "size": 213028132
+        },
+        {
+          "filename": "ios_2022-06-16_09.08.26.zip",
+          "sha256": "15726e8a4b06340f55338a32fa8caa8b4dbf09ad498a1556adfc7a1ca8ff5afc",
+          "size": 621536120
+        },
+        {
+          "filename": "ios_2022-06-17_10.43.29.zip",
+          "sha256": "6b16a9d78b2769935f23058602f7fde772e045b32b2dc34b61419e43032a6b1f",
+          "size": 836175450
+        },
+        {
+          "filename": "ios_2022-06-19_20.13.58.zip",
+          "sha256": "193a8eec12cea77731fe382340badfc5e332ee6655b4d1ac31ba82f1fc3e9ae4",
+          "size": 924196716
+        },
+        {
+          "filename": "ios_2022-06-19_20.31.40.zip",
+          "sha256": "2f082cf955ff1541d58c314d6d7d4942bc0de08a4d24d1027215df36cddaadfc",
+          "size": 811847542
+        },
+        {
+          "filename": "ios_2022-06-19_23.08.45.zip",
+          "sha256": "e7566c6a667bce28c8b69aaea213023d1e915ef48d03e755dbb201decc3b45dc",
+          "size": 803748612
+        },
+        {
+          "filename": "ios_2022-06-19_23.20.54.zip",
+          "sha256": "87b611391f8a39881d4dca62ee9f1571860ec851a2701a99bc396e3cade00933",
+          "size": 766469433
+        },
+        {
+          "filename": "ios_2022-06-19_23.32.20.zip",
+          "sha256": "59470c12a5e0a727328b0694a6a8910af6844f7c62f5e47af66fc33443d5d2d8",
+          "size": 1233283017
+        },
+        {
+          "filename": "ios_2022-06-20_15.30.34.zip",
+          "sha256": "ffb65b18e41e72a025f8af7cbced0d5e7d2c74bd10f82d12437ad6d4fd2d1631",
+          "size": 1030399977
+        },
+        {
+          "filename": "ios_2022-06-22_16.27.35.zip",
+          "sha256": "cd0966366776f4c24dc4826b1d061a51b5e9a9bdcf62f7c6442b7b54294bd317",
+          "size": 1102753881
+        },
+        {
+          "filename": "ios_2022-06-22_17.00.35.zip",
+          "sha256": "5a978e505a66f8021b3b78bb59dcca48929ae082ce59576c130d112cd3c4a5d7",
+          "size": 911531663
+        },
+        {
+          "filename": "ios_2022-06-22_17.05.36.zip",
+          "sha256": "48f18b204fb95da570b78152f676464bf3adb3d429b15fe7cf7bbfd8f907b017",
+          "size": 1071488964
+        },
+        {
+          "filename": "ios_2022-06-22_17.21.49.zip",
+          "sha256": "c1e628ee8b0a39229fcde377dbd5970c9a3508db06de6bb5354b0cadde3931d1",
+          "size": 1447750199
+        },
+        {
+          "filename": "ios_2022-06-22_17.37.03.zip",
+          "sha256": "d2260cf582dd2f388cff9b0e16ce956a9651d3807026325020710a24ab26cf34",
+          "size": 854307959
+        },
+        {
+          "filename": "ios_2022-06-25_19.52.41.zip",
+          "sha256": "6c6027eda55e40e04bf7838eb57bc20dfc934f691c94e0d0ee371b022f3d8a37",
+          "size": 976743995
+        },
+        {
+          "filename": "ios_2022-06-25_19.59.50.zip",
+          "sha256": "5fc0ff007c892cfe927ab5dfc42aafa0ddcaa28985099187cb75bad569cb2341",
+          "size": 994592218
+        },
+        {
+          "filename": "ios_2022-06-25_20.22.11.zip",
+          "sha256": "07f9dd93c2797303cf05f540d4351d4204fb84c146e2f2f24c0c1bf31ab42531",
+          "size": 824011541
+        },
+        {
+          "filename": "ios_2022-06-25_20.28.02.zip",
+          "sha256": "1f7fdbee0e1345a952049babd94307eb0052fc5ae04c60ec3170b3635a543def",
+          "size": 825372418
+        },
+        {
+          "filename": "ios_2022-06-25_20.53.55.zip",
+          "sha256": "2ec21700d27a9acd51ad025ac0d74646e4d38a8350efbcab9f4839cb289d0cca",
+          "size": 725977530
+        },
+        {
+          "filename": "ios_2022-06-25_21.00.56.zip",
+          "sha256": "1a2766864b44402ba19276477d29b962aa392ddad833a7718776ee8408799efa",
+          "size": 828446241
+        },
+        {
+          "filename": "ios_2022-06-25_21.06.15.zip",
+          "sha256": "c0657a57ff67b65845025338352cdee1ad33fdc83e08741ffb373573ddf13d9c",
+          "size": 774306296
+        },
+        {
+          "filename": "ios_2022-06-30_14.49.05.zip",
+          "sha256": "abf75527924867e441d770069a6eccfa764a252dce086eab747b4d83d27f2a94",
+          "size": 1748371383
+        },
+        {
+          "filename": "ios_2022-06-30_15.04.54.zip",
+          "sha256": "4a9c90e033cef746f92750bfb371d62a7e6dfa95a3fba98aa3b9f6657e21af67",
+          "size": 917025063
+        }
+      ]
+    }
+  },
+  "version": "LaMAR raw data 2.2"
+}

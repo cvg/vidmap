@@ -1,0 +1,17 @@
+BasedOnStyle: Google
+BinPackArguments: false
+BinPackParameters: false
+DerivePointerAlignment: false
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex:    '^"colmap'
+    Priority: 1
+  - Regex:    '^"pycolmap'
+    Priority: 2
+  - Regex:    '^"thirdparty'
+    Priority: 3
+  - Regex:    '^<[[:alnum:]_]+>'
+    Priority: 4
+  - Regex:    '.*'
+    Priority: 5
+SortIncludes: true
