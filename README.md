@@ -12,6 +12,8 @@
 
 <p align="center"><a href="https://arxiv.org/abs/2607.27194">Paper</a></p>
 
+
+
 <p align="center">
   <img src="https://github.com/cvg/vidmap/releases/download/presentation-assets-v1/vidmap-demo-v2.gif" alt="VidMap optimization playback and reconstruction flythrough" width="80%">
 </p>
@@ -484,4 +486,5 @@ consider citing:
 
 VidMap builds on [COLMAP](https://github.com/colmap/colmap),
 [MP-SfM](https://github.com/cvg/mpsfm), and
-[hloc](https://github.com/cvg/Hierarchical-Localization).
+[hloc](https://github.com/cvg/Hierarchical-Localization). For the video visualizations, dense matches were densely triangulated using 
+[ImLoc](https://arxiv.org/abs/2601.04185).
