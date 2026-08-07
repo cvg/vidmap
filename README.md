@@ -10,8 +10,10 @@
 
 <p align="center"><strong>ECCV 2026</strong></p>
 
-<p align="center"><a href="https://arxiv.org/abs/2607.27194">Paper</a></p>
-
+<p align="center">
+  <a href="https://arxiv.org/abs/2607.27194">Paper</a> |
+  <a href="https://youtu.be/gy4szd3q5Oo">Video</a>
+</p>
 
 
 <p align="center">
