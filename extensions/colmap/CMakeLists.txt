@@ -12,6 +12,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+# Ceres may live outside the loader's search path, so keep the directories it was
+# linked from in the installed module's RPATH.
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 3.0.2 CONFIG REQUIRED)
@@ -43,6 +46,7 @@ set(
     src/types.cc
     src/solver_playback.cc
     src/ceres_loss.cc
+    src/solver_backend.cc
     src/conversion.cc
     src/mapping_problem.cc
     src/stages/image_pair_inliers.cc
@@ -65,6 +69,14 @@ target_include_directories(
     ${VIDMAP_COLMAP_INCLUDE_DIRS}
 )
 target_link_libraries(vidmap_native_algorithms PUBLIC ${VIDMAP_COLMAP_ESTIMATORS_TARGET})
+
+# COLMAP's static libraries can reference Abseil's logging internals without listing
+# Abseil in their exported configuration, which leaves the module with undefined
+# absl::log_internal symbols at import time.
+find_package(absl CONFIG QUIET)
+if(absl_FOUND)
+  target_link_libraries(vidmap_native_algorithms PUBLIC absl::log absl::check)
+endif()
 
 set(
   VIDMAP_NATIVE_BINDING_SOURCES
