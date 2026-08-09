@@ -139,11 +139,12 @@ def compute_retrieval_features(
 
 def _load_descriptors(names, hfile):
     """Load one ordered descriptor set."""
-    return torch.from_numpy(np.stack([hfile[name]["global_descriptor"].__array__() for name in names])).float()
+    descriptors = np.stack([hfile[name]["global_descriptor"][()] for name in names])
+    return torch.as_tensor(descriptors, dtype=torch.float)
 
 
 def _pairs_from_score_matrix(scores, invalid, num_select, min_score, return_scores):
-    invalid = torch.from_numpy(invalid).to(scores.device)
+    invalid = torch.as_tensor(invalid, device=scores.device)
     invalid |= scores < min_score
     scores.masked_fill_(invalid, float("-inf"))
     count = min(num_select, scores.shape[1])

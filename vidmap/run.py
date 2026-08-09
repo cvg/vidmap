@@ -71,6 +71,10 @@ def main(argv=None):
 
     from vidmap.mapper.runtime import load_mapping_runtime
 
+    # Keep this ahead of every torch import: libtorch_cpu.so exports its own statically
+    # linked BLAS/LAPACK (dgemm_, dpotrf_, ...), and if torch loads first those symbols win
+    # global resolution for SuiteSparse/Ceres, which makes CHOLMOD report "matrix not
+    # positive definite" and bundle adjustment fail.
     load_mapping_runtime()
 
     from vidmap.frontend.runner import run_local_frontend
