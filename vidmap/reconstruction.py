@@ -140,18 +140,46 @@ def write_local_input_provenance(directory: str | Path, image_dir: str | Path, *
     return path
 
 
-def propagate_local_input_provenance(
-    mapper_inputs: str | Path | MapperInputs, output_dir: str | Path, *, overwrite: bool
-) -> Path | None:
-    """Carry optional local-media provenance from a frontend into its mapping run."""
+def local_input_image_dir(mapper_inputs: str | Path | MapperInputs) -> Path | None:
+    """Return the RGB root recorded beside a mapper-inputs boundary, when present."""
     directory = (
         Path(mapper_inputs).expanduser() if isinstance(mapper_inputs, (str, Path)) else Path(mapper_inputs.directory)
     )
     source = directory.parent / LOCAL_INPUT_MANIFEST_NAME
-    if not source.is_file():
+    return _read_local_input_provenance(source) if source.is_file() else None
+
+
+def propagate_local_input_provenance(
+    mapper_inputs: str | Path | MapperInputs, output_dir: str | Path, *, overwrite: bool
+) -> Path | None:
+    """Carry optional local-media provenance from a frontend into its mapping run."""
+    image_dir = local_input_image_dir(mapper_inputs)
+    if image_dir is None:
         return None
-    image_dir = _read_local_input_provenance(source)
     return write_local_input_provenance(output_dir, image_dir, overwrite=overwrite)
+
+
+def extract_point_colors(reconstruction, mapper_inputs: str | Path | MapperInputs) -> bool:
+    """Sample point colors from the run's RGB images so COLMAP output is not uniformly black.
+
+    Colors are cosmetic, so a missing or unreadable image root degrades to a warning
+    rather than discarding a finished reconstruction.
+    """
+    try:
+        image_dir = local_input_image_dir(mapper_inputs)
+    except (FileNotFoundError, ValueError) as error:
+        logger.warning("Leaving points uncolored: %s", error)
+        return False
+    if image_dir is None:
+        logger.warning("Leaving points uncolored: no local input provenance beside %s", mapper_inputs)
+        return False
+    try:
+        reconstruction.extract_colors_for_all_images(str(image_dir))
+    except Exception:
+        logger.warning("Leaving points uncolored: color extraction failed for %s", image_dir, exc_info=True)
+        return False
+    logger.info("Extracted point colors from %s", image_dir)
+    return True
 
 
 def local_run_image_dir(run: str | Path) -> Path | None:

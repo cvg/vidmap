@@ -46,7 +46,7 @@ def build_parser() -> ArgumentParser:
 
 
 def _run_local(mapping_conf, frontend_conf, args, run_options) -> int:
-    from vidmap.reconstruction import propagate_local_input_provenance, run_mapping
+    from vidmap.reconstruction import extract_point_colors, propagate_local_input_provenance, run_mapping
 
     output_dir = Path(args.output).expanduser()
     reconstruction = run_mapping(
@@ -58,6 +58,7 @@ def _run_local(mapping_conf, frontend_conf, args, run_options) -> int:
         overwrite_outputs=args.overwrite,
         output_dir=output_dir,
     )
+    extract_point_colors(reconstruction, args.mapper_inputs)
     reconstruction_dir = output_dir / "rec"
     reconstruction_dir.mkdir(parents=True, exist_ok=True)
     reconstruction.write(reconstruction_dir)
