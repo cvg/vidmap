@@ -9,6 +9,7 @@ import numpy as np
 
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.losses import build_named_loss_config, loss_config_from_options, native_loss_type
+from vidmap.mapper.native.solver_backend import apply_solver_backend
 from vidmap.mapper.options.positioning import GPOptions
 
 
@@ -52,6 +53,7 @@ def apply_global_positioning_policy(native_options, options: GPOptions):
     native_options.apply_uncalibrated_loss_downweight = common.apply_uncalibrated_loss_downweight
     if common.num_threads is not None:
         native_options.num_threads = common.num_threads
+    apply_solver_backend(native_options, options.solver_backend)
     native_options.min_num_views_per_track = options.track_filter.min_num_views_per_track
     native_options.random_init_scale = common.random_init_scale
     native_options.parameter_ordering = {

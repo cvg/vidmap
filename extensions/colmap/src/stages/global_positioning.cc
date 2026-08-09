@@ -896,8 +896,7 @@ class GlobalPositioner {
         }
       }
     }
-    solver_options_.linear_solver_type = ceres::SPARSE_SCHUR;
-    solver_options_.preconditioner_type = ceres::CLUSTER_TRIDIAGONAL;
+    options_.solver_backend.Apply(&solver_options_);
     solver_options_.num_threads =
         colmap::GetEffectiveNumThreads(solver_options_.num_threads);
   }
@@ -1039,6 +1038,7 @@ class GlobalPositioner {
 
 void GlobalPositionerOptions::Validate() const {
   playback.Validate();
+  solver_backend.Validate();
   if (min_num_view_per_track <= 0 || random_seed < -1 ||
       !std::isfinite(random_init_scale) || random_init_scale < 0.0 ||
       !std::isfinite(uncalibrated_loss_downweight) ||

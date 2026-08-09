@@ -72,6 +72,8 @@ void BindBundleAdjustment(py::module_& m) {
                      &BundleAdjustmentOptions::gradient_tolerance)
       .def_readwrite("parameter_tolerance",
                      &BundleAdjustmentOptions::parameter_tolerance)
+      .def_readwrite("solver_backend",
+                     &BundleAdjustmentOptions::solver_backend)
       .def_readwrite("playback", &BundleAdjustmentOptions::playback)
       .def("validate", &BundleAdjustmentOptions::Validate);
 

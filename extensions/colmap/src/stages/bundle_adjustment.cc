@@ -102,7 +102,7 @@ class DefaultBundleAdjuster {
     AddDepthConstraints();
 
     ceres::Solver::Options solver_options;
-    solver_options.linear_solver_type = ceres::SPARSE_SCHUR;
+    options_.solver_backend.Apply(&solver_options);
     solver_options.minimizer_progress_to_stdout = false;
     solver_options.num_threads =
         colmap::GetEffectiveNumThreads(options_.num_threads);
@@ -643,6 +643,7 @@ void IntrinsicsPriorRecord::Validate() const {
 void BundleAdjustmentOptions::Validate() const {
   playback.Validate();
   reprojection_loss.Validate();
+  solver_backend.Validate();
   if (min_track_length < 0 || num_threads == 0 || max_num_iterations <= 0 ||
       !std::isfinite(function_tolerance) || function_tolerance < 0.0 ||
       !std::isfinite(gradient_tolerance) || gradient_tolerance < 0.0 ||

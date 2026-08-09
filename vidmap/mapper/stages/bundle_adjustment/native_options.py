@@ -6,6 +6,8 @@ import numpy as np
 
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.losses import build_named_loss_config, build_typed_loss_config
+from vidmap.mapper.native.solver_backend import apply_solver_backend
+from vidmap.mapper.options.solver import SolverBackendOptions
 
 
 def build_bundle_adjustment_options(
@@ -21,6 +23,7 @@ def build_bundle_adjustment_options(
     reprojection_scale: float,
     reprojection_weight: float,
     num_threads: int | None,
+    solver_backend: SolverBackendOptions,
 ):
     native_options = native.BundleAdjustmentOptions()
     native_options.image_order = list(image_order)
@@ -40,6 +43,7 @@ def build_bundle_adjustment_options(
     native_options.fix_all_poses = fix_all_poses
     native_options.use_log_depth_residual = True
     native_options.num_threads = -1 if num_threads is None else int(num_threads)
+    apply_solver_backend(native_options, solver_backend)
     return native_options
 
 

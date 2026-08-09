@@ -22,6 +22,23 @@ void BindGlobalPositioning(py::module_& m) {
       .def_readwrite("weight", &LossConfig::weight)
       .def("validate", &LossConfig::Validate);
 
+  py::enum_<LinearSolverType>(m, "LinearSolverType")
+      .value("SPARSE_SCHUR", LinearSolverType::kSparseSchur)
+      .value("ITERATIVE_SCHUR", LinearSolverType::kIterativeSchur);
+
+  py::enum_<PreconditionerType>(m, "PreconditionerType")
+      .value("JACOBI", PreconditionerType::kJacobi)
+      .value("SCHUR_JACOBI", PreconditionerType::kSchurJacobi)
+      .value("CLUSTER_JACOBI", PreconditionerType::kClusterJacobi)
+      .value("CLUSTER_TRIDIAGONAL", PreconditionerType::kClusterTridiagonal);
+
+  py::class_<SolverBackendOptions>(m, "SolverBackendOptions")
+      .def(py::init<>())
+      .def_readwrite("linear_solver", &SolverBackendOptions::linear_solver)
+      .def_readwrite("preconditioner", &SolverBackendOptions::preconditioner)
+      .def_readwrite("use_cuda", &SolverBackendOptions::use_cuda)
+      .def("validate", &SolverBackendOptions::Validate);
+
   py::enum_<MetricDepthResidualType>(m, "MetricDepthResidualType")
       .value("LINEAR", MetricDepthResidualType::kLinear)
       .value("LOG", MetricDepthResidualType::kLog)
@@ -135,6 +152,8 @@ void BindGlobalPositioning(py::module_& m) {
                      &GlobalPositionerOptions::gradient_tolerance)
       .def_readwrite("parameter_tolerance",
                      &GlobalPositionerOptions::parameter_tolerance)
+      .def_readwrite("solver_backend",
+                     &GlobalPositionerOptions::solver_backend)
       .def_readwrite("playback", &GlobalPositionerOptions::playback)
       .def("validate", &GlobalPositionerOptions::Validate);
 
