@@ -73,6 +73,14 @@ def main(argv=None):
 
     load_mapping_runtime()
 
+    # Import torch only after the native mapping runtime: libtorch_cpu.so exports its own
+    # statically linked BLAS/LAPACK (dgemm_, dpotrf_, ...), and if it is loaded first those
+    # symbols win global resolution for SuiteSparse/Ceres, which makes CHOLMOD report
+    # "matrix not positive definite" and bundle adjustment fail.
+    import torch
+
+    torch.set_float32_matmul_precision("high")
+
     from vidmap.frontend.runner import run_local_frontend
 
     frontend = run_local_frontend(
