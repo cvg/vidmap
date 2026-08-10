@@ -7,6 +7,7 @@ namespace vidmap {
 enum class LinearSolverType {
   kSparseSchur,
   kIterativeSchur,
+  kDenseSchur,
 };
 
 enum class PreconditionerType {
@@ -16,10 +17,11 @@ enum class PreconditionerType {
   kClusterTridiagonal,
 };
 
-// Which linear solver the large Schur-complement solves use. The sparse direct
-// default factorizes on one thread, so the iterative solver is the option that
-// scales with cores; CUDA moves the linear algebra onto the GPU and requires a
-// Ceres built with CUDA support.
+// Which linear solver the large Schur-complement solves use. CUDA support is
+// backend-specific: dense Schur requires CUDA-enabled Ceres 2.2 or newer,
+// while sparse Schur requires Ceres 2.3 or newer built with CUDA and cuDSS.
+// Iterative Schur is CPU-only here. Individual stages may further restrict a
+// backend when their problem structure is unsuitable for it.
 struct SolverBackendOptions {
   LinearSolverType linear_solver = LinearSolverType::kSparseSchur;
   PreconditionerType preconditioner = PreconditionerType::kSchurJacobi;
@@ -28,5 +30,9 @@ struct SolverBackendOptions {
   void Validate() const;
   void Apply(ceres::Solver::Options* solver_options) const;
 };
+
+const char* CeresVersion();
+bool IsCudaDenseSolverAvailable();
+bool IsCudaSparseSolverAvailable();
 
 }  // namespace vidmap

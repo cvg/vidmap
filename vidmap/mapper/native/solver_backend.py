@@ -8,6 +8,7 @@ def apply_solver_backend(native_options, options: SolverBackendOptions) -> None:
     """Point one native stage's solver at the configured Ceres linear solver."""
     backend = native_options.solver_backend
     backend.linear_solver = {
+        "dense_schur": native.LinearSolverType.DENSE_SCHUR,
         "sparse_schur": native.LinearSolverType.SPARSE_SCHUR,
         "iterative_schur": native.LinearSolverType.ITERATIVE_SCHUR,
     }[options.linear_solver]

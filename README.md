@@ -46,6 +46,50 @@ pip install -e .
 VidMap was last tested on Linux x86-64 with Python 3.10, COLMAP and PyCOLMAP
 4.1, PyTorch 2.7.1, TorchVision 0.22.1, and xFormers 0.0.31 on NVIDIA GPUs.
 
+### Experimental CUDA linear solvers
+
+The default mapper remains the CPU `sparse_schur` path. CUDA acceleration for
+global positioning and bundle adjustment is opt-in and depends on how Ceres was
+built:
+
+| Solver | Supported stage | Required Ceres build |
+| --- | --- | --- |
+| `dense_schur` | Bundle adjustment | Ceres 2.2 or newer with CUDA |
+| `sparse_schur` | Global positioning and bundle adjustment | Ceres 2.3 or newer with CUDA and cuDSS |
+| `iterative_schur` | Global positioning and bundle adjustment | CPU only in VidMap |
+
+Build Ceres and COLMAP from source with the corresponding CUDA support before
+installing VidMap. The sparse route currently relies on Ceres development code;
+it was validated with
+[`0b03102b`](https://github.com/ceres-solver/ceres-solver/commit/0b03102b090dfcbdffe99e957d7561f9056b2969)
+and cuDSS 0.8, and remains experimental. The native module reports the compiled
+capabilities:
+
+```bash
+python -c 'from vidmap_native import _core; print(_core.__ceres_version__, _core.__cuda_dense_solver_available__, _core.__cuda_sparse_solver_available__)'
+```
+
+With CUDA-enabled Ceres 2.2, global positioning remains on its default CPU
+sparse solver and dense CUDA can be enabled for bundle adjustment:
+
+```bash
+python -m vidmap.run \
+  --input_data "$INPUT_DATA" \
+  --output "$OUTPUT_DIR" \
+  mapping.mapper.ba.solver_backend.linear_solver=dense_schur \
+  mapping.mapper.ba.solver_backend.use_cuda=true
+```
+
+With Ceres 2.3 and cuDSS, sparse CUDA can instead be enabled for both stages:
+
+```bash
+python -m vidmap.run \
+  --input_data "$INPUT_DATA" \
+  --output "$OUTPUT_DIR" \
+  mapping.mapper.gp.solver_backend.use_cuda=true \
+  mapping.mapper.ba.solver_backend.use_cuda=true
+```
+
 The first frontend run automatically downloads approximately 9 GB of model
 checkpoints.
 

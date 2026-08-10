@@ -23,6 +23,7 @@ void BindGlobalPositioning(py::module_& m) {
       .def("validate", &LossConfig::Validate);
 
   py::enum_<LinearSolverType>(m, "LinearSolverType")
+      .value("DENSE_SCHUR", LinearSolverType::kDenseSchur)
       .value("SPARSE_SCHUR", LinearSolverType::kSparseSchur)
       .value("ITERATIVE_SCHUR", LinearSolverType::kIterativeSchur);
 

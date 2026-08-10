@@ -7,6 +7,17 @@ def test_native_api_version_is_explicit():
     assert native.__api_version__ == 5
 
 
+def test_solver_backend_capabilities_are_explicit():
+    assert native.__ceres_version__.count(".") == 2
+    assert isinstance(native.__cuda_dense_solver_available__, bool)
+    assert isinstance(native.__cuda_sparse_solver_available__, bool)
+    assert set(native.LinearSolverType.__members__) == {
+        "DENSE_SCHUR",
+        "SPARSE_SCHUR",
+        "ITERATIVE_SCHUR",
+    }
+
+
 def test_global_positioning_ordering_names_are_current():
     assert set(native.GlobalPositioningOrdering.__members__) == {"GROUPED", "SINGLETON"}
 
