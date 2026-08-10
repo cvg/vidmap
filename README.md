@@ -36,6 +36,10 @@ git clone --recursive https://github.com/cvg/vidmap.git && cd vidmap
 Build and install [COLMAP](https://github.com/colmap/colmap) 4.1 and its
 PyCOLMAP bindings
 [from source](https://colmap.github.io/install.html#build-from-source).
+For GPU mapper acceleration, build them against
+[Ceres 2.3 or newer](https://ceres-solver.readthedocs.io/latest/installation.html)
+with CUDA and cuDSS instead ([see how to enable](#gpu-acceleration)).
+
 Then install [PyTorch](https://docs.pytorch.org/get-started/locally/),
 [xFormers](https://github.com/facebookresearch/xformers), and VidMap:
 
@@ -45,50 +49,6 @@ pip install -e .
 
 VidMap was last tested on Linux x86-64 with Python 3.10, COLMAP and PyCOLMAP
 4.1, PyTorch 2.7.1, TorchVision 0.22.1, and xFormers 0.0.31 on NVIDIA GPUs.
-
-### Experimental CUDA linear solvers
-
-The default mapper remains the CPU `sparse_schur` path. CUDA acceleration for
-global positioning and bundle adjustment is opt-in and depends on how Ceres was
-built:
-
-| Solver | Supported stage | Required Ceres build |
-| --- | --- | --- |
-| `dense_schur` | Bundle adjustment | Ceres 2.2 or newer with CUDA |
-| `sparse_schur` | Global positioning and bundle adjustment | Ceres 2.3 or newer with CUDA and cuDSS |
-| `iterative_schur` | Global positioning and bundle adjustment | CPU only in VidMap |
-
-Build Ceres and COLMAP from source with the corresponding CUDA support before
-installing VidMap. The sparse route currently relies on Ceres development code;
-it was validated with
-[`0b03102b`](https://github.com/ceres-solver/ceres-solver/commit/0b03102b090dfcbdffe99e957d7561f9056b2969)
-and cuDSS 0.8, and remains experimental. The native module reports the compiled
-capabilities:
-
-```bash
-python -c 'from vidmap_native import _core; print(_core.__ceres_version__, _core.__cuda_dense_solver_available__, _core.__cuda_sparse_solver_available__)'
-```
-
-With CUDA-enabled Ceres 2.2, global positioning remains on its default CPU
-sparse solver and dense CUDA can be enabled for bundle adjustment:
-
-```bash
-python -m vidmap.run \
-  --input_data "$INPUT_DATA" \
-  --output "$OUTPUT_DIR" \
-  mapping.mapper.ba.solver_backend.linear_solver=dense_schur \
-  mapping.mapper.ba.solver_backend.use_cuda=true
-```
-
-With Ceres 2.3 and cuDSS, sparse CUDA can instead be enabled for both stages:
-
-```bash
-python -m vidmap.run \
-  --input_data "$INPUT_DATA" \
-  --output "$OUTPUT_DIR" \
-  mapping.mapper.gp.solver_backend.use_cuda=true \
-  mapping.mapper.ba.solver_backend.use_cuda=true
-```
 
 The first frontend run automatically downloads approximately 9 GB of model
 checkpoints.
@@ -155,16 +115,15 @@ it does not require playback tracing. Both outputs are stored under
 python -m vidmap.visualization.html \
   --rec "$OUTPUT_DIR/rec" \
   --ground-truth-rec /path/to/gt-reconstruction \
-  --images /path/to/images \
   --database "$MAPPER_INPUTS/database_complete.db" \
   --point-covariance-percentile 90
 ```
 
 Omitting `--ground-truth-rec` renders the reconstruction without a ground-truth
-trajectory. Including `--images` enables image RGB point colors. Including
-`--database` adds two-view edges. `--point-covariance-percentile` retains the
-lowest-covariance points, removing noisy low-parallax points. The output
-defaults to `$OUTPUT_DIR/3d.html`; use `--output` to choose another path.
+trajectory. Including `--database`
+adds two-view edges. `--point-covariance-percentile` retains the lowest-covariance
+points, removing noisy low-parallax points. The output defaults to
+`$OUTPUT_DIR/3d.html`; use `--output` to choose another path.
 
 </details>
 
@@ -297,6 +256,23 @@ python -m vidmap.run \
   --mapping-conf uncalib/custom \
   frontend.keyframes.selection.max_normalized_keypoint_drift=0.08 \
   mapping.mapper.gp.first_pass.loss_lc_geometry.weight=0.4
+```
+
+</details>
+
+<a id="gpu-acceleration"></a>
+<details>
+<summary>[GPU acceleration - click to expand]</summary>
+
+Enable GPU acceleration for global positioning and bundle adjustment (requires
+Ceres 2.3 or newer with GPU support; see [Setup](#setup)):
+
+```bash
+python -m vidmap.run \
+  --input_data "$INPUT_DATA" \
+  --output "$OUTPUT_DIR" \
+  mapping.mapper.gp.solver_backend.use_cuda=true \
+  mapping.mapper.ba.solver_backend.use_cuda=true
 ```
 
 </details>

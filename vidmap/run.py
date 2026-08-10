@@ -90,7 +90,7 @@ def main(argv=None):
     )
     logger.info("Mapper inputs ready: tag=%s path=%s", frontend.tag, frontend.path)
 
-    from vidmap.reconstruction import extract_point_colors, propagate_local_input_provenance, reconstruct
+    from vidmap.reconstruction import propagate_local_input_provenance, reconstruct
 
     output_dir = Path(args.output).expanduser()
     reconstruction = reconstruct(
@@ -105,7 +105,6 @@ def main(argv=None):
         overwrite_outputs=args.overwrite,
         output_dir=output_dir,
     )
-    extract_point_colors(reconstruction, frontend.mapper_inputs)
     reconstruction_dir = output_dir / "rec"
     reconstruction_dir.mkdir(parents=True, exist_ok=True)
     reconstruction.write(reconstruction_dir)

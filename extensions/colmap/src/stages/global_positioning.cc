@@ -1041,9 +1041,7 @@ void GlobalPositionerOptions::Validate() const {
   solver_backend.Validate();
   if (solver_backend.linear_solver == LinearSolverType::kDenseSchur) {
     throw std::invalid_argument(
-        "dense_schur is not supported for global positioning because its "
-        "per-observation scale variables make the dense reduced system "
-        "prohibitively large; use sparse_schur or iterative_schur");
+        "dense_schur is not supported for global positioning");
   }
   if (min_num_view_per_track <= 0 || random_seed < -1 ||
       !std::isfinite(random_init_scale) || random_init_scale < 0.0 ||

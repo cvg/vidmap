@@ -159,20 +159,27 @@ def propagate_local_input_provenance(
     return write_local_input_provenance(output_dir, image_dir, overwrite=overwrite)
 
 
-def extract_point_colors(reconstruction, mapper_inputs: str | Path | MapperInputs) -> bool:
+def extract_point_colors(
+    reconstruction,
+    mapper_inputs: str | Path | MapperInputs,
+    *,
+    image_dir: str | Path | None = None,
+) -> bool:
     """Sample point colors from the run's RGB images so COLMAP output is not uniformly black.
 
     Colors are cosmetic, so a missing or unreadable image root degrades to a warning
     rather than discarding a finished reconstruction.
     """
-    try:
-        image_dir = local_input_image_dir(mapper_inputs)
-    except (FileNotFoundError, ValueError) as error:
-        logger.warning("Leaving points uncolored: %s", error)
-        return False
+    if image_dir is None:
+        try:
+            image_dir = local_input_image_dir(mapper_inputs)
+        except (FileNotFoundError, ValueError) as error:
+            logger.warning("Leaving points uncolored: %s", error)
+            return False
     if image_dir is None:
         logger.warning("Leaving points uncolored: no local input provenance beside %s", mapper_inputs)
         return False
+    image_dir = Path(image_dir).expanduser()
     try:
         reconstruction.extract_colors_for_all_images(str(image_dir))
     except Exception:
@@ -481,13 +488,17 @@ def run_mapping(
         overwrite_outputs=overwrite_outputs,
         on_inputs_validated=initialize_output,
     )
+    extract_point_colors(
+        reconstruction,
+        mapper_inputs,
+        image_dir=None if scene_parser is None else scene_parser.rgb_dir,
+    )
     if run_options.save_3d_html:
         from vidmap.visualization.interactive_html import write_model_html
 
         write_model_html(
             reconstruction,
             scene_parser=scene_parser,
-            images_dir=None if scene_parser is None else scene_parser.rgb_dir,
             database=mapper_inputs.database_path,
             point_covariance_percentile=run_options.html_point_covariance_percentile,
             output=output_dir / "3d.html",

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/python/vidmap_native/_version.py" VIDMAP_VERSION_SOURCE)
-string(REGEX MATCH "__version__ = \"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${VIDMAP_VERSION_SOURCE}")
+string(REGEX MATCH "__version__ = \"([0-9]+\\.[0-9]+\\.[0-9]+)(\\.dev[0-9]+)?\"" _ "${VIDMAP_VERSION_SOURCE}")
 if(NOT CMAKE_MATCH_1)
   message(FATAL_ERROR "Cannot read the VidMap version")
 endif()

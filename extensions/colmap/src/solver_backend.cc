@@ -10,42 +10,26 @@
 
 namespace vidmap {
 
-const char* CeresVersion() { return CERES_VERSION_STRING; }
-
-bool IsCudaDenseSolverAvailable() {
-  return ceres::IsDenseLinearAlgebraLibraryTypeAvailable(ceres::CUDA);
-}
-
-bool IsCudaSparseSolverAvailable() {
-#if VIDMAP_CERES_HAS_CUDSS && !defined(CERES_NO_CUDSS)
-  return ceres::IsSparseLinearAlgebraLibraryTypeAvailable(ceres::CUDA_SPARSE);
-#else
-  return false;
-#endif
-}
-
 void SolverBackendOptions::Validate() const {
   if (!use_cuda) return;
 
   switch (linear_solver) {
     case LinearSolverType::kDenseSchur:
-      if (!IsCudaDenseSolverAvailable()) {
-        throw std::invalid_argument(
-            "dense_schur with use_cuda=true requires Ceres built with CUDA "
-            "support");
+      if (!ceres::IsDenseLinearAlgebraLibraryTypeAvailable(ceres::CUDA)) {
+        throw std::invalid_argument("Ceres was built without CUDA support");
       }
       return;
     case LinearSolverType::kSparseSchur:
-      if (!IsCudaSparseSolverAvailable()) {
-        throw std::invalid_argument(
-            "sparse_schur with use_cuda=true requires Ceres 2.3 or newer "
-            "built with CUDA and cuDSS support");
+#if VIDMAP_CERES_HAS_CUDSS && !defined(CERES_NO_CUDSS)
+      if (ceres::IsSparseLinearAlgebraLibraryTypeAvailable(
+              ceres::CUDA_SPARSE)) {
+        return;
       }
-      return;
-    case LinearSolverType::kIterativeSchur:
+#endif
       throw std::invalid_argument(
-          "iterative_schur is CPU-only; use dense_schur with CUDA-enabled "
-          "Ceres 2.2 or sparse_schur with Ceres 2.3 and cuDSS");
+          "sparse_schur requires Ceres 2.3 with CUDA and cuDSS");
+    case LinearSolverType::kIterativeSchur:
+      throw std::invalid_argument("iterative_schur is CPU-only");
   }
 }
 
@@ -62,7 +46,6 @@ void SolverBackendOptions::Apply(ceres::Solver::Options* solver_options) const {
       solver_options->linear_solver_type = ceres::ITERATIVE_SCHUR;
       break;
   }
-
   switch (preconditioner) {
     case PreconditionerType::kJacobi:
       solver_options->preconditioner_type = ceres::JACOBI;
@@ -77,7 +60,6 @@ void SolverBackendOptions::Apply(ceres::Solver::Options* solver_options) const {
       solver_options->preconditioner_type = ceres::CLUSTER_TRIDIAGONAL;
       break;
   }
-
   if (use_cuda && linear_solver == LinearSolverType::kDenseSchur) {
     solver_options->dense_linear_algebra_library_type = ceres::CUDA;
   }
