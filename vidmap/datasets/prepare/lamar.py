@@ -32,8 +32,7 @@ _GROUND_TRUTH_MODELS_FILENAME = "lamar_ground_truth_models.tar.gz"
 _GROUND_TRUTH_MODELS_SIZE = 11_689_090
 _GROUND_TRUTH_MODELS_SHA256 = "60770ead917d936fcef7b0115a8d67cd8044e7dc6655321e7e837923b3736428"
 _GROUND_TRUTH_MODELS_URL = (
-    "https://github.com/cvg/vidmap/releases/download/"
-    f"dataset-assets-v2/{_GROUND_TRUTH_MODELS_FILENAME}"
+    f"https://github.com/cvg/vidmap/releases/download/dataset-assets-v2/{_GROUND_TRUTH_MODELS_FILENAME}"
 )
 _PREPARATION_PROFILE = "sample-300"
 _SAMPLE_SHA256 = {
