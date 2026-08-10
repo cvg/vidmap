@@ -1,0 +1,18 @@
+name: Format Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install black==24.4.2 ruff==0.4.4 isort==5.13.2
+      - run: black --check --line-length=119 vidmap/
+      - run: ruff check --no-fix vidmap/
+      - run: isort --check-only --profile=black --line-length=119 vidmap/
