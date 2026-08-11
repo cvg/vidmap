@@ -5,10 +5,8 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 THREE_JS_URL = "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"
 ORBIT_CONTROLS_URL = "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"
@@ -46,28 +44,11 @@ def _all_points(model, point_ids=None) -> np.ndarray:
     return _float32_xyz([model.point3D(int(point_id)).xyz for point_id in point_ids])
 
 
-def sample_point_colors(model, images_dir: str | Path) -> np.ndarray:
-    """Run COLMAP's native all-image point-color extractor."""
-    images_dir = Path(images_dir)
-    for image_id in sorted(model.images):
-        image = model.images[image_id]
-        if not image.has_pose:
-            continue
-        image_path = images_dir / image.name
-        if not image_path.is_file():
-            raise FileNotFoundError(f"Registered image does not exist: {image_path}")
-        with Image.open(image_path) as source:
-            actual_size = source.size
-        camera = model.cameras[image.camera_id]
-        expected_size = (int(camera.width), int(camera.height))
-        if actual_size != expected_size:
-            raise ValueError(
-                f"Image dimensions do not match reconstruction camera for {image.name}: "
-                f"expected {expected_size[0]}x{expected_size[1]}, got {actual_size[0]}x{actual_size[1]}"
-            )
-
-    model.extract_colors_for_all_images(str(images_dir))
-    return np.ascontiguousarray(np.asarray([point.color for point in model.points3D.values()], dtype=np.uint8))
+def stored_point_colors(model) -> np.ndarray:
+    """Return the RGB values already stored in the reconstruction."""
+    return np.ascontiguousarray(
+        np.asarray([point.color for point in model.points3D.values()], dtype=np.uint8).reshape(-1, 3)
+    )
 
 
 def _frustum_segments(image, camera, *, size: float) -> np.ndarray:

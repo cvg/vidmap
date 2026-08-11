@@ -15,6 +15,8 @@ struct VideoRotationAveragingOptions {
   double max_rotation_error_deg = 0.0;
   double video_tracking_huber_scale = 0.1;
   double video_lc_cauchy_scale = 0.05;
+  // One thread keeps rotation averaging byte-identical across runs; -1, or any
+  // count above one, trades that determinism for Ceres parallelism.
   int num_threads = 1;
   int max_num_iterations = 100;
 

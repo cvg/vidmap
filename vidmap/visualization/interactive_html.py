@@ -86,7 +86,6 @@ class InteractiveHtmlExporter:
 
     model: object
     ground_truth: object | None = None
-    images_dir: Path | None = None
     database: Path | None = None
     include_cameras: bool = False
     point_covariance_percentile: float | None = None
@@ -101,7 +100,6 @@ class InteractiveHtmlExporter:
         reconstruction: str | Path,
         *,
         ground_truth: str | Path | None = None,
-        images_dir: str | Path | None = None,
         database: str | Path | None = None,
         include_cameras: bool = False,
         point_covariance_percentile: float | None = None,
@@ -121,11 +119,6 @@ class InteractiveHtmlExporter:
                 raise FileNotFoundError(f"Ground-truth directory does not exist: {ground_truth_path}")
             ground_truth_model = pycolmap.Reconstruction(ground_truth_path)
 
-        resolved_images_dir = None
-        if images_dir is not None:
-            resolved_images_dir = Path(images_dir).expanduser()
-            if not resolved_images_dir.is_dir():
-                raise FileNotFoundError(f"Image directory does not exist: {resolved_images_dir}")
         resolved_database = None
         if database is not None:
             resolved_database = Path(database).expanduser()
@@ -134,7 +127,6 @@ class InteractiveHtmlExporter:
         return cls(
             model=model,
             ground_truth=ground_truth_model,
-            images_dir=resolved_images_dir,
             database=resolved_database,
             include_cameras=include_cameras,
             point_covariance_percentile=point_covariance_percentile,
@@ -157,9 +149,7 @@ class InteractiveHtmlExporter:
                     )
                     display_model.transform(transform)
         point_ids = None
-        point_colors = None
-        if self.images_dir is not None:
-            point_colors = threejs_scene.sample_point_colors(display_model, self.images_dir)
+        point_colors = threejs_scene.stored_point_colors(display_model)
         if self.point_covariance_percentile is not None:
             all_point_ids = tuple(display_model.points3D)
             point_ids = lowest_covariance_point_ids(
@@ -167,9 +157,8 @@ class InteractiveHtmlExporter:
                 all_point_ids,
                 self.point_covariance_percentile,
             )
-            if point_colors is not None:
-                index_by_id = {point_id: index for index, point_id in enumerate(all_point_ids)}
-                point_colors = point_colors[[index_by_id[int(point_id)] for point_id in point_ids]]
+            index_by_id = {point_id: index for index, point_id in enumerate(all_point_ids)}
+            point_colors = point_colors[[index_by_id[int(point_id)] for point_id in point_ids]]
         loop_closure_edges, loop_closure_shared_points = self._loop_closure_geometry(display_model)
         return threejs_scene.build_scene_geometry(
             display_model,
@@ -241,7 +230,6 @@ def write_model_html(
     model,
     *,
     scene_parser=None,
-    images_dir: str | Path | None = None,
     database: str | Path | None = None,
     include_cameras: bool = False,
     point_covariance_percentile: float | None = None,
@@ -252,7 +240,6 @@ def write_model_html(
     return InteractiveHtmlExporter(
         model,
         ground_truth,
-        images_dir=images_dir,
         database=None if database is None else Path(database),
         include_cameras=include_cameras,
         point_covariance_percentile=point_covariance_percentile,

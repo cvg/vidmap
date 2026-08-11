@@ -64,6 +64,8 @@ class RAOptions:
     max_rotation_error_deg: float = 0.0
     video_tracking_huber_scale: float = 0.1
     video_lc_cauchy_scale: float = 0.05
+    # One thread keeps the solve byte-identical; None means one, -1 means every core.
+    num_threads: Optional[int] = None
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

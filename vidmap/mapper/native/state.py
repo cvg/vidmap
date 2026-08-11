@@ -158,9 +158,11 @@ class SolveState:
             record.xyz = np.asarray(point.xyz, dtype=np.float64)
             record.color = np.asarray(point.color, dtype=np.uint8)
             record.error = float(point.error)
-            record.observations = np.asarray(
-                [(element.image_id, element.point2D_idx) for element in point.track.elements],
+            elements = point.track.elements
+            record.observations = np.fromiter(
+                (value for element in elements for value in (element.image_id, element.point2D_idx)),
                 dtype=np.uint32,
+                count=2 * len(elements),
             ).reshape((-1, 2))
             point3D_id = int(point3D_id)
             if point3D_id in loop_closure_sidecars:

@@ -72,12 +72,31 @@ void BindBundleAdjustment(py::module_& m) {
                      &BundleAdjustmentOptions::gradient_tolerance)
       .def_readwrite("parameter_tolerance",
                      &BundleAdjustmentOptions::parameter_tolerance)
+      .def_readwrite("solver_backend",
+                     &BundleAdjustmentOptions::solver_backend)
       .def_readwrite("playback", &BundleAdjustmentOptions::playback)
       .def("validate", &BundleAdjustmentOptions::Validate);
 
   py::class_<BundleAdjustmentDiagnostics>(m, "BundleAdjustmentDiagnostics")
+      .def_readonly("num_reprojection_residuals",
+                    &BundleAdjustmentDiagnostics::num_reprojection_residuals)
+      .def_readonly("num_depth_residuals",
+                    &BundleAdjustmentDiagnostics::num_depth_residuals)
+      .def_readonly(
+          "num_intrinsics_prior_residuals",
+          &BundleAdjustmentDiagnostics::num_intrinsics_prior_residuals)
+      .def_readonly("num_scale_prior_residuals",
+                    &BundleAdjustmentDiagnostics::num_scale_prior_residuals)
       .def_readonly("num_residual_blocks",
                     &BundleAdjustmentDiagnostics::num_residual_blocks)
+      .def_readonly("num_parameter_blocks",
+                    &BundleAdjustmentDiagnostics::num_parameter_blocks)
+      .def_readonly("num_parameters",
+                    &BundleAdjustmentDiagnostics::num_parameters)
+      .def_readonly("num_iterations",
+                    &BundleAdjustmentDiagnostics::num_iterations)
+      .def_readonly("termination_type",
+                    &BundleAdjustmentDiagnostics::termination_type)
       .def_readonly("initial_cost", &BundleAdjustmentDiagnostics::initial_cost)
       .def_readonly("final_cost", &BundleAdjustmentDiagnostics::final_cost);
 

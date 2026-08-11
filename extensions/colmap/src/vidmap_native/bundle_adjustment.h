@@ -5,6 +5,7 @@
 
 #include "vidmap_native/ceres_loss.h"
 #include "vidmap_native/mapping_problem.h"
+#include "vidmap_native/solver_backend.h"
 #include "vidmap_native/solver_playback.h"
 
 namespace vidmap {
@@ -58,6 +59,7 @@ struct BundleAdjustmentOptions {
   double function_tolerance = 1e-6;
   double gradient_tolerance = 1e-10;
   double parameter_tolerance = 1e-8;
+  SolverBackendOptions solver_backend;
   SolverPlaybackOptions playback;
 
   void Validate() const;

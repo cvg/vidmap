@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from vidmap.configuration.validators import dataclass as pydantic_dataclass
 from vidmap.configuration.validators import instantiate_nested_options
+from vidmap.mapper.options.solver import SolverBackendOptions
 
 ScaleLossName = Literal["trivial", "huber", "cauchy", "soft_l1"]
 NativeLossName = Literal["trivial", "soft_l1", "cauchy", "huber"]
@@ -144,6 +145,7 @@ class GPTemporalAccelerationOptions:
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
 class GPOptions:
     common: GPCommonOptions = dc_field(default_factory=GPCommonOptions)
+    solver_backend: SolverBackendOptions = dc_field(default_factory=SolverBackendOptions)
     first_pass: GPFirstPassOptions = dc_field(default_factory=GPFirstPassOptions)
     second_pass: GPSecondPassOptions = dc_field(default_factory=GPSecondPassOptions)
     track_filter: GPTrackFilterOptions = dc_field(default_factory=GPTrackFilterOptions)
@@ -156,6 +158,7 @@ class GPOptions:
             raw,
             {
                 "common": GPCommonOptions,
+                "solver_backend": SolverBackendOptions,
                 "first_pass": GPFirstPassOptions,
                 "second_pass": GPSecondPassOptions,
                 "track_filter": GPTrackFilterOptions,

@@ -317,6 +317,16 @@ class GlobalPositioner:
             for point3D_id in self.solve_state.native_problem.point3D_ids
         }
 
+    def export_solved_scene(self) -> None:
+        """Publish one solved pass to the pycolmap checkpoint.
+
+        Positioning moves point coordinates and poses but never track membership, so the
+        value-only track export is exact; it falls back to a full rebuild if ids diverge.
+        """
+        self.solve_state.export_cameras()
+        self.solve_state.export_poses()
+        self.solve_state.export_track_values()
+
     def first_pass(self, native_options, replay_images):
         input_summary = None
         if self.replay.write_enabled("gp1"):
@@ -333,7 +343,7 @@ class GlobalPositioner:
         if self.playback_trace is not None:
             self.playback_trace.attach_global_positioning(native_options, "gp1")
         result = native.run_global_positioning(native_options, self.solve_state.native_problem)
-        self.solve_state.export_scene()
+        self.export_solved_scene()
         replay_result = self.result_for_replay(result)
         if self.replay.write_enabled("gp1"):
             initial_state = capture_gp_initial_state("gp1", native_options, replay_result, input_summary, self.tracks)
@@ -372,14 +382,13 @@ class GlobalPositioner:
             stage="gp2",
             prior_specs=temporal_prior_specs,
         )
-        tracks = self.current_tracks()
         input_summary = None
         if self.replay.write_enabled("gp2"):
             input_summary = gp_input_summary(
                 "gp2",
                 self.solve_state,
                 replay_images,
-                tracks,
+                self.current_tracks(),
                 self.reconstruction.cameras,
             )
             self.replay.write_json("gp2", "input_rotations.json", gp_input_rotations(replay_images))
@@ -387,7 +396,7 @@ class GlobalPositioner:
         if self.playback_trace is not None:
             self.playback_trace.attach_global_positioning(native_options, "gp2")
         result = native.run_global_positioning(native_options, self.solve_state.native_problem)
-        self.solve_state.export_scene()
+        self.export_solved_scene()
         replay_result = self.result_for_replay(result)
         if self.replay.write_enabled("gp2"):
             self.replay.write_json(

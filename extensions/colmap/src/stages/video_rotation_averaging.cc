@@ -20,6 +20,7 @@
 #include <limits>
 #include <queue>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -310,7 +311,7 @@ void VideoRotationAveragingOptions::Validate() const {
       !std::isfinite(video_tracking_huber_scale) ||
       video_tracking_huber_scale <= 0.0 ||
       !std::isfinite(video_lc_cauchy_scale) || video_lc_cauchy_scale <= 0.0 ||
-      num_threads <= 0 || max_num_iterations <= 0) {
+      num_threads == 0 || num_threads < -1 || max_num_iterations <= 0) {
     throw std::invalid_argument("invalid rotation averaging options");
   }
 }
@@ -394,7 +395,10 @@ RotationAveragingResult RunVideoRotationAveraging(
   ceres::Solver::Options solver_options;
   solver_options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
   solver_options.max_num_iterations = options.max_num_iterations;
-  solver_options.num_threads = options.num_threads;
+  solver_options.num_threads =
+      options.num_threads > 0
+          ? options.num_threads
+          : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
   ceres::Solver::Summary summary;
   ceres::Solve(solver_options, &ceres_problem, &summary);
   if (!summary.IsSolutionUsable()) return result;

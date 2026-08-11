@@ -25,6 +25,7 @@ def _build_native_options(options: RAOptions):
     native_options.loop_closure_cauchy_scale = options.video_lc_cauchy_scale
     native_options.skip_risky_loop_closure_pairs = options.filter_risky_loop_closure_pairs
     native_options.filter_unregistered_images = options.filter_unregistered_images
+    native_options.num_threads = 1 if options.num_threads is None else int(options.num_threads)
     return native_options
 
 

@@ -27,11 +27,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional COLMAP ground-truth reconstruction directory to align and display.",
     )
     parser.add_argument(
-        "--images",
-        type=Path,
-        help="Optional image root used to sample per-point RGB colors.",
-    )
-    parser.add_argument(
         "--database",
         type=Path,
         help="Optional COLMAP database used to display valid loop-closure pairs.",
@@ -61,7 +56,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     exporter = InteractiveHtmlExporter.from_paths(
         args.rec,
         ground_truth=args.ground_truth_rec,
-        images_dir=args.images,
         database=args.database,
         include_cameras=args.include_cameras,
         point_covariance_percentile=args.point_covariance_percentile,

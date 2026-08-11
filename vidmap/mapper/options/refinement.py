@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from vidmap.configuration.validators import dataclass as pydantic_dataclass
 from vidmap.configuration.validators import instantiate_nested_options
+from vidmap.mapper.options.solver import SolverBackendOptions
 
 ReprojectionLossName = Literal["trivial", "soft_l1", "cauchy", "huber"]
 DepthLossName = Literal["trivial", "cauchy", "soft_l1"]
@@ -78,6 +79,7 @@ class BAOptions:
     triangulation: BATriangulationOptions = dc_field(default_factory=BATriangulationOptions)
     depth: BADepthOptions = dc_field(default_factory=BADepthOptions)
     intrinsics: BAIntrinsicsOptions = dc_field(default_factory=BAIntrinsicsOptions)
+    solver_backend: SolverBackendOptions = dc_field(default_factory=SolverBackendOptions)
 
     retriangulation_reproj_multiplier: float = 8.0
     first_iteration_error_multiplier: float = 2.0
@@ -105,5 +107,6 @@ class BAOptions:
                 "depth": BADepthOptions,
                 "intrinsics": BAIntrinsicsOptions,
                 "triangulation": BATriangulationOptions,
+                "solver_backend": SolverBackendOptions,
             },
         )

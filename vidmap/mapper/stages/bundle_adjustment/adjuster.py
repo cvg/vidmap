@@ -32,6 +32,27 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
+class Point3DTable:
+    """Every point of one reconstruction snapshot, kept in reconstruction order.
+
+    Rows stay in reconstruction order because that order reaches Ceres through
+    ``variable_point3D_ids``; ``sorted_ids``/``order`` turn a per-image lookup into a
+    binary search instead of one pybind call per observation.
+    """
+
+    ids: np.ndarray
+    xyz: np.ndarray
+    track_lengths: np.ndarray
+    sorted_ids: np.ndarray
+    order: np.ndarray
+
+    def indices(self, point3D_ids) -> np.ndarray:
+        """Row of each requested id; observed ids always exist in the reconstruction."""
+        positions = np.searchsorted(self.sorted_ids, np.asarray(point3D_ids, dtype=np.int64))
+        return self.order[positions]
+
+
+@dataclass(frozen=True, kw_only=True)
 class BASolvePolicy:
     """Discrete scientific choices for one bundle-adjustment solve."""
 
@@ -336,35 +357,51 @@ class BundleAdjuster:
 
     @staticmethod
     def image_point3D_ids(image) -> np.ndarray:
-        return np.asarray([point.point3D_id for point in image.points2D], dtype=np.uint64)
-
-    def points3D_xyz(self, point3D_ids) -> np.ndarray:
-        return np.asarray(
-            [self.reconstruction.point3D(int(point3D_id)).xyz for point3D_id in point3D_ids],
-            dtype=np.float64,
-        ).reshape((-1, 3))
-
-    def small_triangulation_angle_mask(self, point3D_ids, min_angle: float) -> np.ndarray:
-        native_ids = set(int(value) for value in self.solve_state.native_problem.point3D_ids)
-        unique_point3D_ids = dict.fromkeys(int(value) for value in point3D_ids)
-        records = [
-            self.solve_state.native_problem.track(point3D_id)
-            for point3D_id in unique_point3D_ids
-            if point3D_id in native_ids
-        ]
-        result = native.filter_tracks_by_triangulation_angle(
-            self.solve_state.native_problem,
-            records,
-            min_angle,
+        points2D = image.points2D
+        return np.fromiter(
+            (point.point3D_id for point in points2D),
+            dtype=np.uint64,
+            count=len(points2D),
         )
-        small_ids = {int(track.point3D_id) for track in result.tracks if len(track.observations) == 0}
-        return np.asarray(
-            [int(point3D_id) in small_ids for point3D_id in point3D_ids],
-            dtype=bool,
+
+    def point3D_table(self) -> Point3DTable:
+        """Snapshot every point once so per-image work is numpy indexing, not pybind calls."""
+        points3D = self.reconstruction.points3D
+        ids = np.empty(len(points3D), dtype=np.int64)
+        xyz = np.empty((len(points3D), 3), dtype=np.float64)
+        track_lengths = np.empty(len(points3D), dtype=np.int64)
+        for index, (point3D_id, point) in enumerate(points3D.items()):
+            ids[index] = point3D_id
+            xyz[index] = point.xyz
+            track_lengths[index] = point.track.length()
+        order = np.argsort(ids)
+        return Point3DTable(
+            ids=ids,
+            xyz=xyz,
+            track_lengths=track_lengths,
+            sorted_ids=ids[order],
+            order=order,
         )
+
+    def small_triangulation_angle_ids(self, min_angle: float) -> np.ndarray:
+        """Sorted ids of the tracks the angle filter leaves without observations.
+
+        The filter is per-track independent, so one pass over the whole problem answers
+        every per-image query; the caller masks with ``small_triangulation_angle_mask``.
+        """
+        problem = self.solve_state.native_problem
+        records = [problem.track(point3D_id) for point3D_id in problem.point3D_ids]
+        result = native.filter_tracks_by_triangulation_angle(problem, records, min_angle)
+        small_ids = [int(track.point3D_id) for track in result.tracks if len(track.observations) == 0]
+        return np.sort(np.asarray(small_ids, dtype=np.int64))
+
+    @staticmethod
+    def small_triangulation_angle_mask(point3D_ids, small_ids: np.ndarray) -> np.ndarray:
+        return np.isin(np.asarray(point3D_ids, dtype=np.int64), small_ids)
 
     def estimate_truncation_multiplier(self) -> float:
         whitened_residuals = []
+        points = self.point3D_table()
         for image_id in self.reconstruction.reg_image_ids():
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
@@ -378,7 +415,11 @@ class BundleAdjuster:
             depth_priors = np.asarray(solve_image.depth_values)[valid_indices]
             stddevs = np.asarray(solve_image.depth_stddevs)[valid_indices]
             point3D_ids = self.image_point3D_ids(image)[valid_indices].astype(np.int64)
-            projected_depths = multiview_geometry.project_point_depths(self.reconstruction, image_id, point3D_ids)
+            projected_depths = multiview_geometry.project_world_points_with_colmap_camera(
+                image,
+                self.reconstruction.cameras[image.camera_id],
+                points.xyz[points.indices(point3D_ids)],
+            )[1]
             mask = (depth_priors > 0) & (projected_depths > 0)
             if mask.sum() == 0:
                 continue
@@ -421,16 +462,11 @@ class BundleAdjuster:
         self.solve_state.import_scene()
         depth_loss_type = native_loss_type(depth_options.reg_loss_name)
         optimized_image_ids = list(self.reconstruction.reg_image_ids())
-        track_lengths = {
-            point3D_id: self.reconstruction.points3D[point3D_id].track.length()
-            for point3D_id in self.reconstruction.points3D.keys()
-        }
+        points = self.point3D_table()
         camera_ids = [self.reconstruction.images[image_id].camera_id for image_id in optimized_image_ids]
-        variable_point3D_ids = [
-            int(point3D_id)
-            for point3D_id, track_length in track_lengths.items()
-            if track_length < self.options.variable_point_track_length_threshold
-        ]
+        variable_point3D_ids = points.ids[
+            points.track_lengths < self.options.variable_point_track_length_threshold
+        ].tolist()
         options = build_bundle_adjustment_options(
             image_order=optimized_image_ids,
             camera_ids=camera_ids,
@@ -443,6 +479,7 @@ class BundleAdjuster:
             reprojection_scale=self.options.reproj_loss_scale * keypoint_stddev,
             reprojection_weight=1 / keypoint_stddev**2,
             num_threads=self.options.num_threads,
+            solver_backend=self.options.solver_backend,
         )
 
         intrinsics_priors = []
@@ -463,6 +500,7 @@ class BundleAdjuster:
         depth_constraints = []
         depth_scales = []
         images_without_residuals = []
+        small_angle_ids = self.small_triangulation_angle_ids(depth_options.risky_triangulation_angle_deg)
         for image_id in optimized_image_ids:
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
@@ -475,15 +513,14 @@ class BundleAdjuster:
             point2D_indices = point2D_indices[valid]
             depths = depths[valid]
             point3D_ids = self.image_point3D_ids(image)[point2D_indices].astype(np.int64)
-            projected_depths = multiview_geometry.project_point_depths(self.reconstruction, image_id, point3D_ids)
-            risky_track_lengths = (
-                np.array([track_lengths[point3D_id] for point3D_id in point3D_ids])
-                < depth_options.risky_track_length_threshold
-            )
-            risky_angles = self.small_triangulation_angle_mask(
-                point3D_ids,
-                depth_options.risky_triangulation_angle_deg,
-            )
+            point_rows = points.indices(point3D_ids)
+            projected_depths = multiview_geometry.project_world_points_with_colmap_camera(
+                image,
+                self.reconstruction.cameras[image.camera_id],
+                points.xyz[point_rows],
+            )[1]
+            risky_track_lengths = points.track_lengths[point_rows] < depth_options.risky_track_length_threshold
+            risky_angles = self.small_triangulation_angle_mask(point3D_ids, small_angle_ids)
             risky_mask = risky_track_lengths | risky_angles
 
             mask = depths > 0
@@ -592,6 +629,7 @@ class BundleAdjuster:
 
     def estimate_depth_scales(self) -> dict:
         shift_scale = {}
+        points = self.point3D_table()
         for image_id in self.reconstruction.reg_image_ids():
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
@@ -608,7 +646,7 @@ class BundleAdjuster:
             if mask.sum() == 0:
                 logger.debug("No valid points for shift/scale estimation in image %d", image_id)
                 continue
-            points3D = self.points3D_xyz(point3D_ids)
+            points3D = points.xyz[points.indices(point3D_ids)]
             projected_depths = (image.cam_from_world() * points3D)[:, -1][mask]
             observed_depths = observed_depths[mask]
             proposed = np.median(np.log(projected_depths.clip(1e-6, None) / observed_depths.clip(1e-6, None)))
@@ -649,7 +687,7 @@ class BundleAdjuster:
         point3D_ids = np.array(list(self.reconstruction.points3D.keys()))
         risky_mask = self.small_triangulation_angle_mask(
             point3D_ids,
-            self.options.triangulation.min_angle,
+            self.small_triangulation_angle_ids(self.options.triangulation.min_angle),
         )
         count = 0
         for point3D_id in point3D_ids[risky_mask]:
