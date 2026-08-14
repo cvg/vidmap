@@ -9,6 +9,7 @@ tmp/*
 *.mp4
 !assets/example_video.mp4
 *.html
+!vidmap/visualization/vidmap-viewer.html
 # BOILERPLATE
 __pycache__/
 *.py[cod]

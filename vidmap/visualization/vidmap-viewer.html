@@ -1,0 +1,2201 @@
+<!doctype html>
+<!-- Generated from VidMap's browser viewer sources; do not edit generated copies. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VidMap reconstruction</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #ffffff; }
+    #background-layer {
+      position: fixed; z-index: 0; inset: 0; background-position: center;
+      background-repeat: no-repeat; background-size: contain; pointer-events: none;
+    }
+    canvas { position: fixed; z-index: 1; inset: 0; display: block; }
+    #toolbar {
+      position: fixed; z-index: 10; top: 12px; left: 12px; padding: 9px 12px;
+      box-sizing: border-box; min-width: min(470px, calc(100vw - 24px));
+      max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow: auto;
+      border-radius: 6px; background: rgba(255,255,255,.9); color: #222;
+      font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 1px 5px rgba(0,0,0,.2);
+    }
+    #toolbar:not([open]) { min-width: 0; }
+    #toolbar summary {
+      width: max-content; cursor: pointer; font-weight: 600; user-select: none;
+    }
+    #toolbar-content { margin-top: 6px; }
+    .control-group { padding: 4px 0; border-top: 1px solid rgba(0,0,0,.12); }
+    .control-group:first-child { border-top: 0; }
+    .control-group > summary { color: #333; font-size: 12px; letter-spacing: .02em; }
+    .control-group-content { padding: 3px 0 2px 10px; }
+    .separate-folder-loader { margin: 2px 0 4px 10px; }
+    .separate-folder-loader > summary { color: #555; cursor: pointer; font-size: 11px; }
+    .separate-folder-content { padding: 3px 0 0 10px; }
+    #toolbar label { display: block; white-space: nowrap; cursor: pointer; }
+    .control-row { display: flex; align-items: center; gap: 10px; min-height: 27px; }
+    .toggle { width: 165px; }
+    .setting { color: #555; }
+    .setting input {
+      width: 58px; margin-left: 3px; padding: 2px 4px; border: 1px solid #bbb;
+      border-radius: 3px; background: white; color: #222;
+    }
+    .setting input[type="color"] {
+      width: 30px; height: 24px; padding: 1px; vertical-align: middle; cursor: pointer;
+    }
+    .setting select {
+      margin-left: 3px; padding: 2px 4px; border: 1px solid #bbb;
+      border-radius: 3px; background: white; color: #222;
+    }
+    .keyframe-timeline-row input[type="range"] { width: 230px; }
+    .keyframe-playback-row button { width: 54px; }
+    #covariance-percentile { width: 220px; vertical-align: middle; }
+    #load-status { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #keyframe-label {
+      max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: #555;
+    }
+    #keyframe-preview-panel {
+      position: fixed; z-index: 9; left: 14px; bottom: 14px;
+      box-sizing: border-box; width: min(26vw, 420px); max-width: calc(100vw - 28px);
+      max-height: calc(100vh - 28px); resize: both; overflow: auto;
+      padding: 5px; border-radius: 6px; background: rgba(255,255,255,.9);
+      color: #222; font: 13px/1.5 system-ui, sans-serif;
+      box-shadow: 0 2px 12px rgba(0,0,0,.45);
+    }
+    #keyframe-preview-panel:not([open]) { width: max-content; height: auto; resize: none; overflow: hidden; }
+    #keyframe-preview-panel summary {
+      width: max-content; cursor: pointer; font-weight: 600; user-select: none;
+    }
+    #keyframe-preview {
+      display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain;
+      border-radius: 3px; background: #111;
+    }
+    #keyframe-preview-stage { position: relative; width: 100%; margin-top: 4px; line-height: 0; }
+    #tracked-keypoints-overlay {
+      position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    }
+    #loop-closure-pair-panel {
+      position: fixed; z-index: 12; right: 14px; bottom: 14px; width: min(48vw, 900px);
+      box-sizing: border-box; min-width: 360px; min-height: 150px;
+      max-width: calc(100vw - 28px); max-height: calc(100vh - 28px); resize: both; overflow: auto;
+      padding: 9px; border-radius: 7px; background: rgba(255,255,255,.95); color: #222;
+      font: 13px/1.4 system-ui, sans-serif; box-shadow: 0 2px 14px rgba(0,0,0,.5);
+    }
+    #loop-closure-pair-close { position: absolute; top: 5px; right: 6px; font-size: 18px; line-height: 1; }
+    #loop-closure-pair-title { padding-right: 28px; font-weight: 650; }
+    .loop-closure-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 7px; }
+    .loop-closure-pair-grid figure { min-width: 0; margin: 0; }
+    .loop-closure-image-stage { position: relative; line-height: 0; }
+    .loop-closure-image-stage img { display: block; width: 100%; height: auto; border-radius: 3px; background: #111; }
+    .loop-closure-image-stage canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    }
+    .loop-closure-pair-grid figcaption {
+      margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555;
+    }
+    #loop-closure-pair-status { margin-top: 5px; color: #555; }
+    .lc-rejected { color: rgb(240,70,70); }
+    .lc-accepted { color: rgb(0,210,130); }
+    button, .file-button {
+      padding: 3px 7px; border: 1px solid #aaa; border-radius: 3px;
+      background: white; color: #222; font: inherit; cursor: pointer;
+    }
+    button:hover, .file-button:hover { background: #eee; }
+    #help { margin-top: 5px; color: #666; }
+    #error { display: none; color: #a00; max-width: 480px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineSegmentsGeometry.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineGeometry.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineMaterial.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineSegments2.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/Line2.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/sql-wasm.js"></script>
+</head>
+<body>
+  <div id="background-layer"></div>
+  <details id="keyframe-preview-panel" open>
+    <summary>Keyframe</summary>
+    <div id="keyframe-preview-stage">
+      <img id="keyframe-preview" alt="Selected keyframe">
+      <canvas id="tracked-keypoints-overlay"></canvas>
+    </div>
+  </details>
+  <aside id="loop-closure-pair-panel" hidden>
+    <button id="loop-closure-pair-close" type="button" aria-label="Close shared-track pair">×</button>
+    <div id="loop-closure-pair-title">Loop closure</div>
+    <div class="loop-closure-pair-grid">
+      <figure>
+        <div class="loop-closure-image-stage">
+          <img id="loop-closure-left-image" alt="First loop-closure keyframe">
+          <canvas id="loop-closure-left-keypoints"></canvas>
+        </div>
+        <figcaption id="loop-closure-left-name"></figcaption>
+      </figure>
+      <figure>
+        <div class="loop-closure-image-stage">
+          <img id="loop-closure-right-image" alt="Second loop-closure keyframe">
+          <canvas id="loop-closure-right-keypoints"></canvas>
+        </div>
+        <figcaption id="loop-closure-right-name"></figcaption>
+      </figure>
+    </div>
+    <div id="loop-closure-pair-status"></div>
+  </aside>
+  <details id="toolbar" open>
+    <summary>VidMap viewer</summary>
+    <div id="toolbar-content">
+    <details class="control-group" open>
+      <summary>Data &amp; filters</summary>
+      <div class="control-group-content">
+    <div class="control-row">
+      <button id="run-folder-button" type="button">choose run folder</button>
+      <span id="load-status">model not loaded</span>
+    </div>
+    <details class="separate-folder-loader">
+      <summary>Alternative: load separate folders</summary>
+      <div class="separate-folder-content">
+        <div class="control-row">
+          <button id="reconstruction-folder-button" type="button">choose reconstruction</button>
+          <span id="reconstruction-folder-label">not selected</span>
+        </div>
+        <div class="control-row">
+          <button id="mapper-inputs-folder-button" type="button">choose mapper inputs</button>
+          <span id="mapper-inputs-folder-label">not selected</span>
+        </div>
+        <div class="control-row">
+          <button id="separate-load-button" type="button" disabled>load selected folders</button>
+        </div>
+      </div>
+    </details>
+    <div class="control-row">
+      <button id="covariance-compute" type="button" disabled>compute covariance</button>
+      <label class="setting">lowest covariance
+        <input id="covariance-percentile" type="range" min="1" max="100" step="1" value="100" disabled>
+      </label>
+      <span id="covariance-percentile-label">all points</span>
+    </div>
+    <div class="control-row">
+      <label class="setting">minimum track length
+        <input id="minimum-track-length" type="range" min="1" max="20" step="1" value="1" disabled>
+      </label>
+      <span id="minimum-track-length-label">1 observation</span>
+    </div>
+      </div>
+    </details>
+    <details class="control-group" open>
+      <summary>Playback</summary>
+      <div class="control-group-content">
+    <div class="control-row keyframe-timeline-row">
+      <span class="toggle">keyframe</span>
+      <input id="keyframe-slider" type="range" min="0" max="0" step="1" value="0" disabled>
+      <span id="keyframe-label"></span>
+    </div>
+    <div class="control-row keyframe-playback-row">
+      <button id="keyframe-play" type="button" disabled>play</button>
+      <label class="setting">speed
+        <select id="keyframe-speed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <label class="setting"><input id="tracked-keypoints-toggle" type="checkbox" checked> tracked points</label>
+      <span id="keyframe-playback-status">timestamps unavailable</span>
+    </div>
+      </div>
+    </details>
+    <details class="control-group" open>
+      <summary>Geometry</summary>
+      <div class="control-group-content">
+    <div class="control-row">
+      <label class="toggle"><input id="points-toggle" type="checkbox" checked> points</label>
+      <label class="setting">size <input id="points-size" type="number" min="0.01" max="20" step="0.01" value="0.7"></label>
+      <label class="setting">mode
+        <select id="points-color-mode">
+          <option value="solid">solid</option>
+          <option value="rgb" selected>image RGB</option>
+        </select>
+      </label>
+      <label class="setting">color <input id="points-color" type="color" value="#ffffff"></label>
+    </div>
+    <div class="control-row">
+      <label class="toggle"><input id="estimated-frusta-toggle" type="checkbox" checked> estimated cameras</label>
+      <label class="setting">size <input id="estimated-frusta-size" type="number" min="0.01" max="20" step="0.05" value="0.3"></label>
+      <label class="setting">line <input id="estimated-frusta-width" type="number" min="0.5" max="20" step="0.5" value="1"></label>
+      <label class="setting">color <input id="estimated-frusta-color" type="color" value="#d62728"></label>
+    </div>
+    <div class="control-row">
+      <label class="toggle"><input id="paths-toggle" type="checkbox" checked> trajectories</label>
+      <label class="setting">line <input id="paths-width" type="number" min="0.5" max="20" step="0.5" value="6"></label>
+      <label class="setting">estimated <input id="estimated-path-color" type="color" value="#0064ff"></label>
+    </div>
+    <div class="control-row">
+      <label class="toggle"><input id="loop-closures-toggle" type="checkbox" checked> loop closures</label>
+      <label class="setting">line <input id="loop-closures-width" type="number" min="0.5" max="20" step="0.5" value="3"></label>
+      <label class="setting"><span class="lc-rejected">red</span>/<span class="lc-accepted">green</span> min shared <input id="loop-closures-min-shared" type="number" min="0" step="1" value="50"></label>
+    </div>
+      </div>
+    </details>
+    <details class="control-group">
+      <summary>View &amp; background</summary>
+      <div class="control-group-content">
+    <div class="control-row">
+      <span class="toggle">view</span>
+      <label class="setting">projection
+        <select id="projection">
+          <option value="perspective">perspective</option>
+          <option value="orthographic">orthographic</option>
+        </select>
+      </label>
+    </div>
+    <div class="control-row">
+      <span class="toggle">background</span>
+      <label class="setting">color <input id="background-color" type="color" value="#ffffff"></label>
+      <label class="file-button" for="background-file">choose image</label>
+      <input id="background-file" type="file" accept="image/*" hidden>
+      <label class="setting">fit
+        <select id="background-fit">
+          <option value="contain">contain</option>
+          <option value="cover">cover</option>
+          <option value="stretch">stretch</option>
+        </select>
+      </label>
+      <button id="background-clear" type="button">clear</button>
+    </div>
+      </div>
+    </details>
+    <div id="help">drag: orbit · middle-drag: roll view · Shift+middle-drag: orbit gravity axis · wheel: zoom · right-drag: pan</div>
+    <div id="error"></div>
+    </div>
+  </details>
+  <script>
+  (() => {
+    "use strict";
+    const embeddedRun = null;
+    const error = document.getElementById("error");
+    function reportError(message) {
+      error.style.display = "block";
+      error.textContent = message;
+    }
+    if (typeof THREE === "undefined") {
+      error.style.display = "block";
+      error.textContent = "Three.js could not be loaded. This viewer requires network access to its pinned renderer.";
+      return;
+    }
+
+    const VIDMAP_BROWSER_WORKER_SOURCE = "(function (root) {\n  \"use strict\";\n\n  const CAMERA_PARAMETER_COUNTS = [3, 4, 4, 5, 8, 8, 12, 5, 4, 5, 12, 16, 4, 5, 3, 4, 6];\n  const SINGLE_FOCAL_MODELS = new Set([0, 2, 3, 8, 9, 12, 14]);\n  const CRC32_TABLE = (() => {\n    const table = new Uint32Array(256);\n    for (let index = 0; index < 256; ++index) {\n      let value = index;\n      for (let bit = 0; bit < 8; ++bit) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);\n      table[index] = value >>> 0;\n    }\n    return table;\n  })();\n\n  function checkedCount(value, label) {\n    const count = Number(value);\n    if (!Number.isSafeInteger(count) || count < 0) throw new Error(`${label} is outside JavaScript's safe range`);\n    return count;\n  }\n\n  function requireBytes(view, offset, count, label) {\n    if (offset < 0 || count < 0 || offset + count > view.byteLength) {\n      throw new Error(`Truncated ${label} at byte ${offset}`);\n    }\n  }\n\n  function crc32(buffer) {\n    const bytes = new Uint8Array(buffer);\n    let value = 0xffffffff;\n    for (let index = 0; index < bytes.length; ++index) {\n      value = CRC32_TABLE[(value ^ bytes[index]) & 0xff] ^ (value >>> 8);\n    }\n    return (value ^ 0xffffffff) >>> 0;\n  }\n\n  function fingerprints(buffers) {\n    const result = {};\n    for (const name of [\"cameras.bin\", \"images.bin\", \"points3D.bin\"]) {\n      const buffer = buffers[name];\n      result[name] = {size: buffer.byteLength, crc32: crc32(buffer)};\n    }\n    return result;\n  }\n\n  function parseCameras(buffer) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"cameras.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"camera count\");\n    const cameras = new Map();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 24, \"camera record\");\n      const cameraId = view.getUint32(offset, true);\n      const modelId = view.getInt32(offset + 4, true);\n      if (modelId === 17) throw new Error(\"EQUIRECTANGULAR cameras are not supported by the 3D viewer\");\n      const parameterCount = CAMERA_PARAMETER_COUNTS[modelId];\n      if (parameterCount === undefined) throw new Error(`Unsupported COLMAP camera model id ${modelId}`);\n      const width = checkedCount(view.getBigUint64(offset + 8, true), \"camera width\");\n      const height = checkedCount(view.getBigUint64(offset + 16, true), \"camera height\");\n      offset += 24;\n      requireBytes(view, offset, parameterCount * 8, \"camera parameters\");\n      const fx = view.getFloat64(offset, true);\n      const fy = SINGLE_FOCAL_MODELS.has(modelId) ? fx : view.getFloat64(offset + 8, true);\n      const principalOffset = SINGLE_FOCAL_MODELS.has(modelId) ? 8 : 16;\n      const cx = view.getFloat64(offset + principalOffset, true);\n      const cy = view.getFloat64(offset + principalOffset + 8, true);\n      cameras.set(cameraId, {fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height});\n      offset += parameterCount * 8;\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing cameras.bin bytes: ${view.byteLength - offset}`);\n    return cameras;\n  }\n\n  function quaternionRotation(w, x, y, z) {\n    const norm = Math.hypot(w, x, y, z);\n    if (!(norm > 0)) throw new Error(\"Invalid zero-norm image quaternion\");\n    w /= norm;\n    x /= norm;\n    y /= norm;\n    z /= norm;\n    return new Float64Array([\n      1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),\n      2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),\n      2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)\n    ]);\n  }\n\n  function parseImages(buffer) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"images.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"image count\");\n    const images = new Map();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 64, \"image pose\");\n      const imageId = view.getUint32(offset, true);\n      const rotation = quaternionRotation(\n        view.getFloat64(offset + 4, true),\n        view.getFloat64(offset + 12, true),\n        view.getFloat64(offset + 20, true),\n        view.getFloat64(offset + 28, true)\n      );\n      const translation = new Float64Array([\n        view.getFloat64(offset + 36, true),\n        view.getFloat64(offset + 44, true),\n        view.getFloat64(offset + 52, true)\n      ]);\n      const cameraId = view.getUint32(offset + 60, true);\n      offset += 64;\n      const nameStart = offset;\n      while (true) {\n        requireBytes(view, offset, 1, \"image name\");\n        if (view.getUint8(offset++) === 0) break;\n      }\n      const name = new TextDecoder().decode(new Uint8Array(buffer, nameStart, offset - nameStart - 1));\n      requireBytes(view, offset, 8, \"image point count\");\n      const pointCount = checkedCount(view.getBigUint64(offset, true), \"image point count\");\n      offset += 8;\n      const pointBytes = pointCount * 24;\n      requireBytes(view, offset, pointBytes, \"image points2D\");\n      offset += pointBytes;\n      images.set(imageId, {\n        cameraId: cameraId,\n        rotation: rotation,\n        translation: translation,\n        name: name,\n        pointDataOffset: offset - pointBytes,\n        pointCount: pointCount\n      });\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing images.bin bytes: ${view.byteLength - offset}`);\n    return images;\n  }\n\n  function numericTimestampToken(name) {\n    const basename = name.replaceAll(\"\\\\\", \"/\").split(\"/\").pop();\n    const stem = basename.includes(\".\") ? basename.slice(0, basename.lastIndexOf(\".\")) : basename;\n    const match = stem.match(/^(\\d+(?:\\.\\d+)?)(?:[-_]|$)/);\n    return match === null ? null : match[1];\n  }\n\n  function inferredTimestampScale(tokens, values) {\n    if (tokens.some(token => token.includes(\".\"))) return 1;\n    const conventionalScales = new Map([[10, 1], [13, 1e3], [16, 1e6], [19, 1e9]]);\n    if (values.length === 1) return conventionalScales.get(tokens[0].length) || null;\n    const deltas = values.slice(1).map((value, index) => value - values[index]).sort((a, b) => a - b);\n    const median = deltas[Math.floor(deltas.length / 2)];\n    const sameWidth = tokens.every(token => token.length === tokens[0].length);\n    const conventional = sameWidth ? conventionalScales.get(tokens[0].length) : undefined;\n    if (conventional !== undefined) {\n      const interval = median / conventional;\n      if (interval >= 0.001 && interval <= 10) return conventional;\n    }\n    const candidates = [1, 1e3, 1e6, 1e9].filter(scale => {\n      const interval = median / scale;\n      return interval >= 0.001 && interval <= 10;\n    });\n    return candidates.length === 1 ? candidates[0] : null;\n  }\n\n  function imageTimeline(images) {\n    const entries = Array.from(images.entries()).map(([imageId, image]) => ({\n      imageId: imageId,\n      name: image.name,\n      token: numericTimestampToken(image.name)\n    }));\n    const hasNumericNames = entries.every(entry => entry.token !== null);\n    if (hasNumericNames) {\n      entries.sort((left, right) => {\n        const difference = Number(left.token) - Number(right.token);\n        return difference !== 0 ? difference : left.name.localeCompare(right.name);\n      });\n    } else {\n      entries.sort((left, right) => left.imageId - right.imageId);\n    }\n    let timestampsSeconds = null;\n    if (hasNumericNames && entries.length > 0) {\n      const tokens = entries.map(entry => entry.token);\n      const values = tokens.map(Number);\n      const unique = values.every(\n        (value, index) => Number.isFinite(value) && (index === 0 || value > values[index - 1])\n      );\n      const scale = unique ? inferredTimestampScale(tokens, values) : null;\n      if (scale !== null) timestampsSeconds = values.map(value => (value - values[0]) / scale);\n    }\n    if (timestampsSeconds === null) entries.sort((left, right) => left.imageId - right.imageId);\n    return {\n      imageIds: entries.map(entry => entry.imageId),\n      names: entries.map(entry => entry.name),\n      timestampsSeconds: timestampsSeconds\n    };\n  }\n\n  function cameraCenter(image) {\n    const r = image.rotation;\n    const t = image.translation;\n    return [\n      -(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]),\n      -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]),\n      -(r[2] * t[0] + r[5] * t[1] + r[8] * t[2])\n    ];\n  }\n\n  function cameraGeometry(camerasBuffer, imagesBuffer, images, imageIds) {\n    const cameras = parseCameras(camerasBuffer);\n    const centers = new Float32Array(imageIds.length * 3);\n    const frusta = new Float32Array(imageIds.length * 16 * 3);\n    const observationOffsets = new Uint32Array(imageIds.length + 1);\n    let observationCount = 0;\n    for (let index = 0; index < imageIds.length; ++index) {\n      const image = images.get(imageIds[index]);\n      if (image === undefined) throw new Error(`images.bin is missing registered image ${imageIds[index]}`);\n      observationCount += image.pointCount;\n      observationOffsets[index + 1] = observationCount;\n      const camera = cameras.get(image.cameraId);\n      if (camera === undefined) throw new Error(`cameras.bin is missing camera ${image.cameraId}`);\n      const center = cameraCenter(image);\n      centers.set(center, index * 3);\n      const imageExtent = Math.max(0.3 * camera.width / 1024, 0.3 * camera.height / 1024);\n      const worldExtent = 2 * Math.max(camera.width, camera.height) / (camera.fx + camera.fy);\n      const scale = 0.5 * imageExtent / worldExtent;\n      const pixelCorners = [[0, 0], [camera.width, 0], [camera.width, camera.height], [0, camera.height]];\n      const corners = pixelCorners.map(([u, v]) => {\n        const ray = [(u - camera.cx) / camera.fx, (v - camera.cy) / camera.fy, 1];\n        const r = image.rotation;\n        const world = [\n          center[0] + 0.5 * scale * (r[0] * ray[0] + r[3] * ray[1] + r[6] * ray[2]),\n          center[1] + 0.5 * scale * (r[1] * ray[0] + r[4] * ray[1] + r[7] * ray[2]),\n          center[2] + 0.5 * scale * (r[2] * ray[0] + r[5] * ray[1] + r[8] * ray[2])\n        ];\n        return Float32Array.from(world);\n      });\n      let vertex = index * 16;\n      for (const corner of corners) {\n        frusta.set(centers.subarray(index * 3, index * 3 + 3), vertex++ * 3);\n        frusta.set(corner, vertex++ * 3);\n      }\n      for (let corner = 0; corner < 4; ++corner) {\n        frusta.set(corners[corner], vertex++ * 3);\n        frusta.set(corners[(corner + 1) % 4], vertex++ * 3);\n      }\n    }\n    const observationPositions = new Float32Array(observationCount * 2);\n    const observationPointIds = new BigUint64Array(observationCount);\n    const imageView = new DataView(imagesBuffer);\n    let observationOffset = 0;\n    for (const imageId of imageIds) {\n      const image = images.get(imageId);\n      for (let point = 0; point < image.pointCount; ++point) {\n        const source = image.pointDataOffset + point * 24;\n        const destination = observationOffset + point;\n        observationPositions[destination * 2] = imageView.getFloat64(source, true);\n        observationPositions[destination * 2 + 1] = imageView.getFloat64(source + 8, true);\n        observationPointIds[destination] = imageView.getBigUint64(source + 16, true);\n      }\n      observationOffset += image.pointCount;\n    }\n    return {\n      centers: centers,\n      frusta: frusta,\n      observationPositions: observationPositions,\n      observationPointIds: observationPointIds,\n      observationOffsets: observationOffsets\n    };\n  }\n\n  function parsePointsForDisplay(buffer, keyframeImageIds) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"points3D.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"3D point count\");\n    if (count > 0xffffffff) throw new Error(\"Browser viewer supports at most 2^32-1 points\");\n    const pointIds = new BigUint64Array(count);\n    const firstSeen = new Int32Array(count);\n    const trackLengths = new Uint32Array(count);\n    firstSeen.fill(-1);\n    const imageOrder = new Map();\n    keyframeImageIds.forEach((imageId, index) => imageOrder.set(Number(imageId), index));\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 51, \"3D point record\");\n      pointIds[index] = view.getBigUint64(offset, true);\n      const trackLength = checkedCount(view.getBigUint64(offset + 43, true), \"point track length\");\n      trackLengths[index] = trackLength;\n      offset += 51;\n      requireBytes(view, offset, trackLength * 8, \"point track\");\n      let earliest = keyframeImageIds.length;\n      for (let observation = 0; observation < trackLength; ++observation) {\n        const rank = imageOrder.get(view.getUint32(offset + observation * 8, true));\n        if (rank === undefined) continue;\n        if (rank < earliest) earliest = rank;\n      }\n      if (earliest < keyframeImageIds.length) firstSeen[index] = earliest;\n      offset += trackLength * 8;\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing points3D.bin bytes: ${view.byteLength - offset}`);\n\n    const orderStorage = new Uint32Array(count);\n    let orderCount = 0;\n    for (let index = 0; index < count; ++index) {\n      if (firstSeen[index] >= 0) orderStorage[orderCount++] = index;\n    }\n    const order = orderStorage.subarray(0, orderCount);\n    order.sort((left, right) => {\n      const byFrame = firstSeen[left] - firstSeen[right];\n      if (byFrame !== 0) return byFrame;\n      if (pointIds[left] < pointIds[right]) return -1;\n      if (pointIds[left] > pointIds[right]) return 1;\n      return left - right;\n    });\n\n    const orderedPositions = new Float32Array(order.length * 3);\n    const orderedColors = new Uint8Array(order.length * 3);\n    const orderedPointIds = new BigUint64Array(order.length);\n    const sourceIndices = new Uint32Array(order.length);\n    const orderedFirstSeen = new Int32Array(order.length);\n    const orderedTrackLengths = new Uint32Array(order.length);\n    const pointOffsets = new Uint32Array(keyframeImageIds.length + 1);\n    const destinationBySource = new Uint32Array(count);\n    destinationBySource.fill(0xffffffff);\n    for (let destination = 0; destination < order.length; ++destination) {\n      const source = order[destination];\n      destinationBySource[source] = destination;\n      orderedPointIds[destination] = pointIds[source];\n      sourceIndices[destination] = source;\n      orderedFirstSeen[destination] = firstSeen[source];\n      orderedTrackLengths[destination] = trackLengths[source];\n      pointOffsets[firstSeen[source] + 1] += 1;\n    }\n    for (let index = 1; index < pointOffsets.length; ++index) pointOffsets[index] += pointOffsets[index - 1];\n    offset = 8;\n    for (let source = 0; source < count; ++source) {\n      const destination = destinationBySource[source];\n      const trackLength = trackLengths[source];\n      if (destination !== 0xffffffff) {\n        orderedPositions[destination * 3] = view.getFloat64(offset + 8, true);\n        orderedPositions[destination * 3 + 1] = view.getFloat64(offset + 16, true);\n        orderedPositions[destination * 3 + 2] = view.getFloat64(offset + 24, true);\n        orderedColors[destination * 3] = view.getUint8(offset + 32);\n        orderedColors[destination * 3 + 1] = view.getUint8(offset + 33);\n        orderedColors[destination * 3 + 2] = view.getUint8(offset + 34);\n      }\n      offset += 51 + trackLength * 8;\n    }\n    return {\n      positions: orderedPositions,\n      colors: orderedColors,\n      pointIds: orderedPointIds,\n      sourceIndices: sourceIndices,\n      firstSeen: orderedFirstSeen,\n      trackLengths: orderedTrackLengths,\n      pointOffsets: pointOffsets,\n      sourcePointCount: count\n    };\n  }\n\n  function inverseTrace(h00, h01, h02, h11, h12, h22) {\n    const offDiagonalSquare = h01 * h01 + h02 * h02 + h12 * h12;\n    let smallest;\n    let largest;\n    if (offDiagonalSquare === 0) {\n      smallest = Math.min(h00, h11, h22);\n      largest = Math.max(h00, h11, h22);\n    } else {\n      const mean = (h00 + h11 + h22) / 3;\n      const scale = Math.sqrt(\n        ((h00 - mean) ** 2 + (h11 - mean) ** 2 + (h22 - mean) ** 2 + 2 * offDiagonalSquare) / 6\n      );\n      const b00 = (h00 - mean) / scale;\n      const b01 = h01 / scale;\n      const b02 = h02 / scale;\n      const b11 = (h11 - mean) / scale;\n      const b12 = h12 / scale;\n      const b22 = (h22 - mean) / scale;\n      const halfDeterminant = (\n        b00 * (b11 * b22 - b12 * b12) -\n        b01 * (b01 * b22 - b02 * b12) +\n        b02 * (b01 * b12 - b02 * b11)\n      ) / 2;\n      const angle = Math.acos(Math.max(-1, Math.min(1, halfDeterminant))) / 3;\n      largest = mean + 2 * scale * Math.cos(angle);\n      smallest = mean + 2 * scale * Math.cos(angle + 2 * Math.PI / 3);\n    }\n    if (!(smallest > largest * Number.EPSILON * 3)) return Infinity;\n    const c00 = h11 * h22 - h12 * h12;\n    const c11 = h00 * h22 - h02 * h02;\n    const c22 = h00 * h11 - h01 * h01;\n    const determinant = h00 * c00 - h01 * (h01 * h22 - h02 * h12) + h02 * (h01 * h12 - h02 * h11);\n    return (c00 + c11 + c22) / determinant;\n  }\n\n  function computeCovariances(camerasBuffer, imagesBuffer, pointsBuffer, progress) {\n    const cameras = parseCameras(camerasBuffer);\n    const images = parseImages(imagesBuffer);\n    const view = new DataView(pointsBuffer);\n    requireBytes(view, 0, 8, \"points3D.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"3D point count\");\n    const scores = new Float64Array(count);\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 51, \"3D point record\");\n      const px = view.getFloat64(offset + 8, true);\n      const py = view.getFloat64(offset + 16, true);\n      const pz = view.getFloat64(offset + 24, true);\n      const trackLength = checkedCount(view.getBigUint64(offset + 43, true), \"point track length\");\n      offset += 51;\n      requireBytes(view, offset, trackLength * 8, \"point track\");\n      if (trackLength < 2) {\n        scores[index] = NaN;\n        offset += trackLength * 8;\n        continue;\n      }\n      let h00 = 0;\n      let h01 = 0;\n      let h02 = 0;\n      let h11 = 0;\n      let h12 = 0;\n      let h22 = 0;\n      for (let observation = 0; observation < trackLength; ++observation) {\n        const image = images.get(view.getUint32(offset + observation * 8, true));\n        if (image === undefined) continue;\n        const camera = cameras.get(image.cameraId);\n        if (camera === undefined) throw new Error(`Image references missing camera ${image.cameraId}`);\n        const r = image.rotation;\n        const t = image.translation;\n        const x = r[0] * px + r[1] * py + r[2] * pz + t[0];\n        const y = r[3] * px + r[4] * py + r[5] * pz + t[1];\n        const z = r[6] * px + r[7] * py + r[8] * pz + t[2];\n        if (!(z > 0)) continue;\n        const ax = camera.fx / z;\n        const az = -camera.fx * x / (z * z);\n        const by = camera.fy / z;\n        const bz = -camera.fy * y / (z * z);\n        const gx0 = ax * r[0] + az * r[6];\n        const gx1 = ax * r[1] + az * r[7];\n        const gx2 = ax * r[2] + az * r[8];\n        const gy0 = by * r[3] + bz * r[6];\n        const gy1 = by * r[4] + bz * r[7];\n        const gy2 = by * r[5] + bz * r[8];\n        h00 += gx0 * gx0 + gy0 * gy0;\n        h01 += gx0 * gx1 + gy0 * gy1;\n        h02 += gx0 * gx2 + gy0 * gy2;\n        h11 += gx1 * gx1 + gy1 * gy1;\n        h12 += gx1 * gx2 + gy1 * gy2;\n        h22 += gx2 * gx2 + gy2 * gy2;\n      }\n      scores[index] = inverseTrace(h00, h01, h02, h11, h12, h22);\n      offset += trackLength * 8;\n      if (progress !== undefined && (index % 10000 === 0 || index + 1 === count)) progress(index + 1, count);\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing points3D.bin bytes: ${view.byteLength - offset}`);\n    return scores;\n  }\n\n  function covarianceRanks(scores, sourceIndices, pointIds) {\n    if (sourceIndices.length !== pointIds.length) throw new Error(\"Point order arrays have inconsistent lengths\");\n    const eligible = new Uint32Array(sourceIndices.length);\n    let eligibleCount = 0;\n    for (let index = 0; index < sourceIndices.length; ++index) {\n      if (!Number.isNaN(scores[sourceIndices[index]])) eligible[eligibleCount++] = index;\n    }\n    const ordered = eligible.subarray(0, eligibleCount);\n    ordered.sort((left, right) => {\n      const leftScore = scores[sourceIndices[left]];\n      const rightScore = scores[sourceIndices[right]];\n      if (leftScore < rightScore) return -1;\n      if (leftScore > rightScore) return 1;\n      if (pointIds[left] < pointIds[right]) return -1;\n      if (pointIds[left] > pointIds[right]) return 1;\n      return left - right;\n    });\n    const ranks = new Int32Array(sourceIndices.length);\n    ranks.fill(-1);\n    for (let rank = 0; rank < eligibleCount; ++rank) ranks[ordered[rank]] = rank;\n    return {ranks: ranks, eligibleCount: eligibleCount};\n  }\n\n  const api = {\n    crc32: crc32,\n    fingerprints: fingerprints,\n    parseCameras: parseCameras,\n    parseImages: parseImages,\n    imageTimeline: imageTimeline,\n    cameraGeometry: cameraGeometry,\n    parsePointsForDisplay: parsePointsForDisplay,\n    computeCovariances: computeCovariances,\n    covarianceRanks: covarianceRanks\n  };\n  if (typeof module !== \"undefined\" && module.exports) module.exports = api;\n\n  if (root !== undefined && typeof root.postMessage === \"function\" && typeof document === \"undefined\") {\n    root.onmessage = event => {\n      const message = event.data;\n      try {\n        if (message.command === \"load\") {\n          const buffers = message.buffers;\n          const images = parseImages(buffers[\"images.bin\"]);\n          const timeline = imageTimeline(images);\n          const keyframeImageIds = timeline.imageIds;\n          const points = parsePointsForDisplay(\n            buffers[\"points3D.bin\"],\n            keyframeImageIds\n          );\n          const cameras = cameraGeometry(\n            buffers[\"cameras.bin\"],\n            buffers[\"images.bin\"],\n            images,\n            keyframeImageIds\n          );\n          const sourceFingerprints = fingerprints(buffers);\n          root.postMessage(\n            {type: \"loaded\", points: points, cameras: cameras, fingerprints: sourceFingerprints, timeline: timeline},\n            [\n              points.positions.buffer,\n              points.colors.buffer,\n              points.pointIds.buffer,\n              points.sourceIndices.buffer,\n              points.firstSeen.buffer,\n              points.trackLengths.buffer,\n              points.pointOffsets.buffer,\n              cameras.centers.buffer,\n              cameras.frusta.buffer,\n              cameras.observationPositions.buffer,\n              cameras.observationPointIds.buffer,\n              cameras.observationOffsets.buffer\n            ]\n          );\n        } else if (message.command === \"covariance\") {\n          const buffers = message.buffers;\n          const scores = computeCovariances(\n            buffers[\"cameras.bin\"],\n            buffers[\"images.bin\"],\n            buffers[\"points3D.bin\"],\n            (done, total) => root.postMessage({type: \"progress\", done: done, total: total})\n          );\n          root.postMessage({type: \"covariance\", scores: scores}, [scores.buffer]);\n        } else if (message.command === \"rank\") {\n          const ranked = covarianceRanks(message.scores, message.sourceIndices, message.pointIds);\n          root.postMessage(\n            {type: \"ranked\", ...ranked, scores: message.scores},\n            [ranked.ranks.buffer, message.scores.buffer]\n          );\n        } else {\n          throw new Error(`Unknown worker command: ${message.command}`);\n        }\n      } catch (error) {\n        root.postMessage({type: \"error\", message: error instanceof Error ? error.message : String(error)});\n      }\n    };\n  }\n})(typeof self === \"undefined\" ? undefined : self);\n";
+const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/sql-wasm.wasm";
+    const COVARIANCE_CACHE_MAGIC = "VIDCOV2\0";
+    const COVARIANCE_CACHE_HEADER_BYTES = 64;
+    const COLMAP_FILENAMES = ["cameras.bin", "images.bin", "points3D.bin"];
+    const LOOP_CLOSURE_MASKS = "lc_masks.json";
+    const MAXIMUM_TRACK_LENGTH_FILTER = 20;
+    const CACHE_DIRECTORY = "visualization_cache";
+    const CACHE_FILENAME = "point_covariance_rank_v2.bin";
+    const LOCAL_INPUT_MANIFEST = "local_input.json";
+    const DATABASE_PATH = "mapper_inputs/database_complete.db";
+    const LOOP_CLOSURE_MASKS_PATH = `mapper_inputs/${LOOP_CLOSURE_MASKS}`;
+
+    function errorMessage(error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+
+    function workerRequest(command, payload, transferables = [], onProgress = null) {
+      return new Promise((resolve, reject) => {
+        const sourceUrl = URL.createObjectURL(
+          new Blob([VIDMAP_BROWSER_WORKER_SOURCE], {type: "text/javascript"})
+        );
+        const worker = new Worker(sourceUrl);
+        URL.revokeObjectURL(sourceUrl);
+        worker.onmessage = event => {
+          if (event.data.type === "progress") {
+            if (onProgress !== null) onProgress(event.data.done, event.data.total);
+            return;
+          }
+          worker.terminate();
+          if (event.data.type === "error") reject(new Error(event.data.message));
+          else resolve(event.data);
+        };
+        worker.onerror = event => {
+          worker.terminate();
+          reject(new Error(event.message || "Covariance worker failed"));
+        };
+        worker.postMessage({command: command, ...payload}, transferables);
+      });
+    }
+
+    function matchingFingerprints(actual, expected) {
+      if (actual === null || expected === null || typeof actual !== "object" || typeof expected !== "object") {
+        return false;
+      }
+      return COLMAP_FILENAMES.every(name =>
+        actual[name] !== undefined && expected[name] !== undefined &&
+        actual[name].size === expected[name].size && actual[name].crc32 === expected[name].crc32
+      );
+    }
+
+    async function fileFromHandle(root, path) {
+      const parts = path.split("/");
+      let directory = root;
+      for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+      return (await directory.getFileHandle(parts.at(-1))).getFile();
+    }
+
+    async function optionalFile(getFile, path) {
+      try {
+        return await getFile(path);
+      } catch (error) {
+        if (error !== null && typeof error === "object" && error.name === "NotFoundError") return null;
+        throw error;
+      }
+    }
+
+    async function pickDirectory() {
+      if (typeof window.showDirectoryPicker !== "function") {
+        throw new Error("Local folder loading requires a Chromium-based browser");
+      }
+      return window.showDirectoryPicker({mode: "read"});
+    }
+
+    async function selectionFrom(getFile, options = {}) {
+      const entries = await Promise.all(
+        COLMAP_FILENAMES.map(async name => [name, await getFile(`rec/${name}`)])
+      );
+      const hasDatabase = Object.prototype.hasOwnProperty.call(options, "database");
+      const hasMasks = Object.prototype.hasOwnProperty.call(options, "loopClosureMasks");
+      const database = hasDatabase ? options.database : await optionalFile(getFile, DATABASE_PATH);
+      const loopClosureMasks = hasMasks
+        ? options.loopClosureMasks
+        : await optionalFile(getFile, LOOP_CLOSURE_MASKS_PATH);
+      if ((database === null) !== (loopClosureMasks === null)) {
+        throw new Error(
+          `Loop-closure inspection requires both ${DATABASE_PATH} and ${LOOP_CLOSURE_MASKS_PATH}`
+        );
+      }
+      return {
+        files: Object.fromEntries(entries),
+        reconstructionHandle: options.reconstructionHandle ?? null,
+        imagePreviews: options.imagePreviews ?? null,
+        localInput: options.localInput ?? null,
+        covarianceCache: options.covarianceCache ?? null,
+        database: database,
+        loopClosureMasks: loopClosureMasks
+      };
+    }
+
+    async function directorySelection(runHandle) {
+      const reconstructionHandle = await runHandle.getDirectoryHandle("rec");
+      const getFile = path => fileFromHandle(runHandle, path);
+      return selectionFrom(getFile, {
+        reconstructionHandle,
+        localInput: await optionalFile(getFile, `mapper_inputs/${LOCAL_INPUT_MANIFEST}`)
+      });
+    }
+
+    async function separateDirectorySelection(reconstructionHandle, mapperInputsHandle) {
+      const getFile = path => fileFromHandle(
+        path.startsWith("rec/") ? reconstructionHandle : mapperInputsHandle,
+        path.split("/")[1]
+      );
+      return selectionFrom(
+        getFile,
+        {
+          reconstructionHandle,
+          localInput: await optionalFile(
+            path => fileFromHandle(mapperInputsHandle, path),
+            LOCAL_INPUT_MANIFEST
+          )
+        }
+      );
+    }
+
+    async function decodedEmbeddedFile(entry, path) {
+      if (
+        entry === null || typeof entry !== "object" || entry.encoding !== "gzip-base64" ||
+        !Number.isSafeInteger(entry.size) || entry.size < 0 || typeof entry.base64 !== "string"
+      ) {
+        throw new Error(`Embedded run contains an invalid file entry: ${path}`);
+      }
+      if (typeof DecompressionStream !== "function") {
+        throw new Error("This browser does not support embedded gzip decompression");
+      }
+      const encoded = atob(entry.base64);
+      const compressed = new Uint8Array(encoded.length);
+      for (let index = 0; index < encoded.length; ++index) compressed[index] = encoded.charCodeAt(index);
+      const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
+      const data = await new Response(stream).arrayBuffer();
+      if (data.byteLength !== entry.size) throw new Error(`Embedded file has the wrong size: ${path}`);
+      return new File([data], path.split("/").pop());
+    }
+
+    async function embeddedSelection(payload) {
+      if (
+        payload === null || typeof payload !== "object" ||
+        payload.files === null || typeof payload.files !== "object"
+      ) {
+        throw new Error("Embedded run has an invalid schema");
+      }
+      const covariancePath = "rec/visualization_cache/point_covariance_rank_v2.bin";
+      const covarianceCache = payload.files[covariancePath] === undefined
+        ? null
+        : await decodedEmbeddedFile(payload.files[covariancePath], covariancePath);
+      const databaseEntry = payload.files[DATABASE_PATH];
+      const masksEntry = payload.files[LOOP_CLOSURE_MASKS_PATH];
+      if ((databaseEntry === undefined) !== (masksEntry === undefined)) {
+        throw new Error("Embedded run contains incomplete loop-closure data");
+      }
+      return selectionFrom(path => decodedEmbeddedFile(payload.files[path], path), {
+        imagePreviews: payload.imagePreviews,
+        covarianceCache,
+        database: databaseEntry === undefined ? null : await decodedEmbeddedFile(databaseEntry, DATABASE_PATH),
+        loopClosureMasks: masksEntry === undefined
+          ? null
+          : await decodedEmbeddedFile(masksEntry, LOOP_CLOSURE_MASKS_PATH)
+      });
+    }
+
+    async function sourceBuffers(files) {
+      const entries = await Promise.all(
+        COLMAP_FILENAMES.map(async name => [name, await files[name].arrayBuffer()])
+      );
+      return Object.fromEntries(entries);
+    }
+
+    function parseLoopClosureMasks(text) {
+      const payload = JSON.parse(text);
+      if (
+        payload === null || typeof payload !== "object" || Array.isArray(payload) ||
+        Object.keys(payload).sort().join(",") !== "pairs,schemaVersion" ||
+        payload.schemaVersion !== 1 || !Array.isArray(payload.pairs)
+      ) {
+        throw new Error("Loop-closure masks have an invalid schema");
+      }
+      const pairs = new Map();
+      for (const pair of payload.pairs) {
+        if (
+          pair === null || typeof pair !== "object" || Array.isArray(pair) ||
+          Object.keys(pair).sort().join(",") !==
+            "first,loopClosureMatchIndices,matchCount,second" ||
+          typeof pair.first !== "string" || pair.first.length === 0 ||
+          typeof pair.second !== "string" || pair.second.length === 0 || pair.first === pair.second ||
+          !Number.isSafeInteger(pair.matchCount) || pair.matchCount < 0 ||
+          !Array.isArray(pair.loopClosureMatchIndices) || pair.loopClosureMatchIndices.some(
+            (row, index) => !Number.isSafeInteger(row) || row < 0 || row >= pair.matchCount ||
+              (index > 0 && row <= pair.loopClosureMatchIndices[index - 1])
+          )
+        ) {
+          throw new Error("Loop-closure masks contain an invalid image pair");
+        }
+        const ordered = pair.first < pair.second ? [pair.first, pair.second] : [pair.second, pair.first];
+        const key = `${ordered[0]}\0${ordered[1]}`;
+        if (pairs.has(key)) throw new Error("Loop-closure masks contain a duplicate image pair");
+        pairs.set(key, {
+          matchCount: pair.matchCount,
+          indices: Uint32Array.from(pair.loopClosureMatchIndices)
+        });
+      }
+      return pairs;
+    }
+
+    async function openDatabase(databaseFile) {
+      if (typeof initSqlJs !== "function") throw new Error("SQLite browser runtime failed to load");
+      const SQL = await initSqlJs({locateFile: () => VIDMAP_SQLITE_WASM_URL});
+      return new SQL.Database(new Uint8Array(await databaseFile.arrayBuffer()));
+    }
+
+    function databaseEdgeKeyframes(database, keyframeNames, loopClosurePairs) {
+      const result = database.exec(`
+          SELECT first.name, second.name
+          FROM two_view_geometries AS geometry
+          JOIN images AS first
+            ON first.image_id = CAST(geometry.pair_id / 2147483647 AS INTEGER)
+          JOIN images AS second
+            ON second.image_id = geometry.pair_id % 2147483647
+          WHERE geometry.rows > 0 AND geometry.config IN (2, 3, 4, 5, 6, 9)
+          ORDER BY geometry.pair_id
+        `);
+      if (result.length === 0) return new Uint32Array();
+      const keyframeByName = new Map(keyframeNames.map((name, index) => [name, index]));
+      const pairs = [];
+      for (const [leftName, rightName] of result[0].values) {
+        const orderedNames = leftName < rightName ? [leftName, rightName] : [rightName, leftName];
+        const loopClosure = loopClosurePairs.get(`${orderedNames[0]}\0${orderedNames[1]}`);
+        if (loopClosure === undefined || loopClosure.indices.length === 0) continue;
+        const left = keyframeByName.get(leftName);
+        const right = keyframeByName.get(rightName);
+        if (left === undefined || right === undefined || left === right) continue;
+        pairs.push(Math.min(left, right), Math.max(left, right));
+      }
+      return Uint32Array.from(pairs);
+    }
+
+    function databaseMatchRows(database, firstImageId, secondImageId) {
+      const statement = database.prepare(`
+        SELECT rows, cols, data FROM matches
+        WHERE pair_id = MIN(?1, ?2) * 2147483647 + MAX(?1, ?2)
+      `);
+      try {
+        statement.bind([firstImageId, secondImageId]);
+        if (!statement.step()) throw new Error("Loop-closure pair has no database matches");
+        const row = statement.getAsObject();
+        if (row.cols !== 2 || !(row.data instanceof Uint8Array) || row.data.byteLength !== row.rows * 8) {
+          throw new Error("Loop-closure database matches have an invalid shape");
+        }
+        return {count: row.rows, bytes: row.data};
+      } finally {
+        statement.free();
+      }
+    }
+
+    function databaseEdgeSharedCounts(databasePairs, observationPointIds, observationOffsets) {
+      const invalidPointId = 0xffffffffffffffffn;
+      function observedPointIds(keyframe) {
+        const ids = new Set();
+        for (
+          let observation = observationOffsets[keyframe];
+          observation < observationOffsets[keyframe + 1];
+          ++observation
+        ) {
+          const pointId = observationPointIds[observation];
+          if (pointId !== invalidPointId) ids.add(pointId);
+        }
+        return ids;
+      }
+      const result = new Uint32Array(databasePairs.length / 2);
+      for (let index = 0; index < result.length; ++index) {
+        const leftIds = observedPointIds(databasePairs[index * 2]);
+        let shared = 0;
+        const right = databasePairs[index * 2 + 1];
+        for (let observation = observationOffsets[right]; observation < observationOffsets[right + 1]; ++observation) {
+          if (leftIds.delete(observationPointIds[observation])) shared += 1;
+        }
+        result[index] = shared;
+      }
+      return result;
+    }
+
+    function cacheFingerprint(view, offset) {
+      return {
+        size: Number(view.getBigUint64(offset, true)),
+        crc32: view.getUint32(offset + 8, true)
+      };
+    }
+
+    function parseCovarianceCache(buffer, expectedFingerprints, expectedPointCount) {
+      if (buffer.byteLength < COVARIANCE_CACHE_HEADER_BYTES) throw new Error("Covariance cache is truncated");
+      const view = new DataView(buffer);
+      const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 8));
+      if (magic !== COVARIANCE_CACHE_MAGIC) throw new Error("Covariance cache has an unknown format");
+      if (view.getUint32(8, true) !== 2 || view.getUint32(12, true) !== COVARIANCE_CACHE_HEADER_BYTES) {
+        throw new Error("Covariance cache version is unsupported");
+      }
+      const pointCount = Number(view.getBigUint64(16, true));
+      if (pointCount !== expectedPointCount) throw new Error("Covariance cache point count is stale");
+      const cachedFingerprints = {
+        "cameras.bin": cacheFingerprint(view, 24),
+        "images.bin": cacheFingerprint(view, 36),
+        "points3D.bin": cacheFingerprint(view, 48)
+      };
+      if (!matchingFingerprints(cachedFingerprints, expectedFingerprints)) {
+        throw new Error("Covariance cache was computed from different reconstruction bytes");
+      }
+      const expectedBytes = COVARIANCE_CACHE_HEADER_BYTES + pointCount * 12;
+      if (buffer.byteLength !== expectedBytes) throw new Error("Covariance cache score payload has the wrong size");
+      return {
+        scores: new Float64Array(buffer, COVARIANCE_CACHE_HEADER_BYTES, pointCount),
+        sourceRanks: new Int32Array(buffer, COVARIANCE_CACHE_HEADER_BYTES + pointCount * 8, pointCount)
+      };
+    }
+
+    function writeCacheFingerprint(view, offset, fingerprint) {
+      view.setBigUint64(offset, BigInt(fingerprint.size), true);
+      view.setUint32(offset + 8, fingerprint.crc32, true);
+    }
+
+    function covarianceCacheBuffer(scores, sourceRanks, sourceFingerprints) {
+      if (scores.length !== sourceRanks.length) throw new Error("Covariance scores and ranks must match");
+      const buffer = new ArrayBuffer(COVARIANCE_CACHE_HEADER_BYTES + scores.length * 12);
+      const bytes = new Uint8Array(buffer);
+      for (let index = 0; index < 8; ++index) bytes[index] = COVARIANCE_CACHE_MAGIC.charCodeAt(index);
+      const view = new DataView(buffer);
+      view.setUint32(8, 2, true);
+      view.setUint32(12, COVARIANCE_CACHE_HEADER_BYTES, true);
+      view.setBigUint64(16, BigInt(scores.length), true);
+      writeCacheFingerprint(view, 24, sourceFingerprints["cameras.bin"]);
+      writeCacheFingerprint(view, 36, sourceFingerprints["images.bin"]);
+      writeCacheFingerprint(view, 48, sourceFingerprints["points3D.bin"]);
+      new Float64Array(buffer, COVARIANCE_CACHE_HEADER_BYTES, scores.length).set(scores);
+      new Int32Array(buffer, COVARIANCE_CACHE_HEADER_BYTES + scores.length * 8).set(sourceRanks);
+      return buffer;
+    }
+
+    async function readOptionalCacheFile(directoryHandle, name) {
+      try {
+        const cacheDirectory = await directoryHandle.getDirectoryHandle(CACHE_DIRECTORY);
+        const file = await (await cacheDirectory.getFileHandle(name)).getFile();
+        return await file.arrayBuffer();
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "NotFoundError") return null;
+        throw error;
+      }
+    }
+
+    async function writeHandleCache(directoryHandle, buffer) {
+      const cacheDirectory = await directoryHandle.getDirectoryHandle(CACHE_DIRECTORY, {create: true});
+      const cacheHandle = await cacheDirectory.getFileHandle(CACHE_FILENAME, {create: true});
+      const writer = await cacheHandle.createWritable();
+      try {
+        await writer.write(buffer);
+        await writer.close();
+      } catch (error) {
+        await writer.abort();
+        throw error;
+      }
+    }
+
+    function parseLocalInput(text) {
+      const manifest = JSON.parse(text);
+      if (
+        manifest === null || typeof manifest !== "object" || Array.isArray(manifest) ||
+        Object.keys(manifest).sort().join(",") !== "image_dir,schema_version" ||
+        manifest.schema_version !== 1
+      ) {
+        throw new Error("Local input manifest has an invalid schema");
+      }
+      if (typeof manifest.image_dir !== "string" || !manifest.image_dir.startsWith("/")) {
+        throw new Error("Local input manifest must contain an absolute image directory");
+      }
+      return manifest.image_dir;
+    }
+
+    function sharedTrackObservations(
+      observationPositions,
+      observationPointIds,
+      observationOffsets,
+      leftKeyframe,
+      rightKeyframe
+    ) {
+      const invalidPointId = 0xffffffffffffffffn;
+      const leftByPointId = new Map();
+      for (
+        let observation = observationOffsets[leftKeyframe];
+        observation < observationOffsets[leftKeyframe + 1];
+        ++observation
+      ) {
+        const pointId = observationPointIds[observation];
+        if (pointId !== invalidPointId && !leftByPointId.has(pointId)) {
+          leftByPointId.set(pointId, observation);
+        }
+      }
+      const leftKeypoints = [];
+      const rightKeypoints = [];
+      const pointIds = [];
+      for (
+        let rightObservation = observationOffsets[rightKeyframe];
+        rightObservation < observationOffsets[rightKeyframe + 1];
+        ++rightObservation
+      ) {
+        const pointId = observationPointIds[rightObservation];
+        const leftObservation = leftByPointId.get(pointId);
+        if (pointId === invalidPointId || leftObservation === undefined) continue;
+        leftKeypoints.push(
+          observationPositions[leftObservation * 2],
+          observationPositions[leftObservation * 2 + 1]
+        );
+        rightKeypoints.push(
+          observationPositions[rightObservation * 2],
+          observationPositions[rightObservation * 2 + 1]
+        );
+        pointIds.push(pointId);
+      }
+      return {
+        leftKeypoints: Float32Array.from(leftKeypoints),
+        rightKeypoints: Float32Array.from(rightKeypoints),
+        pointIds: pointIds
+      };
+    }
+
+    function loopClosureMatchObservations(
+      database,
+      matchRows,
+      expectedMatchCount,
+      observationPositions,
+      observationPointIds,
+      observationOffsets,
+      leftKeyframe,
+      rightKeyframe,
+      leftImageId,
+      rightImageId
+    ) {
+      const matches = databaseMatchRows(database, leftImageId, rightImageId);
+      if (matches.count !== expectedMatchCount) {
+        throw new Error("Loop-closure match count does not match the database");
+      }
+      const view = new DataView(matches.bytes.buffer, matches.bytes.byteOffset, matches.bytes.byteLength);
+      const leftIsFirst = leftImageId < rightImageId;
+      const leftCount = observationOffsets[leftKeyframe + 1] - observationOffsets[leftKeyframe];
+      const rightCount = observationOffsets[rightKeyframe + 1] - observationOffsets[rightKeyframe];
+      const leftKeypoints = new Float32Array(matches.count * 2);
+      const rightKeypoints = new Float32Array(matches.count * 2);
+      const matchClasses = new Uint8Array(matches.count);
+      const invalidPointId = 0xffffffffffffffffn;
+      let loopClosureMatchIndex = 0;
+      let sharedLoopClosureCount = 0;
+      for (let row = 0; row < matches.count; ++row) {
+        const isLoopClosure =
+          loopClosureMatchIndex < matchRows.length && matchRows[loopClosureMatchIndex] === row;
+        if (isLoopClosure) loopClosureMatchIndex += 1;
+        const first = view.getUint32(row * 8, true);
+        const second = view.getUint32(row * 8 + 4, true);
+        const leftPoint = leftIsFirst ? first : second;
+        const rightPoint = leftIsFirst ? second : first;
+        if (leftPoint >= leftCount || rightPoint >= rightCount) {
+          throw new Error("Loop-closure match references a missing reconstruction keypoint");
+        }
+        const leftObservation = observationOffsets[leftKeyframe] + leftPoint;
+        const rightObservation = observationOffsets[rightKeyframe] + rightPoint;
+        leftKeypoints[row * 2] = observationPositions[leftObservation * 2];
+        leftKeypoints[row * 2 + 1] = observationPositions[leftObservation * 2 + 1];
+        rightKeypoints[row * 2] = observationPositions[rightObservation * 2];
+        rightKeypoints[row * 2 + 1] = observationPositions[rightObservation * 2 + 1];
+        const leftPointId = observationPointIds[leftObservation];
+        const rightPointId = observationPointIds[rightObservation];
+        const sharesPoint = leftPointId !== invalidPointId && leftPointId === rightPointId;
+        matchClasses[row] = isLoopClosure ? (sharesPoint ? 2 : 1) : 0;
+        if (isLoopClosure && sharesPoint) sharedLoopClosureCount += 1;
+      }
+      if (loopClosureMatchIndex !== matchRows.length) {
+        throw new Error("Loop-closure match index exceeds database matches");
+      }
+      return {
+        leftKeypoints: leftKeypoints,
+        rightKeypoints: rightKeypoints,
+        matchClasses: matchClasses,
+        totalMatchCount: matches.count,
+        sharedLoopClosureCount: sharedLoopClosureCount
+      };
+    }
+
+    function initializeReconstructionViewer(embeddedRun) {
+      const chooseButton = document.getElementById("run-folder-button");
+      const reconstructionButton = document.getElementById("reconstruction-folder-button");
+      const reconstructionLabel = document.getElementById("reconstruction-folder-label");
+      const mapperInputsButton = document.getElementById("mapper-inputs-folder-button");
+      const mapperInputsLabel = document.getElementById("mapper-inputs-folder-label");
+      const loadSeparateButton = document.getElementById("separate-load-button");
+      const status = document.getElementById("load-status");
+      const computeButton = document.getElementById("covariance-compute");
+      const percentile = document.getElementById("covariance-percentile");
+      const percentileLabel = document.getElementById("covariance-percentile-label");
+      const minimumTrackLength = document.getElementById("minimum-track-length");
+      const minimumTrackLengthLabel = document.getElementById("minimum-track-length-label");
+      let state = null;
+      let separateReconstruction = null;
+      let separateMapperInputs = null;
+
+      function setStatus(message) {
+        status.textContent = message;
+      }
+
+      function reportPickerError(error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) reportError(errorMessage(error));
+      }
+
+      function applyPercentile(value) {
+        if (state === null || state.ranks === null) return;
+        if (value === 100) {
+          setCovarianceRankLimit(-1);
+          percentileLabel.textContent = "all points";
+        } else {
+          const keep = Math.floor(state.eligibleCount * value / 100);
+          setCovarianceRankLimit(keep);
+          percentileLabel.textContent = `${value}% · ${keep.toLocaleString()} points`;
+        }
+      }
+
+      function sourceRanksFromDisplay(displayRanks) {
+        const sourceRanks = new Int32Array(state.sourcePointCount);
+        sourceRanks.fill(-1);
+        for (let index = 0; index < displayRanks.length; ++index) {
+          sourceRanks[state.sourceIndices[index]] = displayRanks[index];
+        }
+        return sourceRanks;
+      }
+
+      function displayRanksFromSource(sourceRanks) {
+        if (sourceRanks.length !== state.sourcePointCount) throw new Error("Cached rank count is stale");
+        const sourceRankToDisplay = new Int32Array(state.sourcePointCount);
+        sourceRankToDisplay.fill(-1);
+        for (let displayIndex = 0; displayIndex < state.sourceIndices.length; ++displayIndex) {
+          const sourceRank = sourceRanks[state.sourceIndices[displayIndex]];
+          if (sourceRank < 0) continue;
+          if (sourceRank >= sourceRankToDisplay.length || sourceRankToDisplay[sourceRank] >= 0) {
+            throw new Error("Cached covariance ranks are invalid");
+          }
+          sourceRankToDisplay[sourceRank] = displayIndex;
+        }
+        const displayRanks = new Int32Array(state.sourceIndices.length);
+        displayRanks.fill(-1);
+        let eligibleCount = 0;
+        for (const displayIndex of sourceRankToDisplay) {
+          if (displayIndex >= 0) displayRanks[displayIndex] = eligibleCount++;
+        }
+        return {ranks: displayRanks, eligibleCount: eligibleCount};
+      }
+
+      function installRanks(ranked, source) {
+        state.ranks = ranked.ranks;
+        state.eligibleCount = ranked.eligibleCount;
+        installCovarianceRanks(state.ranks, state.firstSeen);
+        percentile.disabled = false;
+        percentile.value = "100";
+        applyPercentile(100);
+        showKeyframe(Number(keyframeSlider.value));
+        setStatus(`${source}; ${ranked.eligibleCount.toLocaleString()} covariance-ranked points`);
+        computeButton.textContent = "recompute covariance";
+      }
+
+      async function rankScores(scores) {
+        setStatus("covariance computed; ranking points…");
+        return workerRequest(
+          "rank",
+          {
+            scores: scores,
+            sourceIndices: state.sourceIndices,
+            pointIds: state.pointIds
+          },
+          [scores.buffer]
+        );
+      }
+
+      function loopClosureData(leftKeyframe, rightKeyframe) {
+        const shared = sharedTrackObservations(
+          state.observationPositions,
+          state.observationPointIds,
+          state.observationOffsets,
+          leftKeyframe,
+          rightKeyframe
+        );
+        const sharedPointIds = new Set(shared.pointIds);
+        const sharedPointPositions = [];
+        for (let pointIndex = 0; pointIndex < state.pointIds.length; ++pointIndex) {
+          if (!sharedPointIds.has(state.pointIds[pointIndex])) continue;
+          sharedPointPositions.push(
+            state.positions[pointIndex * 3],
+            state.positions[pointIndex * 3 + 1],
+            state.positions[pointIndex * 3 + 2]
+          );
+        }
+        return {
+          sharedPointCount: sharedPointPositions.length / 3,
+          sharedPointPositions: Float32Array.from(sharedPointPositions)
+        };
+      }
+
+      async function selectLoopClosure(leftKeyframe, rightKeyframe) {
+        const data = loopClosureData(leftKeyframe, rightKeyframe);
+        const leftName = keyframeTimeline.names[leftKeyframe];
+        const rightName = keyframeTimeline.names[rightKeyframe];
+        const orderedNames = leftName < rightName ? [leftName, rightName] : [rightName, leftName];
+        const loopClosure = state.loopClosurePairs.get(`${orderedNames[0]}\0${orderedNames[1]}`);
+        if (loopClosure === undefined) throw new Error("Selected edge is missing its loop-closure mask");
+        const matches = loopClosureMatchObservations(
+          state.database,
+          loopClosure.indices,
+          loopClosure.matchCount,
+          state.observationPositions,
+          state.observationPointIds,
+          state.observationOffsets,
+          leftKeyframe,
+          rightKeyframe,
+          keyframeTimeline.imageIds[leftKeyframe],
+          keyframeTimeline.imageIds[rightKeyframe]
+        );
+        showLoopClosurePair({
+          leftName: leftName,
+          rightName: rightName,
+          leftKeypoints: matches.leftKeypoints,
+          rightKeypoints: matches.rightKeypoints,
+          matchClasses: matches.matchClasses,
+          totalMatchCount: matches.totalMatchCount,
+          matchCount: loopClosure.indices.length,
+          sharedLoopClosureCount: matches.sharedLoopClosureCount,
+          sharedPointCount: data.sharedPointCount,
+          sharedPointPositions: data.sharedPointPositions
+        });
+      }
+
+      installLoopClosureSelectionHandler(selectLoopClosure);
+
+      async function loadSelected(selection) {
+        if (state !== null && state.database !== null) state.database.close();
+        state = null;
+        resetRunVisualState();
+        computeButton.textContent = "compute covariance";
+        percentile.disabled = true;
+        percentile.value = "100";
+        percentileLabel.textContent = "all points";
+        minimumTrackLength.disabled = true;
+        minimumTrackLength.max = "1";
+        minimumTrackLength.value = "1";
+        minimumTrackLengthLabel.textContent = "1 observation";
+        setStatus("reading COLMAP model…");
+        try {
+          const files = selection.files;
+          const buffers = await sourceBuffers(files);
+          const transferables = COLMAP_FILENAMES.map(name => buffers[name]);
+          const loaded = await workerRequest(
+            "load",
+            {buffers: buffers},
+            transferables
+          );
+          installKeyframeTimeline(loaded.timeline);
+          state = {
+            files: files,
+            directoryHandle: selection.reconstructionHandle,
+            sourceFingerprints: loaded.fingerprints,
+            sourcePointCount: loaded.points.sourcePointCount,
+            positions: loaded.points.positions,
+            pointIds: loaded.points.pointIds,
+            sourceIndices: loaded.points.sourceIndices,
+            firstSeen: loaded.points.firstSeen,
+            observationPositions: loaded.cameras.observationPositions,
+            observationPointIds: loaded.cameras.observationPointIds,
+            observationOffsets: loaded.cameras.observationOffsets,
+            database: null,
+            loopClosurePairs: null,
+            ranks: null,
+            eligibleCount: 0
+          };
+          replacePointGeometry(state.positions, loaded.points.colors);
+          installTrackLengths(loaded.points.trackLengths);
+          let maximumTrackLength = 1;
+          for (const length of loaded.points.trackLengths) maximumTrackLength = Math.max(maximumTrackLength, length);
+          minimumTrackLength.max = String(Math.min(MAXIMUM_TRACK_LENGTH_FILTER, maximumTrackLength));
+          minimumTrackLength.value = "1";
+          minimumTrackLength.disabled = false;
+          minimumTrackLengthLabel.textContent = "1 observation";
+          setMinimumTrackLength(1);
+          keyframeTimeline.pointOffsets = Array.from(loaded.points.pointOffsets);
+          replaceEstimatedGeometry(loaded.cameras.centers, loaded.cameras.frusta);
+          let loopClosureStatus;
+          if (selection.database !== null) {
+            setStatus("model loaded; validating loop-closure masks…");
+            const loopClosurePairs = parseLoopClosureMasks(await selection.loopClosureMasks.text());
+            setStatus("loop-closure masks validated; reading verified database edges…");
+            state.database = await openDatabase(selection.database);
+            state.loopClosurePairs = loopClosurePairs;
+            const databasePairs = databaseEdgeKeyframes(
+              state.database,
+              keyframeTimeline.names,
+              loopClosurePairs
+            );
+            const databaseEdgeCount = databasePairs.length / 2;
+            loopClosureStatus = `${databaseEdgeCount.toLocaleString()} loop-closure edges loaded`;
+            replaceLoopClosureGeometry(
+              databasePairs,
+              databaseEdgeSharedCounts(
+                databasePairs,
+                state.observationPointIds,
+                state.observationOffsets
+              )
+            );
+          } else {
+            loopClosureStatus = "loop closures unavailable: mapper inputs do not contain loop-closure data";
+          }
+          installTrackedKeypoints(
+            state.observationPositions,
+            state.observationPointIds,
+            state.observationOffsets
+          );
+          showKeyframe(Number(keyframeSlider.value));
+          if (
+            selection.imagePreviews !== null &&
+            Object.keys(selection.imagePreviews).length > 0
+          ) {
+            installImageDirectory(selection.imagePreviews);
+          } else if (selection.localInput !== null) {
+            installImageDirectory(parseLocalInput(await selection.localInput.text()));
+          }
+          setStatus(`${state.positions.length / 3} points loaded; checking covariance cache…`);
+          let cacheBuffer = null;
+          if (selection.covarianceCache !== null) {
+            cacheBuffer = await selection.covarianceCache.arrayBuffer();
+          } else if (selection.reconstructionHandle !== null) {
+            cacheBuffer = await readOptionalCacheFile(selection.reconstructionHandle, CACHE_FILENAME);
+          }
+          if (cacheBuffer === null) {
+            setStatus(
+              `${(state.positions.length / 3).toLocaleString()} points and ` +
+              `${loopClosureStatus}; covariance not computed`
+            );
+          } else {
+            try {
+              const cached = parseCovarianceCache(
+                cacheBuffer,
+                state.sourceFingerprints,
+                state.sourcePointCount
+              );
+              installRanks(displayRanksFromSource(cached.sourceRanks), "covariance and rank cache loaded");
+              setStatus(`${status.textContent}; ${loopClosureStatus}`);
+            } catch (error) {
+              setStatus(`points loaded; stale covariance cache ignored: ${error.message}; ${loopClosureStatus}`);
+            }
+          }
+        } catch (error) {
+          if (state !== null && state.database !== null) state.database.close();
+          state = null;
+          resetRunVisualState();
+          reportError(errorMessage(error));
+          setStatus("model load failed");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      chooseButton.onclick = async () => {
+        setBusy(true);
+        try {
+          const runHandle = await pickDirectory();
+          await loadSelected(await directorySelection(runHandle));
+        } catch (error) {
+          reportPickerError(error);
+          setBusy(false);
+        }
+      };
+
+      function updateSeparateControls() {
+        reconstructionLabel.textContent = separateReconstruction === null
+          ? "not selected"
+          : separateReconstruction.name;
+        mapperInputsLabel.textContent = separateMapperInputs === null
+          ? "not selected"
+          : separateMapperInputs.name;
+        loadSeparateButton.disabled = separateReconstruction === null || separateMapperInputs === null;
+      }
+
+      function setBusy(busy) {
+        chooseButton.disabled = busy;
+        reconstructionButton.disabled = busy;
+        mapperInputsButton.disabled = busy;
+        loadSeparateButton.disabled = busy || separateReconstruction === null || separateMapperInputs === null;
+        computeButton.disabled = busy || state === null;
+      }
+
+      function installSeparatePicker(button, assign) {
+        button.onclick = async () => {
+          try {
+            const handle = await pickDirectory();
+            assign(handle);
+            updateSeparateControls();
+          } catch (error) {
+            reportPickerError(error);
+          }
+        };
+      }
+      installSeparatePicker(reconstructionButton, value => separateReconstruction = value);
+      installSeparatePicker(mapperInputsButton, value => separateMapperInputs = value);
+
+      loadSeparateButton.onclick = async () => {
+        setBusy(true);
+        try {
+          await loadSelected(await separateDirectorySelection(separateReconstruction, separateMapperInputs));
+        } catch (error) {
+          reportError(errorMessage(error));
+          setBusy(false);
+        }
+      };
+
+      computeButton.onclick = async () => {
+        setBusy(true);
+        let writable = false;
+        try {
+          if (state.directoryHandle !== null) {
+            writable =
+              (await state.directoryHandle.requestPermission({mode: "readwrite"}).catch(() => "denied")) === "granted";
+          }
+          percentile.disabled = true;
+          setStatus("reading model for covariance computation…");
+          const buffers = await sourceBuffers(state.files);
+          const transferables = COLMAP_FILENAMES.map(name => buffers[name]);
+          const result = await workerRequest(
+            "covariance",
+            {buffers: buffers},
+            transferables,
+            (done, total) => setStatus(`computing covariance: ${done.toLocaleString()}/${total.toLocaleString()}`)
+          );
+          const ranked = await rankScores(result.scores);
+          const sourceRanks = sourceRanksFromDisplay(ranked.ranks);
+          if (writable) {
+            setStatus("publishing covariance cache…");
+            await writeHandleCache(
+              state.directoryHandle,
+              covarianceCacheBuffer(ranked.scores, sourceRanks, state.sourceFingerprints)
+            );
+            installRanks(ranked, "covariance computed and cached");
+          } else {
+            installRanks(ranked, "covariance computed for this session; cache permission not granted");
+          }
+        } catch (error) {
+          reportError(errorMessage(error));
+          setStatus("covariance computation failed");
+          percentile.disabled = state.ranks === null;
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      percentile.oninput = () => applyPercentile(Number(percentile.value));
+      minimumTrackLength.oninput = () => {
+        const value = Number(minimumTrackLength.value);
+        setMinimumTrackLength(value);
+        minimumTrackLengthLabel.textContent = `${value} observation${value === 1 ? "" : "s"}`;
+      };
+      if (embeddedRun !== null) {
+        setBusy(true);
+        setStatus("reading embedded run…");
+        embeddedSelection(embeddedRun)
+          .then(loadSelected)
+          .catch(error => {
+            reportError(errorMessage(error));
+            setStatus("embedded model load failed");
+            setBusy(false);
+          });
+      }
+    }
+
+    if (typeof module !== "undefined" && module.exports) {
+      module.exports = {
+        matchingFingerprints: matchingFingerprints,
+        parseCovarianceCache: parseCovarianceCache,
+        covarianceCacheBuffer: covarianceCacheBuffer,
+        parseLocalInput: parseLocalInput,
+        selectionFrom: selectionFrom,
+        databaseEdgeSharedCounts: databaseEdgeSharedCounts,
+        sharedTrackObservations: sharedTrackObservations,
+        loopClosureMatchObservations: loopClosureMatchObservations,
+        parseLoopClosureMasks: parseLoopClosureMasks
+      };
+    }
+
+
+    function pointGeometry(positions) {
+      const result = new THREE.BufferGeometry();
+      result.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      return result;
+    }
+
+    function resetPointMetadata(geometry, pointCount) {
+      geometry.setAttribute(
+        "vidmapFirstSeen", new THREE.BufferAttribute(new Float32Array(pointCount).fill(-1), 1)
+      );
+      geometry.setAttribute(
+        "vidmapTrackLength", new THREE.BufferAttribute(new Float32Array(pointCount).fill(1), 1)
+      );
+    }
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true, alpha: true, powerPreference: "high-performance"
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000, 0);
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const perspectiveCamera = new THREE.PerspectiveCamera(
+      45, window.innerWidth / window.innerHeight, 0.001, 1e9
+    );
+    const orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.001, 1e9);
+    let camera = perspectiveCamera;
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.mouseButtons.LEFT = null;
+    let sceneRenderDirty = true;
+    function invalidateSceneRender() {
+      sceneRenderDirty = true;
+    }
+    controls.addEventListener("change", invalidateSceneRender);
+    controls.mouseButtons.MIDDLE = null;
+
+    const viewAxis = new THREE.Vector3();
+    const viewRight = new THREE.Vector3();
+    const gravityAxis = new THREE.Vector3(0, 0, 1);
+    const orbitYaw = new THREE.Quaternion();
+    const orbitPitch = new THREE.Quaternion();
+    let orbitPointerId = null;
+    let orbitMoved = false;
+    let previousOrbitX = 0;
+    let previousOrbitY = 0;
+    let rollPointerId = null;
+    let previousRollX = 0;
+    let middleRotationMode = "roll";
+    function orbitInCurrentView(deltaX, deltaY) {
+      const offset = camera.position.clone().sub(controls.target);
+      camera.getWorldDirection(viewAxis).normalize();
+      viewRight.crossVectors(viewAxis, camera.up).normalize();
+      orbitYaw.setFromAxisAngle(camera.up.clone().normalize(), -deltaX * 0.005);
+      offset.applyQuaternion(orbitYaw);
+      viewRight.applyQuaternion(orbitYaw);
+      orbitPitch.setFromAxisAngle(viewRight, -deltaY * 0.005);
+      offset.applyQuaternion(orbitPitch);
+      camera.up.applyQuaternion(orbitYaw).applyQuaternion(orbitPitch).normalize();
+      camera.position.copy(controls.target).add(offset);
+      camera.lookAt(controls.target);
+      controls.update();
+    }
+    function rollAroundViewAxis(deltaX) {
+      camera.getWorldDirection(viewAxis).normalize();
+      camera.up.applyAxisAngle(viewAxis, -deltaX * 0.005).normalize();
+      camera.lookAt(controls.target);
+      controls.update();
+    }
+    function orbitAroundGravityAxis(deltaX) {
+      const offset = camera.position.clone().sub(controls.target);
+      orbitYaw.setFromAxisAngle(gravityAxis, -deltaX * 0.005);
+      offset.applyQuaternion(orbitYaw);
+      camera.up.applyQuaternion(orbitYaw).normalize();
+      camera.position.copy(controls.target).add(offset);
+      camera.lookAt(controls.target);
+      controls.update();
+    }
+    renderer.domElement.addEventListener("pointerdown", event => {
+      if (event.button === 0) {
+        event.preventDefault();
+        orbitPointerId = event.pointerId;
+        orbitMoved = false;
+        previousOrbitX = event.clientX;
+        previousOrbitY = event.clientY;
+        renderer.domElement.setPointerCapture(event.pointerId);
+        return;
+      }
+      if (event.button !== 1) return;
+      event.preventDefault();
+      rollPointerId = event.pointerId;
+      previousRollX = event.clientX;
+      middleRotationMode = event.shiftKey ? "orbit-gravity" : "roll";
+      renderer.domElement.setPointerCapture(event.pointerId);
+    });
+    renderer.domElement.addEventListener("pointermove", event => {
+      if (event.pointerId === orbitPointerId) {
+        event.preventDefault();
+        if (Math.abs(event.clientX - previousOrbitX) + Math.abs(event.clientY - previousOrbitY) > 2) {
+          orbitMoved = true;
+        }
+        orbitInCurrentView(
+          event.clientX - previousOrbitX,
+          event.clientY - previousOrbitY
+        );
+        previousOrbitX = event.clientX;
+        previousOrbitY = event.clientY;
+      } else if (event.pointerId === rollPointerId) {
+        event.preventDefault();
+        const deltaX = event.clientX - previousRollX;
+        if (middleRotationMode === "orbit-gravity") orbitAroundGravityAxis(deltaX);
+        else rollAroundViewAxis(deltaX);
+        previousRollX = event.clientX;
+      }
+    });
+    function finishViewRotation(event) {
+      if (event.pointerId !== orbitPointerId && event.pointerId !== rollPointerId) return;
+      if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+        renderer.domElement.releasePointerCapture(event.pointerId);
+      }
+      if (event.pointerId === orbitPointerId) orbitPointerId = null;
+      if (event.pointerId === rollPointerId) rollPointerId = null;
+    }
+    renderer.domElement.addEventListener("pointerup", finishViewRotation);
+    renderer.domElement.addEventListener("pointercancel", finishViewRotation);
+    renderer.domElement.addEventListener("auxclick", event => {
+      if (event.button === 1) event.preventDefault();
+    });
+    let pointPositions = new Float32Array();
+    let pointColors = new Uint8Array();
+    const keyframeTimeline = {names: [], pointOffsets: [0], imageIds: [], timestampsSeconds: null};
+    let imageDirectory = null;
+    let estimatedFrustaPositions = new Float32Array();
+    let estimatedPathPositions = new Float32Array();
+    let loopClosureSharedPoints = new Float32Array();
+    let loopClosureKeyframeIndices = new Uint32Array();
+
+    const pointsGeometry = pointGeometry(pointPositions);
+    resetPointMetadata(pointsGeometry, pointPositions.length / 3);
+    pointsGeometry.setAttribute(
+      "color",
+      new THREE.Uint8BufferAttribute(pointColors, 3, true)
+    );
+    const keyframeLimit = {value: -1};
+    const minimumTrackLength = {value: 1};
+    let covarianceIndexActive = false;
+    let covarianceDrawCount = pointPositions.length / 3;
+    const pointMaterial = new THREE.PointsMaterial({
+      color: 0xffffff, size: 0.7, sizeAttenuation: false, vertexColors: true
+    });
+    pointMaterial.onBeforeCompile = shader => {
+      shader.uniforms.vidmapKeyframeLimit = keyframeLimit;
+      shader.uniforms.vidmapMinimumTrackLength = minimumTrackLength;
+      shader.vertexShader = `
+        attribute float vidmapFirstSeen;
+        attribute float vidmapTrackLength;
+        uniform float vidmapKeyframeLimit;
+        uniform float vidmapMinimumTrackLength;
+      ` + shader.vertexShader.replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+        if ((vidmapKeyframeLimit >= 0.0 && vidmapFirstSeen > vidmapKeyframeLimit) ||
+            vidmapTrackLength < vidmapMinimumTrackLength) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        }`
+      );
+    };
+    pointMaterial.customProgramCacheKey = () => "vidmap-first-seen-v1";
+    const points = new THREE.Points(pointsGeometry, pointMaterial);
+    points.name = "points";
+    scene.add(points);
+    const loopClosureHighlightGeometry = pointGeometry(new Float32Array());
+    const loopClosureHighlights = new THREE.Points(
+      loopClosureHighlightGeometry,
+      new THREE.PointsMaterial({
+        color: 0xff1493, size: 3.5, sizeAttenuation: false,
+        depthTest: false, depthWrite: false
+      })
+    );
+    loopClosureHighlights.renderOrder = 110;
+    loopClosureHighlights.visible = false;
+    scene.add(loopClosureHighlights);
+    let trackedKeypointPositions = null;
+    let trackedKeypointPointIds = null;
+    let trackedKeypointOffsets = null;
+    let loopClosureSelectionHandler = null;
+    let activeLoopClosurePair = null;
+
+    function setLoopClosurePointHighlights(positions) {
+      loopClosureHighlightGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      loopClosureHighlightGeometry.computeBoundingSphere();
+      loopClosureHighlights.visible = positions.length > 0;
+      invalidateSceneRender();
+    }
+
+    function installLoopClosureSelectionHandler(handler) {
+      loopClosureSelectionHandler = handler;
+    }
+
+    function replacePointGeometry(positions, colors) {
+      pointPositions = positions;
+      pointColors = colors;
+      pointsGeometry.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
+      resetPointMetadata(pointsGeometry, pointPositions.length / 3);
+      pointsGeometry.setIndex(null);
+      keyframeLimit.value = -1;
+      covarianceIndexActive = false;
+      covarianceDrawCount = pointPositions.length / 3;
+      pointsGeometry.setDrawRange(0, pointPositions.length / 3);
+      if (pointColors === null) pointsGeometry.deleteAttribute("color");
+      else pointsGeometry.setAttribute("color", new THREE.Uint8BufferAttribute(pointColors, 3, true));
+      const colorMode = document.getElementById("points-color-mode");
+      const useRgb = pointColors !== null && colorMode.value === "rgb";
+      points.material.vertexColors = useRgb;
+      points.material.color.set(useRgb ? 0xffffff : document.getElementById("points-color").value);
+      points.material.needsUpdate = true;
+      pointsGeometry.computeBoundingSphere();
+      invalidateSceneRender();
+    }
+
+    function installCovarianceRanks(ranks, firstSeen) {
+      const pointCount = pointPositions.length / 3;
+      if (ranks.length !== pointCount || firstSeen.length !== pointCount) {
+        throw new Error(`Covariance ranks must match point count: ${ranks.length} for ${pointPositions.length / 3}`);
+      }
+      let eligibleCount = 0;
+      for (const rank of ranks) {
+        if (rank >= 0) eligibleCount = Math.max(eligibleCount, rank + 1);
+      }
+      const indices = new Uint32Array(pointCount);
+      indices.fill(0xffffffff);
+      let invalidIndex = eligibleCount;
+      for (let pointIndex = 0; pointIndex < pointCount; ++pointIndex) {
+        const rank = ranks[pointIndex];
+        if (rank < 0) indices[invalidIndex++] = pointIndex;
+        else if (rank >= eligibleCount || indices[rank] !== 0xffffffff) {
+          throw new Error("Covariance ranks must be unique and contiguous");
+        } else indices[rank] = pointIndex;
+      }
+      for (let rank = 0; rank < eligibleCount; ++rank) {
+        if (indices[rank] === 0xffffffff) throw new Error("Covariance ranks must be unique and contiguous");
+      }
+      pointsGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+      pointsGeometry.setAttribute(
+        "vidmapFirstSeen",
+        new THREE.BufferAttribute(Float32Array.from(firstSeen), 1)
+      );
+      covarianceIndexActive = true;
+      covarianceDrawCount = pointCount;
+      pointsGeometry.setDrawRange(0, covarianceDrawCount);
+      invalidateSceneRender();
+    }
+
+    function installTrackLengths(trackLengths) {
+      if (trackLengths.length !== pointPositions.length / 3) {
+        throw new Error(
+          `Track lengths must match point count: ${trackLengths.length} for ${pointPositions.length / 3}`
+        );
+      }
+      pointsGeometry.setAttribute(
+        "vidmapTrackLength",
+        new THREE.BufferAttribute(Float32Array.from(trackLengths), 1)
+      );
+      invalidateSceneRender();
+    }
+
+    function setMinimumTrackLength(value) {
+      minimumTrackLength.value = value;
+      invalidateSceneRender();
+    }
+
+    function imageSource(directory, name) {
+      if (typeof directory === "object") {
+        const preview = directory[name];
+        if (
+          preview === null || typeof preview !== "object" || typeof preview.url !== "string" ||
+          !Number.isSafeInteger(preview.width) || preview.width < 1 ||
+          !Number.isSafeInteger(preview.height) || preview.height < 1
+        ) {
+          throw new Error(`Embedded preview is invalid or missing: ${name}`);
+        }
+        return preview;
+      }
+      const normalizedName = name.replaceAll("\\", "/");
+      const parts = normalizedName.split("/");
+      if (normalizedName.startsWith("/") || parts.some(part => part === "..")) {
+        throw new Error(`Reconstruction image name is not a safe relative path: ${name}`);
+      }
+      const url = new URL("file:///");
+      url.pathname = `${directory.replace(/\/+$/, "")}/${normalizedName}`;
+      return {url: url.href, width: null, height: null};
+    }
+
+    function loadImage(image, directory, name) {
+      const source = imageSource(directory, name);
+      image.dataset.sourceWidth = source.width === null ? "" : String(source.width);
+      image.dataset.sourceHeight = source.height === null ? "" : String(source.height);
+      image.src = source.url;
+    }
+
+    function imageDimensions(image) {
+      const width = Number(image.dataset.sourceWidth) || image.naturalWidth;
+      const height = Number(image.dataset.sourceHeight) || image.naturalHeight;
+      return {width: width, height: height};
+    }
+
+    function drawTrackedKeypoints(index) {
+      const canvas = document.getElementById("tracked-keypoints-overlay");
+      const preview = document.getElementById("keyframe-preview");
+      const width = preview.clientWidth;
+      const height = preview.clientHeight;
+      const pixelRatio = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(width * pixelRatio));
+      canvas.height = Math.max(1, Math.round(height * pixelRatio));
+      const drawing = canvas.getContext("2d");
+      drawing.clearRect(0, 0, canvas.width, canvas.height);
+      const toggle = document.getElementById("tracked-keypoints-toggle");
+      if (
+        trackedKeypointPositions === null || trackedKeypointOffsets === null ||
+        !toggle.checked || !preview.complete ||
+        !(preview.naturalWidth > 0) || !(preview.naturalHeight > 0)
+      ) return;
+      const begin = trackedKeypointOffsets[index];
+      const end = trackedKeypointOffsets[index + 1];
+      const sourceDimensions = imageDimensions(preview);
+      const scaleX = canvas.width / sourceDimensions.width;
+      const scaleY = canvas.height / sourceDimensions.height;
+      const radius = Math.max(1.7 * pixelRatio, 1);
+      drawing.fillStyle = "rgba(0, 255, 170, 0.9)";
+      drawing.strokeStyle = "rgba(0, 0, 0, 0.85)";
+      drawing.lineWidth = Math.max(pixelRatio, 1);
+      for (let point = begin; point < end; ++point) {
+        if (trackedKeypointPointIds[point] === 0xffffffffffffffffn) continue;
+        const x = trackedKeypointPositions[point * 2] * scaleX;
+        const y = trackedKeypointPositions[point * 2 + 1] * scaleY;
+        drawing.beginPath();
+        drawing.arc(x, y, radius, 0, 2 * Math.PI);
+        drawing.fill();
+        drawing.stroke();
+      }
+    }
+
+    function installTrackedKeypoints(positions, pointIds, offsets) {
+      if (offsets.length !== keyframeTimeline.names.length + 1) {
+        throw new Error("Tracked-keypoint offsets must match the keyframe timeline");
+      }
+      if (positions.length !== offsets[offsets.length - 1] * 2 || pointIds.length !== offsets[offsets.length - 1]) {
+        throw new Error("Tracked-keypoint positions do not match their offsets");
+      }
+      trackedKeypointPositions = positions;
+      trackedKeypointPointIds = pointIds;
+      trackedKeypointOffsets = offsets;
+      drawTrackedKeypoints(Number(document.getElementById("keyframe-slider").value));
+    }
+
+    function installKeyframeTimeline(timeline) {
+      if (
+        timeline === null || !Array.isArray(timeline.names) || !Array.isArray(timeline.imageIds) ||
+        timeline.names.length === 0 || timeline.names.length !== timeline.imageIds.length
+      ) {
+        throw new Error("Loaded reconstruction has an invalid keyframe timeline");
+      }
+      pauseKeyframePlayback();
+      keyframeTimeline.names = timeline.names;
+      keyframeTimeline.imageIds = timeline.imageIds;
+      keyframeTimeline.timestampsSeconds = timeline.timestampsSeconds;
+      keyframeTimeline.pointOffsets = new Array(timeline.names.length + 1).fill(0);
+      const slider = document.getElementById("keyframe-slider");
+      slider.max = String(timeline.names.length - 1);
+      slider.value = slider.max;
+      slider.disabled = false;
+      const play = document.getElementById("keyframe-play");
+      const status = document.getElementById("keyframe-playback-status");
+      play.disabled = timeline.timestampsSeconds === null;
+      status.textContent = timeline.timestampsSeconds === null ? "timestamps unavailable" : "ready";
+    }
+
+    function drawLoopClosureKeypoints(image, canvas, keypoints, matchClasses) {
+      if (!image.complete || !(image.naturalWidth > 0) || !(image.naturalHeight > 0)) return;
+      const pixelRatio = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(image.clientWidth * pixelRatio));
+      canvas.height = Math.max(1, Math.round(image.clientHeight * pixelRatio));
+      const drawing = canvas.getContext("2d");
+      drawing.clearRect(0, 0, canvas.width, canvas.height);
+      const sourceDimensions = imageDimensions(image);
+      const scaleX = canvas.width / sourceDimensions.width;
+      const scaleY = canvas.height / sourceDimensions.height;
+      const radius = Math.max(2 * pixelRatio, 1);
+      drawing.strokeStyle = "rgba(0, 0, 0, 0.9)";
+      drawing.lineWidth = Math.max(pixelRatio, 1);
+      const colors = ["rgba(0, 140, 255, 0.95)", "rgba(255, 0, 0, 1)", "rgba(0, 255, 170, 0.92)"];
+      for (let matchClass = 0; matchClass < colors.length; ++matchClass) {
+        drawing.fillStyle = colors[matchClass];
+        for (let point = 0; point < keypoints.length; point += 2) {
+          if (matchClasses[point / 2] !== matchClass) continue;
+          drawing.beginPath();
+          drawing.arc(keypoints[point] * scaleX, keypoints[point + 1] * scaleY, radius, 0, 2 * Math.PI);
+          drawing.fill();
+          drawing.stroke();
+        }
+      }
+    }
+
+    function redrawLoopClosurePair(selection) {
+      drawLoopClosureKeypoints(
+        document.getElementById("loop-closure-left-image"),
+        document.getElementById("loop-closure-left-keypoints"),
+        selection.leftKeypoints,
+        selection.matchClasses
+      );
+      drawLoopClosureKeypoints(
+        document.getElementById("loop-closure-right-image"),
+        document.getElementById("loop-closure-right-keypoints"),
+        selection.rightKeypoints,
+        selection.matchClasses
+      );
+    }
+
+    function showLoopClosurePair(selection) {
+      if (imageDirectory === null) throw new Error("Load the reconstruction image source before opening a pair");
+      const panel = document.getElementById("loop-closure-pair-panel");
+      activeLoopClosurePair = selection;
+      const leftImage = document.getElementById("loop-closure-left-image");
+      const rightImage = document.getElementById("loop-closure-right-image");
+      document.getElementById("loop-closure-left-name").textContent = selection.leftName;
+      document.getElementById("loop-closure-right-name").textContent = selection.rightName;
+      document.getElementById("loop-closure-pair-status").textContent =
+        `${selection.totalMatchCount.toLocaleString()} matches · ` +
+        `${selection.matchCount.toLocaleString()} LC · ` +
+        `${selection.sharedLoopClosureCount.toLocaleString()} LC sharing a 3D point · ` +
+        `${selection.sharedPointCount.toLocaleString()} highlighted 3D points`;
+      leftImage.onload = () => requestAnimationFrame(() => drawLoopClosureKeypoints(
+        leftImage,
+        document.getElementById("loop-closure-left-keypoints"),
+        selection.leftKeypoints,
+        selection.matchClasses
+      ));
+      rightImage.onload = () => requestAnimationFrame(() => drawLoopClosureKeypoints(
+        rightImage,
+        document.getElementById("loop-closure-right-keypoints"),
+        selection.rightKeypoints,
+        selection.matchClasses
+      ));
+      panel.hidden = false;
+      loadImage(leftImage, imageDirectory, selection.leftName);
+      loadImage(rightImage, imageDirectory, selection.rightName);
+      setLoopClosurePointHighlights(selection.sharedPointPositions);
+    }
+
+    function closeLoopClosurePair() {
+      const panel = document.getElementById("loop-closure-pair-panel");
+      panel.hidden = true;
+      activeLoopClosurePair = null;
+      setLoopClosurePointHighlights(new Float32Array());
+    }
+
+    function installImageDirectory(directory) {
+      imageDirectory = directory;
+      const slider = document.getElementById("keyframe-slider");
+      showKeyframe(Number(slider.value));
+    }
+
+    function resetRunVisualState() {
+      imageDirectory = null;
+      closeLoopClosurePair();
+      trackedKeypointPositions = null;
+      trackedKeypointPointIds = null;
+      trackedKeypointOffsets = null;
+      const empty = new Float32Array();
+      replacePointGeometry(empty, null);
+      replaceEstimatedGeometry(empty, empty);
+      replaceLoopClosureGeometry(new Uint32Array(), new Float32Array());
+      error.style.display = "none";
+      error.textContent = "";
+      pauseKeyframePlayback();
+      keyframeTimeline.names = [];
+      keyframeTimeline.imageIds = [];
+      keyframeTimeline.timestampsSeconds = null;
+      keyframeTimeline.pointOffsets = [0];
+      const slider = document.getElementById("keyframe-slider");
+      slider.max = "0";
+      slider.value = "0";
+      slider.disabled = true;
+      document.getElementById("keyframe-play").disabled = true;
+      document.getElementById("keyframe-playback-status").textContent = "timestamps unavailable";
+      document.getElementById("keyframe-label").textContent = "";
+      const preview = document.getElementById("keyframe-preview");
+      preview.removeAttribute("src");
+      preview.removeAttribute("data-source-width");
+      preview.removeAttribute("data-source-height");
+      drawTrackedKeypoints(0);
+    }
+
+    function setCovarianceRankLimit(limit) {
+      if (!covarianceIndexActive) return;
+      covarianceDrawCount = limit < 0 ? pointPositions.length / 3 : limit;
+      pointsGeometry.setDrawRange(0, covarianceDrawCount);
+      invalidateSceneRender();
+    }
+
+    function wideLineMaterial(color, opacity, width, depthTest) {
+      const material = new THREE.LineMaterial({
+        color: color, transparent: opacity < 1, opacity: opacity,
+        linewidth: width, worldUnits: false, depthTest: depthTest
+      });
+      material.resolution.set(window.innerWidth, window.innerHeight);
+      return material;
+    }
+
+    function wideLineSegments(positions, color, opacity, width) {
+      const geometry = new THREE.LineSegmentsGeometry();
+      geometry.setPositions(positions);
+      return new THREE.LineSegments2(
+        geometry,
+        wideLineMaterial(color, opacity, width, true)
+      );
+    }
+    function loopClosureVertexColors(sharedPoints, minimumSharedPoints) {
+      const rejected = [240, 70, 70];
+      const accepted = [0, 210, 130];
+      const colors = new Float32Array(sharedPoints.length * 6);
+      for (let edge = 0; edge < sharedPoints.length; ++edge) {
+        const color = sharedPoints[edge] >= minimumSharedPoints ? accepted : rejected;
+        for (let endpoint = 0; endpoint < 2; ++endpoint) {
+          for (let channel = 0; channel < 3; ++channel) {
+            colors[edge * 6 + endpoint * 3 + channel] = color[channel] / 255;
+          }
+        }
+      }
+      return colors;
+    }
+    function coloredWideLineSegments(positions, sharedPoints, width, minimumSharedPoints) {
+      const geometry = new THREE.LineSegmentsGeometry();
+      geometry.setPositions(positions);
+      geometry.setColors(loopClosureVertexColors(sharedPoints, minimumSharedPoints));
+      const material = wideLineMaterial(0xffffff, 0.8, width, true);
+      material.vertexColors = true;
+      material.needsUpdate = true;
+      return new THREE.LineSegments2(geometry, material);
+    }
+    function visibleLoopClosureData(maximumKeyframe) {
+      const positions = [];
+      const sharedPoints = [];
+      const edgeIndices = [];
+      for (let edge = 0; edge < loopClosureSharedPoints.length; ++edge) {
+        const left = loopClosureKeyframeIndices[edge * 2];
+        const right = loopClosureKeyframeIndices[edge * 2 + 1];
+        if (left > maximumKeyframe || right > maximumKeyframe) continue;
+        if ((left + 1) * 3 > estimatedPathPositions.length || (right + 1) * 3 > estimatedPathPositions.length) {
+          continue;
+        }
+        positions.push(
+          estimatedPathPositions[left * 3],
+          estimatedPathPositions[left * 3 + 1],
+          estimatedPathPositions[left * 3 + 2],
+          estimatedPathPositions[right * 3],
+          estimatedPathPositions[right * 3 + 1],
+          estimatedPathPositions[right * 3 + 2]
+        );
+        sharedPoints.push(loopClosureSharedPoints[edge]);
+        edgeIndices.push(edge);
+      }
+      return {
+        positions: Float32Array.from(positions),
+        sharedPoints: Float32Array.from(sharedPoints),
+        edgeIndices: Uint32Array.from(edgeIndices)
+      };
+    }
+    const estimatedFrusta = wideLineSegments(estimatedFrustaPositions, 0xd62728, 0.45, 1);
+    scene.add(estimatedFrusta);
+    const initialLoopClosures = visibleLoopClosureData(keyframeTimeline.names.length - 1);
+    const loopClosures = coloredWideLineSegments(
+      initialLoopClosures.positions,
+      initialLoopClosures.sharedPoints,
+      3,
+      50
+    );
+    let visibleLoopClosurePositions = initialLoopClosures.positions;
+    let visibleLoopClosureIndices = initialLoopClosures.edgeIndices;
+    scene.add(loopClosures);
+    function updateLoopClosureGeometry(maximumKeyframe) {
+      const visible = visibleLoopClosureData(maximumKeyframe);
+      visibleLoopClosurePositions = visible.positions;
+      visibleLoopClosureIndices = visible.edgeIndices;
+      const minimumInput = document.getElementById("loop-closures-min-shared");
+      const minimum = Number(minimumInput.value);
+      if (!Number.isFinite(minimum) || minimum < 0) return;
+      const replacement = new THREE.LineSegmentsGeometry();
+      replacement.setPositions(visible.positions);
+      replacement.setColors(loopClosureVertexColors(visible.sharedPoints, minimum));
+      loopClosures.geometry.dispose();
+      loopClosures.geometry = replacement;
+      const toggle = document.getElementById("loop-closures-toggle");
+      loopClosures.visible = visible.sharedPoints.length > 0 && toggle.checked;
+      invalidateSceneRender();
+    }
+    function replaceLoopClosureGeometry(keyframeIndices, sharedPoints) {
+      if (keyframeIndices.length !== sharedPoints.length * 2) {
+        throw new Error("Shared-track pair indices and counts must match");
+      }
+      loopClosureKeyframeIndices = keyframeIndices;
+      loopClosureSharedPoints = Float32Array.from(sharedPoints);
+      const slider = document.getElementById("keyframe-slider");
+      updateLoopClosureGeometry(Number(slider.value));
+    }
+    function pickedLoopClosure(clientX, clientY) {
+      if (!loopClosures.visible || visibleLoopClosurePositions.length === 0) return null;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      if (
+        clientX < bounds.left || clientX >= bounds.right ||
+        clientY < bounds.top || clientY >= bounds.bottom
+      ) return null;
+      const point = new THREE.Vector2(clientX - bounds.left, clientY - bounds.top);
+      const start = new THREE.Vector3();
+      const end = new THREE.Vector3();
+      let selected = null;
+      let bestDistance = 10;
+      for (let edge = 0; edge < visibleLoopClosureIndices.length; ++edge) {
+        start.fromArray(visibleLoopClosurePositions, edge * 6).project(camera);
+        end.fromArray(visibleLoopClosurePositions, edge * 6 + 3).project(camera);
+        if ((start.z < -1 && end.z < -1) || (start.z > 1 && end.z > 1)) continue;
+        start.set((start.x + 1) * bounds.width / 2, (1 - start.y) * bounds.height / 2, 0);
+        end.set((end.x + 1) * bounds.width / 2, (1 - end.y) * bounds.height / 2, 0);
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const lengthSquared = dx * dx + dy * dy;
+        const position = lengthSquared === 0 ? 0 : Math.max(
+          0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)
+        );
+        const distance = Math.hypot(point.x - start.x - position * dx, point.y - start.y - position * dy);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          selected = visibleLoopClosureIndices[edge];
+        }
+      }
+      return selected;
+    }
+    renderer.domElement.addEventListener("click", async event => {
+      if (orbitMoved) {
+        orbitMoved = false;
+        return;
+      }
+      const edge = pickedLoopClosure(event.clientX, event.clientY);
+      if (edge === null) return;
+      const left = loopClosureKeyframeIndices[edge * 2];
+      const right = loopClosureKeyframeIndices[edge * 2 + 1];
+      try {
+        await loopClosureSelectionHandler(left, right);
+      } catch (selectionError) {
+        error.style.display = "block";
+        error.textContent = selectionError instanceof Error ? selectionError.message : String(selectionError);
+      }
+    });
+
+    function path(positions, color) {
+      const geometry = new THREE.LineGeometry();
+      const hasSegments = positions.length >= 6;
+      if (hasSegments) geometry.setPositions(positions);
+      const material = wideLineMaterial(color, 1, 6, false);
+      material.transparent = true;
+      material.depthWrite = false;
+      const result = new THREE.Line2(
+        geometry,
+        material
+      );
+      result.visible = hasSegments;
+      result.renderOrder = 100;
+      return result;
+    }
+    function updatePathPrefix(object, positions, pointCount) {
+      const replacement = new THREE.LineGeometry();
+      const hasSegments = pointCount >= 2;
+      if (hasSegments) replacement.setPositions(positions.subarray(0, pointCount * 3));
+      object.geometry.dispose();
+      object.geometry = replacement;
+      object.visible = hasSegments && document.getElementById("paths-toggle").checked;
+      invalidateSceneRender();
+    }
+    const estimatedPath = path(estimatedPathPositions, 0x0064ff);
+    scene.add(estimatedPath);
+
+    function updateFrustaPrefix(object, base, centers, pointCount, size) {
+      const scaled = scaledFrusta(base, centers, size, pointCount);
+      const replacement = new THREE.LineSegmentsGeometry();
+      if (scaled.length > 0) replacement.setPositions(scaled);
+      object.geometry.dispose();
+      object.geometry = replacement;
+      invalidateSceneRender();
+    }
+    function replaceEstimatedGeometry(centers, frusta) {
+      estimatedPathPositions = centers;
+      estimatedFrustaPositions = frusta;
+      updateLoopClosureGeometry(Number(document.getElementById("keyframe-slider").value));
+      fitScene();
+    }
+    function showKeyframe(index) {
+      if (keyframeTimeline.names.length === 0) return;
+      const bounded = Math.max(0, Math.min(index, keyframeTimeline.names.length - 1));
+      document.getElementById("keyframe-slider").value = String(bounded);
+      const pointCount = keyframeTimeline.pointOffsets[bounded + 1];
+      if (covarianceIndexActive) {
+        keyframeLimit.value = bounded;
+        pointsGeometry.setDrawRange(0, covarianceDrawCount);
+      } else {
+        pointsGeometry.setDrawRange(0, pointCount);
+      }
+      const timestampText = keyframeTimeline.timestampsSeconds === null
+        ? ""
+        : ` · ${keyframeTimeline.timestampsSeconds[bounded].toFixed(3)} s`;
+      document.getElementById("keyframe-label").textContent =
+        `${bounded + 1}/${keyframeTimeline.names.length}${timestampText} · ${keyframeTimeline.names[bounded]} · ${pointCount.toLocaleString()} cumulative points`;
+      const preview = document.getElementById("keyframe-preview");
+      if (imageDirectory !== null) {
+        loadImage(preview, imageDirectory, keyframeTimeline.names[bounded]);
+      }
+      preview.dataset.keyframeIndex = String(bounded);
+      drawTrackedKeypoints(bounded);
+      updatePathPrefix(estimatedPath, estimatedPathPositions, bounded + 1);
+      const estimatedSize = Number(document.getElementById("estimated-frusta-size").value);
+      updateFrustaPrefix(
+        estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, bounded + 1, estimatedSize
+      );
+      updateLoopClosureGeometry(bounded);
+    }
+    const keyframePreview = document.getElementById("keyframe-preview");
+    keyframePreview.onload = () => drawTrackedKeypoints(Number(keyframePreview.dataset.keyframeIndex));
+    const keyframePreviewPanel = document.getElementById("keyframe-preview-panel");
+    keyframePreviewPanel.ontoggle = () => {
+      if (keyframePreviewPanel.open) {
+        requestAnimationFrame(() => drawTrackedKeypoints(Number(keyframeSlider.value)));
+      }
+    };
+    const loopClosurePairClose = document.getElementById("loop-closure-pair-close");
+    loopClosurePairClose.onclick = closeLoopClosurePair;
+    if (typeof ResizeObserver !== "undefined") {
+      const imagePanelResizeObserver = new ResizeObserver(() => {
+        requestAnimationFrame(() => {
+          drawTrackedKeypoints(Number(keyframeSlider.value));
+          if (activeLoopClosurePair !== null) redrawLoopClosurePair(activeLoopClosurePair);
+        });
+      });
+      imagePanelResizeObserver.observe(keyframePreviewPanel);
+      const loopClosurePairPanel = document.getElementById("loop-closure-pair-panel");
+      imagePanelResizeObserver.observe(loopClosurePairPanel);
+    }
+
+    const bounds = new THREE.Box3();
+    const fitPoint = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    const extent = new THREE.Vector3();
+    let radius = 1;
+
+    function updateProjectionDimensions() {
+      const aspect = window.innerWidth / window.innerHeight;
+      perspectiveCamera.aspect = aspect;
+      perspectiveCamera.updateProjectionMatrix();
+      const halfHeight = radius * 1.25;
+      orthographicCamera.left = -halfHeight * aspect;
+      orthographicCamera.right = halfHeight * aspect;
+      orthographicCamera.top = halfHeight;
+      orthographicCamera.bottom = -halfHeight;
+      orthographicCamera.updateProjectionMatrix();
+    }
+    function fitScene() {
+      bounds.makeEmpty();
+      const fitPositions = estimatedPathPositions.length > 0 ? [estimatedPathPositions] : [pointPositions];
+      for (const positions of fitPositions) {
+        for (let index = 0; index < positions.length; index += 3) {
+          fitPoint.set(positions[index], positions[index + 1], positions[index + 2]);
+          bounds.expandByPoint(fitPoint);
+        }
+      }
+      if (bounds.isEmpty()) {
+        bounds.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(2, 2, 2));
+      }
+      bounds.getCenter(center);
+      bounds.getSize(extent);
+      radius = Math.max(extent.length() * 0.5, 1);
+      controls.target.copy(center);
+      const initialPosition = center.clone().add(
+        new THREE.Vector3(1, -1, 0.8).normalize().multiplyScalar(radius * 2.2)
+      );
+      for (const viewCamera of [perspectiveCamera, orthographicCamera]) {
+        viewCamera.near = Math.max(radius / 10000, 0.001);
+        viewCamera.far = radius * 100;
+        viewCamera.position.copy(initialPosition);
+      }
+      updateProjectionDimensions();
+      controls.update();
+      invalidateSceneRender();
+    }
+    fitScene();
+
+    document.getElementById("points-toggle").onchange = event => points.visible = event.target.checked;
+    const keyframeSlider = document.getElementById("keyframe-slider");
+    const keyframePlay = document.getElementById("keyframe-play");
+    const keyframeSpeed = document.getElementById("keyframe-speed");
+    const keyframePlaybackStatus = document.getElementById("keyframe-playback-status");
+    let keyframePlaybackRequest = null;
+    function timelineIndexAtElapsed(timestamps, startIndex, elapsedSeconds, speed) {
+      const target = timestamps[startIndex] + elapsedSeconds * speed;
+      let low = startIndex;
+      let high = timestamps.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (timestamps[middle] <= target) low = middle + 1;
+        else high = middle;
+      }
+      return Math.max(startIndex, low - 1);
+    }
+    function pauseKeyframePlayback() {
+      if (keyframePlaybackRequest !== null) cancelAnimationFrame(keyframePlaybackRequest);
+      keyframePlaybackRequest = null;
+      keyframePlay.textContent = "play";
+      if (keyframeTimeline.timestampsSeconds !== null) {
+        keyframePlaybackStatus.textContent = "paused";
+      }
+    }
+    function startKeyframePlayback() {
+      if (keyframeTimeline.timestampsSeconds === null) return;
+      let startIndex = Number(keyframeSlider.value);
+      if (startIndex >= keyframeTimeline.names.length - 1) {
+        startIndex = 0;
+        showKeyframe(startIndex);
+      }
+      const startedAt = performance.now();
+      const speed = Number(keyframeSpeed.value);
+      let displayedIndex = startIndex;
+      keyframePlay.textContent = "pause";
+      keyframePlaybackStatus.textContent = `${speed}× real time`;
+      function advance(now) {
+        const index = timelineIndexAtElapsed(
+          keyframeTimeline.timestampsSeconds,
+          startIndex,
+          (now - startedAt) / 1000,
+          speed
+        );
+        if (index !== displayedIndex) {
+          showKeyframe(index);
+          displayedIndex = index;
+        }
+        if (index >= keyframeTimeline.names.length - 1) {
+          pauseKeyframePlayback();
+          keyframePlaybackStatus.textContent = "finished";
+          return;
+        }
+        keyframePlaybackRequest = requestAnimationFrame(advance);
+      }
+      keyframePlaybackRequest = requestAnimationFrame(advance);
+    }
+    keyframeSlider.oninput = event => {
+      pauseKeyframePlayback();
+      showKeyframe(Number(event.target.value));
+    };
+    keyframePlay.onclick = () => {
+      if (keyframePlaybackRequest === null) startKeyframePlayback();
+      else pauseKeyframePlayback();
+    };
+    keyframeSpeed.onchange = () => {
+      if (keyframePlaybackRequest !== null) {
+        pauseKeyframePlayback();
+        startKeyframePlayback();
+      }
+    };
+    const trackedKeypointsToggle = document.getElementById("tracked-keypoints-toggle");
+    trackedKeypointsToggle.onchange = () => drawTrackedKeypoints(Number(keyframeSlider.value));
+    const estimatedFrustaToggle = document.getElementById("estimated-frusta-toggle");
+    estimatedFrustaToggle.onchange = event => estimatedFrusta.visible = event.target.checked;
+    document.getElementById("paths-toggle").onchange = () => showKeyframe(Number(keyframeSlider.value));
+    const loopClosuresToggle = document.getElementById("loop-closures-toggle");
+    loopClosuresToggle.onchange = () => updateLoopClosureGeometry(Number(keyframeSlider.value));
+    bindNumber("loop-closures-width", value => loopClosures.material.linewidth = value);
+    const minimumSharedPoints = document.getElementById("loop-closures-min-shared");
+    function updateLoopClosureColors() {
+      updateLoopClosureGeometry(Number(keyframeSlider.value));
+    }
+    minimumSharedPoints.oninput = updateLoopClosureColors;
+
+    function bindNumber(id, update) {
+      const input = document.getElementById(id);
+      input.oninput = () => {
+        const value = Number(input.value);
+        if (Number.isFinite(value) && value > 0) update(value);
+      };
+    }
+
+    function scaledFrusta(base, centers, size, requestedCount = centers.length / 3) {
+      const verticesPerCamera = 16;
+      const cameraCount = Math.max(0, Math.floor(Math.min(
+        requestedCount, centers.length / 3, base.length / (verticesPerCamera * 3)
+      )));
+      const result = new Float32Array(cameraCount * verticesPerCamera * 3);
+      const scale = size / 0.3;
+      for (let cameraIndex = 0; cameraIndex < cameraCount; ++cameraIndex) {
+        const centerOffset = cameraIndex * 3;
+        const centerX = centers[centerOffset];
+        const centerY = centers[centerOffset + 1];
+        const centerZ = centers[centerOffset + 2];
+        const begin = cameraIndex * verticesPerCamera * 3;
+        const end = begin + verticesPerCamera * 3;
+        for (let index = begin; index < end; index += 3) {
+          result[index] = centerX + (base[index] - centerX) * scale;
+          result[index + 1] = centerY + (base[index + 1] - centerY) * scale;
+          result[index + 2] = centerZ + (base[index + 2] - centerZ) * scale;
+        }
+      }
+      return result;
+    }
+
+    function updatePointSize(value) {
+      const minimumSize = 1 / renderer.getPixelRatio();
+      const coverage = Math.min(value / minimumSize, 1);
+      points.material.size = Math.max(value, minimumSize);
+      points.material.opacity = coverage * coverage;
+      const transparent = coverage < 1;
+      if (points.material.transparent !== transparent) {
+        points.material.transparent = transparent;
+        points.material.needsUpdate = true;
+      }
+    }
+    bindNumber("points-size", updatePointSize);
+    updatePointSize(Number(document.getElementById("points-size").value));
+    const pointsColorInput = document.getElementById("points-color");
+    pointsColorInput.oninput = event => points.material.color.set(event.target.value);
+    const pointsColorMode = document.getElementById("points-color-mode");
+    pointsColorInput.disabled = true;
+    pointsColorMode.onchange = event => {
+      const useRgb = event.target.value === "rgb";
+      points.material.vertexColors = useRgb;
+      points.material.color.set(useRgb ? 0xffffff : pointsColorInput.value);
+      points.material.needsUpdate = true;
+      pointsColorInput.disabled = useRgb;
+    };
+    bindNumber(
+      "estimated-frusta-size",
+      () => showKeyframe(Number(keyframeSlider.value))
+    );
+    bindNumber("estimated-frusta-width", value => estimatedFrusta.material.linewidth = value);
+    document.getElementById("estimated-frusta-color").oninput =
+      event => estimatedFrusta.material.color.set(event.target.value);
+    bindNumber("paths-width", value => estimatedPath.material.linewidth = value);
+    document.getElementById("estimated-path-color").oninput =
+      event => estimatedPath.material.color.set(event.target.value);
+
+    document.getElementById("projection").onchange = event => {
+      const nextCamera = event.target.value === "orthographic"
+        ? orthographicCamera
+        : perspectiveCamera;
+      nextCamera.position.copy(camera.position);
+      nextCamera.quaternion.copy(camera.quaternion);
+      nextCamera.up.copy(camera.up);
+      camera = nextCamera;
+      controls.object = camera;
+      controls.update();
+      invalidateSceneRender();
+    };
+
+    const backgroundLayer = document.getElementById("background-layer");
+    const backgroundFile = document.getElementById("background-file");
+    document.getElementById("background-color").oninput =
+      event => document.body.style.backgroundColor = event.target.value;
+    let backgroundUrl = null;
+    function clearBackground() {
+      if (backgroundUrl !== null) URL.revokeObjectURL(backgroundUrl);
+      backgroundUrl = null;
+      backgroundLayer.style.backgroundImage = "none";
+      backgroundFile.value = "";
+    }
+    backgroundFile.onchange = () => {
+      const file = backgroundFile.files[0];
+      if (file === undefined) return;
+      if (backgroundUrl !== null) URL.revokeObjectURL(backgroundUrl);
+      backgroundUrl = URL.createObjectURL(file);
+      backgroundLayer.style.backgroundImage = `url("${backgroundUrl}")`;
+    };
+    document.getElementById("background-fit").onchange = event => {
+      backgroundLayer.style.backgroundSize = event.target.value === "stretch"
+        ? "100% 100%"
+        : event.target.value;
+    };
+    document.getElementById("background-clear").onclick = clearBackground;
+    document.addEventListener("input", invalidateSceneRender);
+    document.addEventListener("change", invalidateSceneRender);
+    window.addEventListener("beforeunload", () => {
+      if (backgroundUrl !== null) URL.revokeObjectURL(backgroundUrl);
+    });
+
+    initializeReconstructionViewer(embeddedRun);
+
+    function resize() {
+      updateProjectionDimensions();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      for (const object of [estimatedFrusta, loopClosures, estimatedPath]) {
+        object.material.resolution.set(window.innerWidth, window.innerHeight);
+      }
+      drawTrackedKeypoints(Number(keyframeSlider.value));
+      if (activeLoopClosurePair !== null) redrawLoopClosurePair(activeLoopClosurePair);
+      invalidateSceneRender();
+    }
+    window.addEventListener("resize", resize);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const controlsChanged = controls.update();
+      if (!sceneRenderDirty && !controlsChanged) return;
+      sceneRenderDirty = false;
+      renderer.render(scene, camera);
+    }
+    animate();
+  })();
+  </script>
+</body>
+</html>

@@ -163,7 +163,7 @@ def flythrough_input_paths(playback: Playback) -> tuple[Path, ...]:
 
     paths.extend(
         (
-            run / LOCAL_INPUT_MANIFEST_NAME,
+            run / "mapper_inputs" / LOCAL_INPUT_MANIFEST_NAME,
             rgb_dir / "video_frames.json",
         )
     )

@@ -181,7 +181,6 @@ class BenchmarkResultStore:
         *,
         frontend_only: bool,
         overwrite_results: bool,
-        save_3d_html: bool = False,
         save_playback_trace: bool = False,
         playback_trace_stride: int = 3,
         playback_trace_point_cap: int | None = None,
@@ -201,7 +200,6 @@ class BenchmarkResultStore:
         )
         if completed and not overwrite_results:
             missing_artifacts = self.missing_requested_artifacts(
-                save_3d_html=save_3d_html,
                 save_playback_trace=save_playback_trace,
                 playback_trace_stride=playback_trace_stride,
                 playback_trace_point_cap=playback_trace_point_cap,
@@ -223,14 +221,11 @@ class BenchmarkResultStore:
     def missing_requested_artifacts(
         self,
         *,
-        save_3d_html: bool,
         save_playback_trace: bool,
         playback_trace_stride: int,
         playback_trace_point_cap: int | None,
     ) -> list[str]:
         missing = []
-        if save_3d_html and not (self.output_dir / "3d.html").is_file():
-            missing.append("3d.html")
         if save_playback_trace:
             trace_dir = self.output_dir / "playback_trace"
             try:

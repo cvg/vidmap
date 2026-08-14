@@ -191,7 +191,7 @@ class Frontend:
         # Persist the masks aligned with the filtered matches before geometric
         # verification publishes the finalized mapper database.
         sparse_matches_path = tracking.paths.sparse_matches_path
-        lc_masks_path = sparse_matches_path.with_name(f"lc_masks-{sparse_matches_path.stem}.h5")
+        lc_masks_path = sparse_matches_path.with_name(f"lc_masks-{sparse_matches_path.stem}.json")
         write_loop_closure_masks(filtered.lc_masks, lc_masks_path)
 
         geometric_verifier = GeometricVerifier(

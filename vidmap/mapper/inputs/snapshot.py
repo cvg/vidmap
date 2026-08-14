@@ -18,11 +18,11 @@ from vidmap.depth_artifacts import FULL_DEPTH_MAPS_NAME
 DATABASE_NAME = "database_complete.db"
 TRACK_PAIRS_NAME = "track_pairs.h5"
 DEPTH_MAPS_NAME = "depth_maps.h5"
-LC_MASKS_NAME = "lc_masks.h5"
+LC_MASKS_NAME = "lc_masks.json"
 GEOCALIB_BATCH_NAME = "geocalib_batch.h5"
 VGC_FILTERED_PAIRS_NAME = "vgc_filtered_pairs.json"
 MANIFEST_NAME = "manifest.json"
-MANIFEST_SCHEMA_VERSION = 5
+MANIFEST_SCHEMA_VERSION = 6
 _FRONTEND_IDENTITY_SCHEMA_VERSION = 2
 SQLITE_SIDECAR_SUFFIXES = ("-journal", "-shm", "-wal")
 

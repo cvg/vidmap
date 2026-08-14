@@ -117,7 +117,6 @@ class BenchmarkRunner:
         if not results.prepare(
             frontend_only=False,
             overwrite_results=overwrite_results,
-            save_3d_html=self.run_options.save_3d_html,
             save_playback_trace=self.run_options.save_playback_trace,
             playback_trace_stride=self.run_options.playback_trace_stride,
             playback_trace_point_cap=self.run_options.playback_trace_point_cap,
