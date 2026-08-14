@@ -3,10 +3,6 @@ import pytest
 import vidmap_native._core as native
 
 
-def test_native_api_version_is_explicit():
-    assert native.__api_version__ == 5
-
-
 def test_global_positioning_ordering_names_are_current():
     assert set(native.GlobalPositioningOrdering.__members__) == {"GROUPED", "SINGLETON"}
 

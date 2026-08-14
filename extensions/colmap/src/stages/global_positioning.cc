@@ -83,6 +83,28 @@ class DeadZoneHuberLoss final : public ceres::LossFunction {
   const double huber_width_;
 };
 
+class WarmupLoss final : public ceres::LossFunction {
+ public:
+  WarmupLoss(const ceres::LossFunction* normal,
+             const ceres::LossFunction* warmup)
+      : normal_(normal), warmup_(warmup) {
+    if (normal_ == nullptr || warmup_ == nullptr) {
+      throw std::invalid_argument("warm-up loss requires two losses");
+    }
+  }
+
+  void SetWarmup(const bool enabled) { use_warmup_ = enabled; }
+
+  void Evaluate(const double squared_norm, double rho[3]) const override {
+    (use_warmup_ ? warmup_ : normal_)->Evaluate(squared_norm, rho);
+  }
+
+ private:
+  const ceres::LossFunction* normal_;
+  const ceres::LossFunction* warmup_;
+  bool use_warmup_ = false;
+};
+
 Eigen::Quaterniond ImageRotation(const ImageRecord& image) {
   return ToColmapPose(image.pose).rotation();
 }
@@ -116,9 +138,14 @@ class GlobalPositioner {
       AddCamerasAndPointsToParameterGroups();
     }
     ParameterizeVariables();
+    const int support_rounds = options_.sequential_support_warmup_rounds;
 
     ceres::Solver::Summary summary;
     try {
+      if (support_rounds > 0 && options_.playback.IsEnabled()) {
+        WritePlaybackCapture("initial", -1);
+      }
+      RunSequentialSupportWarmup();
       SolveWithPlayback(
           options_.playback,
           solver_options_,
@@ -126,7 +153,8 @@ class GlobalPositioner {
           [this](const char* phase, const int iteration) {
             WritePlaybackCapture(phase, iteration);
           },
-          &summary);
+          &summary,
+          support_rounds);
     } catch (...) {
       ConvertBackResults();
       throw;
@@ -169,6 +197,24 @@ class GlobalPositioner {
             "global positioning requires one image per frame");
       }
     }
+    chronological_image_indices_.clear();
+    if (options_.sequential_support_warmup_rounds > 0) {
+      for (std::size_t index = 0;
+           index < options_.sequential_support_image_timeline.size();
+           ++index) {
+        const ImageId image_id =
+            options_.sequential_support_image_timeline[index];
+        if (image_ids_.count(image_id) == 0 ||
+            !chronological_image_indices_.emplace(image_id, index).second) {
+          throw std::invalid_argument(
+              "sequential support requires an exact unique image timeline");
+        }
+      }
+      if (chronological_image_indices_.size() != image_ids_.size()) {
+        throw std::invalid_argument(
+            "sequential support requires an exact unique image timeline");
+      }
+    }
   }
 
   void SetupProblem() {
@@ -196,6 +242,7 @@ class GlobalPositioner {
     depth_outliers_.clear();
     per_image_scale_prior_losses_.clear();
     temporal_acceleration_losses_.clear();
+    has_sequential_support_candidate_ = false;
     result_ = GlobalPositioningResult();
 
     loss_ = SharedLoss(options_.loss);
@@ -223,6 +270,33 @@ class GlobalPositioner {
     loss_normal_depth_track_anchor_ =
         SharedLoss(options_.loss_normal_depth_track_anchor);
     loss_scale_prior_ = SharedLoss(options_.loss_scale_prior);
+    if (options_.sequential_support_warmup_rounds > 0) {
+      sequential_support_calibrated_loss_ =
+          SharedLoss(options_.sequential_support_loss);
+      sequential_support_uncalibrated_loss_ =
+          options_.apply_uncalibrated_loss_downweight
+              ? std::make_shared<ceres::ScaledLoss>(
+                    sequential_support_calibrated_loss_.get(),
+                    options_.uncalibrated_loss_downweight,
+                    ceres::DO_NOT_TAKE_OWNERSHIP)
+              : sequential_support_calibrated_loss_;
+      ceres::LossFunction* normal_calibrated_loss =
+          options_.use_metric_depth_constraint ? loss_normal_geometry_.get()
+                                               : calibrated_loss_.get();
+      ceres::LossFunction* normal_uncalibrated_loss =
+          options_.use_metric_depth_constraint ? loss_normal_geometry_.get()
+                                               : uncalibrated_loss_.get();
+      sequential_support_calibrated_switch_ = std::make_unique<WarmupLoss>(
+          normal_calibrated_loss, sequential_support_calibrated_loss_.get());
+      sequential_support_uncalibrated_switch_ = std::make_unique<WarmupLoss>(
+          normal_uncalibrated_loss,
+          sequential_support_uncalibrated_loss_.get());
+    } else {
+      sequential_support_calibrated_loss_.reset();
+      sequential_support_uncalibrated_loss_.reset();
+      sequential_support_calibrated_switch_.reset();
+      sequential_support_uncalibrated_switch_.reset();
+    }
     loss_soft_outlier_fallback_.reset();
 
     solver_options_.num_threads = options_.num_threads;
@@ -403,6 +477,34 @@ class GlobalPositioner {
     }
   }
 
+  std::set<std::pair<ImageId, std::uint32_t>> SelectTrackSupport(
+      const TrackRecord& track) const {
+    std::vector<Observation> observations;
+    observations.reserve(track.observations.rows());
+    for (Eigen::Index row = 0; row < track.observations.rows(); ++row) {
+      observations.push_back(
+          {track.observations(row, 0), track.observations(row, 1)});
+    }
+    std::sort(observations.begin(),
+              observations.end(),
+              [this](const Observation& lhs, const Observation& rhs) {
+                return std::tie(chronological_image_indices_.at(lhs.image_id),
+                                lhs.point2D_idx) <
+                       std::tie(chronological_image_indices_.at(rhs.image_id),
+                                rhs.point2D_idx);
+              });
+
+    std::set<std::pair<ImageId, std::uint32_t>> selected;
+    const std::size_t count = std::min<std::size_t>(
+        options_.sequential_support_observations_per_track,
+        observations.size());
+    for (std::size_t index = 0; index < count; ++index) {
+      selected.emplace(observations[index].image_id,
+                       observations[index].point2D_idx);
+    }
+    return selected;
+  }
+
   void AddPoint3DToProblem(Point3DId point3D_id) {
     const bool random_initialization = options_.optimize_points &&
                                        options_.generate_random_points &&
@@ -414,12 +516,21 @@ class GlobalPositioner {
     result_.initial_point3D_xyz.emplace(point3D_id, xyz);
 
     const TrackRecord& track = mapping_problem_->Track(point3D_id);
+    const bool support_enabled = options_.sequential_support_warmup_rounds > 0;
+    const std::set<std::pair<ImageId, std::uint32_t>> track_support =
+        support_enabled ? SelectTrackSupport(track)
+                        : std::set<std::pair<ImageId, std::uint32_t>>{};
     for (Eigen::Index row = 0; row < track.observations.rows(); ++row) {
+      const Observation observation{track.observations(row, 0),
+                                    track.observations(row, 1)};
       AddObservation(point3D_id,
-                     {track.observations(row, 0), track.observations(row, 1)},
+                     observation,
                      random_initialization,
                      false,
-                     std::nullopt);
+                     std::nullopt,
+                     support_enabled &&
+                         track_support.count({observation.image_id,
+                                              observation.point2D_idx}) != 0);
     }
     if (options_.use_lc_observations) {
       for (Eigen::Index row = 0; row < track.loop_closure_observations.rows();
@@ -434,7 +545,8 @@ class GlobalPositioner {
                         track.loop_closure_observations(row, 1)},
                        random_initialization,
                        true,
-                       anchor);
+                       anchor,
+                       false);
       }
     }
   }
@@ -443,7 +555,8 @@ class GlobalPositioner {
                       const Observation& observation,
                       bool random_initialization,
                       bool is_loop_closure,
-                      const std::optional<Observation>& loop_closure_anchor) {
+                      const std::optional<Observation>& loop_closure_anchor,
+                      bool selected_by_track_support) {
     if (image_ids_.count(observation.image_id) == 0) return;
     const ImageRecord& image = mapping_problem_->Image(observation.image_id);
     if (!image.pose.has_pose) return;
@@ -489,6 +602,20 @@ class GlobalPositioner {
       geometry_loss = is_track_anchor ? loss_normal_geometry_track_anchor_.get()
                       : is_inlier     ? loss_normal_geometry_inlier_.get()
                                       : loss_normal_geometry_.get();
+    }
+    if (selected_by_track_support) {
+      const double world_bearing_norm = point_from_camera_direction.norm();
+      if (!std::isfinite(world_bearing_norm) || world_bearing_norm <= 1e-12) {
+        selected_by_track_support = false;
+      }
+    }
+    if (selected_by_track_support) {
+      has_sequential_support_candidate_ = true;
+      if (!is_track_anchor && !is_inlier) {
+        geometry_loss = camera.has_prior_focal_length
+                            ? sequential_support_calibrated_switch_.get()
+                            : sequential_support_uncalibrated_switch_.get();
+      }
     }
 
     ceres::CostFunction* cost = nullptr;
@@ -901,6 +1028,37 @@ class GlobalPositioner {
         colmap::GetEffectiveNumThreads(solver_options_.num_threads);
   }
 
+  void RunSequentialSupportWarmup() {
+    const int rounds = options_.sequential_support_warmup_rounds;
+    if (rounds == 0) return;
+    if (!has_sequential_support_candidate_) {
+      throw std::runtime_error(
+          "sequential support has no eligible regular observations");
+    }
+
+    ceres::Solver::Options warmup_options = solver_options_;
+    warmup_options.max_num_iterations = 1;
+    SetSequentialSupportWarmup(true);
+    for (int round = 0; round < rounds; ++round) {
+      ceres::Solver::Summary summary;
+      ceres::Solve(warmup_options, problem_.get(), &summary);
+      if (!summary.IsSolutionUsable()) {
+        SetSequentialSupportWarmup(false);
+        throw std::runtime_error("sequential support warm-up failed");
+      }
+      if (options_.playback.IsEnabled() &&
+          round % options_.playback.snapshot_every_n_iterations == 0) {
+        WritePlaybackCapture("iteration", round);
+      }
+    }
+    SetSequentialSupportWarmup(false);
+  }
+
+  void SetSequentialSupportWarmup(const bool enabled) {
+    sequential_support_calibrated_switch_->SetWarmup(enabled);
+    sequential_support_uncalibrated_switch_->SetWarmup(enabled);
+  }
+
   void FindDepthOutliers() {
     for (const Point3DId point3D_id : mapping_problem_->Point3DIds()) {
       const TrackRecord& track = mapping_problem_->Track(point3D_id);
@@ -997,6 +1155,7 @@ class GlobalPositioner {
   const GlobalPositionerOptions& options_;
   MappingProblem* mapping_problem_;
   std::unordered_set<ImageId> image_ids_;
+  std::unordered_map<ImageId, std::size_t> chronological_image_indices_;
   std::unique_ptr<ceres::Problem> problem_;
   ceres::Solver::Options solver_options_;
   std::map<Point3DId, Eigen::Vector3d> point_xyz_;
@@ -1026,11 +1185,16 @@ class GlobalPositioner {
   std::shared_ptr<ceres::LossFunction> loss_normal_geometry_track_anchor_;
   std::shared_ptr<ceres::LossFunction> loss_normal_depth_track_anchor_;
   std::shared_ptr<ceres::LossFunction> loss_scale_prior_;
+  std::shared_ptr<ceres::LossFunction> sequential_support_calibrated_loss_;
+  std::shared_ptr<ceres::LossFunction> sequential_support_uncalibrated_loss_;
+  std::unique_ptr<WarmupLoss> sequential_support_calibrated_switch_;
+  std::unique_ptr<WarmupLoss> sequential_support_uncalibrated_switch_;
   std::shared_ptr<ceres::LossFunction> loss_soft_outlier_fallback_;
   std::vector<std::unique_ptr<ceres::LossFunction>>
       per_image_scale_prior_losses_;
   std::vector<std::unique_ptr<ceres::LossFunction>>
       temporal_acceleration_losses_;
+  bool has_sequential_support_candidate_ = false;
   GlobalPositioningResult result_;
 };
 
@@ -1045,6 +1209,8 @@ void GlobalPositionerOptions::Validate() const {
   }
   if (min_num_view_per_track <= 0 || random_seed < -1 ||
       !std::isfinite(random_init_scale) || random_init_scale < 0.0 ||
+      sequential_support_warmup_rounds < 0 ||
+      sequential_support_observations_per_track < 0 ||
       !std::isfinite(uncalibrated_loss_downweight) ||
       uncalibrated_loss_downweight < 0.0 ||
       !std::isfinite(log_linear_threshold) || log_linear_threshold <= 0.0 ||
@@ -1065,6 +1231,15 @@ void GlobalPositionerOptions::Validate() const {
       parameter_tolerance < 0.0) {
     throw std::invalid_argument("invalid global positioning options");
   }
+  const bool sequential_support_enabled = sequential_support_warmup_rounds > 0;
+  if (sequential_support_enabled !=
+          (sequential_support_observations_per_track > 0) ||
+      sequential_support_enabled !=
+          !sequential_support_image_timeline.empty()) {
+    throw std::invalid_argument(
+        "sequential support requires positive rounds, observations per track, "
+        "and an image timeline");
+  }
   if (use_temporal_acceleration_prior &&
       (temporal_acceleration_priors.empty() ||
        temporal_acceleration_prior_weight <= 0.0)) {
@@ -1083,6 +1258,7 @@ void GlobalPositionerOptions::Validate() const {
     }
   }
   loss.Validate();
+  sequential_support_loss.Validate();
   loss_soft_outlier_fallback.Validate();
   loss_normal_geometry.Validate();
   loss_normal_depth.Validate();

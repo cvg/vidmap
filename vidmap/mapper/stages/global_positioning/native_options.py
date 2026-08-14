@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -67,12 +67,24 @@ def apply_global_positioning_policy(native_options, options: GPOptions):
     return native_options
 
 
-def build_first_global_positioning_options(options: GPOptions, *, depth_outliers_marked: bool):
+def build_first_global_positioning_options(
+    options: GPOptions,
+    *,
+    depth_outliers_marked: bool,
+    image_timeline: Sequence[int],
+):
     native_options = native.GlobalPositioningOptions()
     common = options.common
     first = options.first_pass
     native_options.use_metric_depth_constraint = common.use_metric_depth_constraint
     native_options.optimize_scales = common.optimize_depth_map_scales
+    if first.sequential_support_warmup_rounds > 0:
+        if not image_timeline:
+            raise ValueError("sequential support requires an image timeline")
+        native_options.sequential_support_warmup_rounds = first.sequential_support_warmup_rounds
+        native_options.sequential_support_observations_per_track = first.sequential_support_observations_per_track
+        native_options.sequential_support_loss = loss_config_from_options(first.sequential_support_loss)
+        native_options.sequential_support_image_timeline = [int(image_id) for image_id in image_timeline]
     native_options.loss_loop_closure_geometry = loss_config_from_options(first.loss_lc_geometry)
     native_options.loss_loop_closure_depth = loss_config_from_options(first.loss_lc_depth)
     native_options.loss_normal_geometry = loss_config_from_options(first.loss_normal_geometry)
@@ -128,6 +140,10 @@ def configure_second_global_positioning_options(
     native_options.loss_normal_depth = loss_config_from_options(second.loss_normal_depth)
     native_options.use_initial_positions = True
     native_options.generate_scales = False
+    if options.first_pass.sequential_support_warmup_rounds > 0:
+        native_options.sequential_support_warmup_rounds = 0
+        native_options.sequential_support_observations_per_track = 0
+        native_options.sequential_support_image_timeline = []
     native_options.filter_depth_outliers = False
     native_options.initial_depth_map_scales = first_result.depth_map_scales
     native_options.initial_frame_centers = dict(initial_frame_centers)

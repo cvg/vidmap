@@ -45,6 +45,11 @@ struct GlobalPositionerOptions {
   bool optimize_positions = true;
   bool optimize_points = true;
   bool optimize_scales = true;
+  // Temporarily apply a separate loss to early observations of each track.
+  int sequential_support_warmup_rounds = 0;
+  int sequential_support_observations_per_track = 0;
+  LossConfig sequential_support_loss;
+  std::vector<ImageId> sequential_support_image_timeline;
   int min_num_view_per_track = 3;
   int random_seed = -1;
   double random_init_scale = 100.0;

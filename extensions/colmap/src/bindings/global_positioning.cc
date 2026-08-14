@@ -79,6 +79,16 @@ void BindGlobalPositioning(py::module_& m) {
                      &GlobalPositionerOptions::optimize_points)
       .def_readwrite("optimize_scales",
                      &GlobalPositionerOptions::optimize_scales)
+      .def_readwrite("sequential_support_warmup_rounds",
+                     &GlobalPositionerOptions::sequential_support_warmup_rounds)
+      .def_readwrite(
+          "sequential_support_observations_per_track",
+          &GlobalPositionerOptions::sequential_support_observations_per_track)
+      .def_readwrite("sequential_support_loss",
+                     &GlobalPositionerOptions::sequential_support_loss)
+      .def_readwrite(
+          "sequential_support_image_timeline",
+          &GlobalPositionerOptions::sequential_support_image_timeline)
       .def_readwrite("min_num_views_per_track",
                      &GlobalPositionerOptions::min_num_view_per_track)
       .def_readwrite("random_seed", &GlobalPositionerOptions::random_seed)
@@ -153,8 +163,7 @@ void BindGlobalPositioning(py::module_& m) {
                      &GlobalPositionerOptions::gradient_tolerance)
       .def_readwrite("parameter_tolerance",
                      &GlobalPositionerOptions::parameter_tolerance)
-      .def_readwrite("solver_backend",
-                     &GlobalPositionerOptions::solver_backend)
+      .def_readwrite("solver_backend", &GlobalPositionerOptions::solver_backend)
       .def_readwrite("playback", &GlobalPositionerOptions::playback)
       .def("validate", &GlobalPositionerOptions::Validate);
 

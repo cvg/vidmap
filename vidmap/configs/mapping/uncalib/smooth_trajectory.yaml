@@ -6,8 +6,8 @@ mapper:
     temporal_acceleration:
       coordinate: keyframe_index
       stddev: 3.0
-      first_pass_weight: 10.0
-      second_pass_weight: 10.0
+      first_pass_weight: 30.0
+      second_pass_weight: 30.0
       first_pass_dead_zone: 0.0
       first_pass_huber_width: 1000000000.0
       second_pass_dead_zone: 0.0
