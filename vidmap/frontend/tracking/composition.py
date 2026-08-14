@@ -7,6 +7,7 @@ from vidmap.frontend.cache import fingerprint, ordered_files_fingerprint
 from vidmap.frontend.depth import DepthEstimator
 from vidmap.frontend.geocalib import CameraPriorEstimator
 from vidmap.frontend.image_dataset import FrameSequence
+from vidmap.frontend.keyframes import cache as keyframe_cache
 from vidmap.frontend.keyframes.processing import KeyframeProcessor
 from vidmap.frontend.loop_closure.extended_matches import ExtendedMatchBuilder
 from vidmap.frontend.models.romav2 import create_lazy_romav2_tracker, romav2_cache_identity
@@ -63,7 +64,7 @@ class TrackingPipeline:
             config_name=self.cache_namespace,
             cache_variant="cache-" + fingerprint({"tracker": romav2_cache_identity(tracker_options)})[:16],
         )
-        paths.keyframes_path.parent.mkdir(exist_ok=True, parents=True)
+        paths.track_pairs_path.parent.mkdir(exist_ok=True, parents=True)
         logger.info("Input sparse features: %s", paths.sparse_features_path)
         logger.info("Depth maps: %s", paths.depth_maps_path)
         if self.use_geocalib:
@@ -79,13 +80,21 @@ class TrackingPipeline:
                 force_recompute=self.force_recompute,
                 repro_dir=self.repro_dir,
                 tracker=tracker,
-                tracker_options=tracker_options,
                 lowres_options=options.keyframes.matching,
                 keyframe_options=options.keyframes.selection,
                 salient_options=options.keyframes.features,
             )
-            keyframes = keyframe_processor.process()
-
+            track_pairs_metadata = keyframe_cache.admitted_track_pairs_cache_metadata(
+                scene_parser=self.scene_parser,
+                sequence=frames.names,
+                timestamps=frames.timestamps,
+                tracker_options=tracker_options,
+                lowres_options=options.keyframes.matching,
+                highres_options=options.tracks.images,
+                keyframe_options=options.keyframes.selection,
+                salient_options=options.keyframes.features,
+            )
+            keyframes = keyframe_processor.load_cached(track_pairs_metadata)
             sparse_track_builder = SparseTrackBuilder(
                 scene_parser=self.scene_parser,
                 paths=paths,
@@ -99,7 +108,24 @@ class TrackingPipeline:
                 lowres_match_resolution=options.keyframes.matching.resolution,
                 extended_options=options.loop_closure,
             )
-            tracks = sparse_track_builder.build()
+            tracks = sparse_track_builder.load_complete()
+            if tracks is None:
+                provisional_salient_metadata = keyframe_cache.salient_feature_cache_metadata(
+                    salient_options=options.keyframes.features,
+                    sequence=frames.names,
+                    timestamps=frames.timestamps,
+                    track_pairs_metadata=track_pairs_metadata,
+                )
+                candidates = keyframe_processor.select_candidates(provisional_salient_metadata)
+                keyframes, tracks = sparse_track_builder.admit_and_build_tracks(
+                    candidates,
+                    options.keyframes.selection if options.keyframes.selection.lookahead_pruning else None,
+                    lambda admitted_ids: keyframe_processor.commit_keyframes(
+                        admitted_ids,
+                        candidates.forced_indices,
+                        track_pairs_metadata,
+                    ),
+                )
 
             transitive_builder = TransitiveCorrespondenceBuilder(
                 scene_parser=self.scene_parser,
@@ -145,7 +171,6 @@ class TrackingPipeline:
         result = TrackingFrontendResult(
             paths=paths,
             artifacts=FrontendArtifacts(
-                keyframes=keyframes.keyframes,
                 track_pairs=tracks.track_pairs_artifact,
                 retrieval_pairs=extended.retrieval_pairs_artifact,
                 sparse_features=tracks.sparse_features,

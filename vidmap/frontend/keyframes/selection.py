@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from vidmap.frontend.h5_write_queue import save_features
+from vidmap.utils.keypoint_scaling import scale_keypoints, unscale_keypoints
 
 
 def propagate_keypoints(kps, pair_match, pair_cert, oW, oH, certainty_threshold=0.02):
@@ -124,6 +125,46 @@ def compute_normalized_keypoint_motion_score(
     good_mask = visible & (drift <= float(max_normalized_keypoint_drift))
     frac_good = float(np.mean(good_mask))
     return 1.0 - frac_good
+
+
+def score_keyframe_lookahead(
+    source_keypoints,
+    matches,
+    certainty,
+    *,
+    source_grid_size,
+    target_grid_size,
+    source_original_size,
+    target_original_size,
+    source_calibration,
+    target_calibration,
+    certainty_threshold,
+    max_normalized_keypoint_drift,
+):
+    """Return the calibrated motion score for one lookahead field."""
+    source = np.asarray(source_keypoints, dtype=np.float32)
+    if not len(source) or source_calibration is None or target_calibration is None:
+        return None
+
+    source_on_grid = scale_keypoints(source, np.divide(source_original_size, source_grid_size))
+    target_on_grid, _, visible = propagate_keypoints(
+        source_on_grid,
+        matches,
+        certainty,
+        int(source_grid_size[0]),
+        int(source_grid_size[1]),
+        certainty_threshold,
+    )
+    target_on_grid = target_on_grid.detach().cpu().numpy()
+    visible = visible.detach().cpu().numpy()
+    target = unscale_keypoints(target_on_grid, np.divide(target_original_size, target_grid_size))
+    source_xy = _normalized_xy(source, np.asarray(source_calibration, dtype=np.float64))
+    target_xy = _normalized_xy(target, np.asarray(target_calibration, dtype=np.float64))
+    drift = np.linalg.norm(target_xy - source_xy, axis=1)
+    if not np.any(visible):
+        return None
+    score = 1.0 - float(np.mean(visible & (drift <= max_normalized_keypoint_drift)))
+    return score if np.isfinite(score) else None
 
 
 def compute_aliked_features_for_frame(scene_parser, output_path, image_name, aliked_model, salient_options):

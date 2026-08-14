@@ -6,10 +6,13 @@ import numpy as np
 class SparseTrackHistory:
     """Own the sliding position and covariance buffers used by sparse tracking."""
 
-    def __init__(self, *, window: int, max_keypoints: int):
+    def __init__(self, *, history_reach: int, max_keypoints: int):
+        if history_reach < 1:
+            raise ValueError("history_reach must be positive")
+        self.reach = int(history_reach)
         capacity = max_keypoints * 10
-        self.track = np.full((window - 1, capacity, 2), -1, dtype=np.int32)
-        self.cov = np.full((window, capacity, 2, 2), 0, dtype=np.float32)
+        self.track = np.full((self.reach - 1, capacity, 2), -1, dtype=np.int32)
+        self.cov = np.full((self.reach, capacity, 2, 2), 0, dtype=np.float32)
         self.cov[:, :, 0, 0] = -1
         self.cov[:, :, 1, 1] = -1
 
@@ -27,8 +30,9 @@ class SparseTrackHistory:
 
     def append_track(self, keypoints, covariances=None):
         """Shift one frame and append current positions and optional covariances."""
-        self.track[:-1] = self.track[1:]
-        self.track[-1, : keypoints.shape[0]] = keypoints
+        if len(self.track):
+            self.track[:-1] = self.track[1:]
+            self.track[-1, : keypoints.shape[0]] = keypoints
 
         if covariances is not None:
             self.cov[:-1] = self.cov[1:]

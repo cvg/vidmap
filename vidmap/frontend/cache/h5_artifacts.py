@@ -21,7 +21,6 @@ from .validation import (
     validate_cache_metadata,
     validate_incremental_item,
     validate_incremental_items,
-    validate_keyframe_array,
 )
 
 logger = logging.getLogger(__name__)
@@ -233,17 +232,3 @@ def read_pair_artifact(path: Path, expected: Mapping[str, Any]) -> list[tuple[st
         raise
     except (UnicodeDecodeError, TypeError, ValueError) as exc:
         raise CacheMetadataMismatch(f"{path}: malformed pair payload") from exc
-
-
-def write_keyframe_artifact(path: Path, keyframe_ids: Sequence[int], metadata: Mapping[str, Any]) -> None:
-    write_single_dataset(path, np.asarray(keyframe_ids, dtype=np.int64), metadata)
-
-
-def read_keyframe_artifact(path: Path, expected: Mapping[str, Any]) -> list[int]:
-    try:
-        data = read_single_dataset(path, expected)
-        return validate_keyframe_array(path, data).tolist()
-    except CacheMetadataMismatch:
-        raise
-    except (TypeError, ValueError) as exc:
-        raise CacheMetadataMismatch(f"{path}: malformed keyframe payload") from exc

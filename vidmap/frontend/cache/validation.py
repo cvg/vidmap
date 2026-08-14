@@ -298,8 +298,6 @@ def validate_complete_payload(path: Path, metadata: Mapping[str, Any]) -> None:
                     if data.ndim != 2 or data.shape[1] != 2 or data.dtype.kind not in {"O", "S", "U"}:
                         raise CacheMetadataMismatch(f"{path}: malformed pair payload")
                     decode_pair_array(path, data)
-                elif stage == "keyframes":
-                    validate_keyframe_array(path, data)
                 payload_fingerprint = array_payload_fingerprint(data)
             else:
                 expected_items = metadata.get("expected_items")
@@ -321,19 +319,6 @@ def validate_complete_payload(path: Path, metadata: Mapping[str, Any]) -> None:
         raise CacheMetadataMismatch(f"{path}: malformed or unreadable cache payload") from exc
     if metadata.get("payload_fingerprint") != payload_fingerprint:
         raise CacheMetadataMismatch(f"{path}: payload fingerprint mismatch")
-
-
-def validate_keyframe_array(path: Path, data: np.ndarray) -> np.ndarray:
-    if data.ndim != 1 or data.dtype.kind not in {"i", "u"}:
-        raise CacheMetadataMismatch(
-            f"{path}: keyframe payload must be a one-dimensional integer array, got {data.dtype} {data.shape}"
-        )
-    if data.dtype.kind == "u" and np.any(data > np.iinfo(np.int64).max):
-        raise CacheMetadataMismatch(f"{path}: keyframe payload exceeds int64 range")
-    values = data.astype(np.int64, copy=False)
-    if np.any(values < 0) or np.any(values[1:] <= values[:-1]):
-        raise CacheMetadataMismatch(f"{path}: keyframe indices must be nonnegative, unique, and increasing")
-    return values
 
 
 def decode_pair_array(path: Path, data: np.ndarray) -> list[tuple[str, str]]:

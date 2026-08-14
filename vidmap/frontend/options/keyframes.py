@@ -14,6 +14,7 @@ class DetectKeyframesOptions:
     max_normalized_keypoint_drift: float = 0.11
     target_frac: float = 0.4
     certainty_threshold: float = 0.01
+    lookahead_pruning: bool = True
     force_gt_keyframes: bool = False
     intrinsics_source: Literal["geocalib", "ground_truth"] = "geocalib"
 

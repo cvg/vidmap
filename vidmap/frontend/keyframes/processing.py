@@ -11,9 +11,8 @@ from vidmap.datasets.base import DatasetParser
 from vidmap.frontend.cache import (
     CacheMetadataMismatch,
     CompleteArtifactContract,
-    cache_is_valid,
     certify_complete_artifact,
-    read_cache_metadata,
+    prepare_incremental_cache,
 )
 from vidmap.frontend.correspondences import validate_pair_name_plan
 from vidmap.frontend.geocalib import (
@@ -26,7 +25,7 @@ from vidmap.frontend.keyframes import matching as keyframe_matching
 from vidmap.frontend.keyframes import selector as keyframe_selector
 from vidmap.frontend.models.romav2 import LazyRoMaV2Tracker
 from vidmap.frontend.options.keyframes import DetectKeyframesOptions, SalientFeatureOptions
-from vidmap.frontend.options.matching import LowresMatchOptions, RoMaV2Options
+from vidmap.frontend.options.matching import LowresMatchOptions
 from vidmap.frontend.paths import FrontendPaths
 from vidmap.repro.frontend import write_pair_order_artifact, write_sequence_artifact
 from vidmap.utils.logging import progress_bars_enabled
@@ -40,7 +39,7 @@ class KeyframePlan:
 
     names: tuple[str, ...]
     track_pairs: tuple[tuple[str, str], ...]
-    keyframes: CompleteArtifactContract
+    track_pairs_artifact: CompleteArtifactContract
 
     def __post_init__(self):
         names = tuple(self.names)
@@ -55,6 +54,16 @@ class KeyframePlan:
         object.__setattr__(self, "track_pairs", track_pairs)
 
 
+@result_dataclass(frozen=True)
+class KeyframeCandidates:
+    """Candidate keyframes and inputs required by lookahead admission."""
+
+    indices: tuple[int, ...]
+    names: tuple[str, ...]
+    forced_indices: frozenset[int]
+    calibrations: dict
+
+
 class KeyframeProcessor:
     """Own keyframe selection and its paired salient-feature cache."""
 
@@ -67,7 +76,6 @@ class KeyframeProcessor:
         force_recompute: bool,
         repro_dir: Path | None,
         tracker: LazyRoMaV2Tracker,
-        tracker_options: RoMaV2Options,
         lowres_options: LowresMatchOptions,
         keyframe_options: DetectKeyframesOptions,
         salient_options: SalientFeatureOptions,
@@ -78,82 +86,64 @@ class KeyframeProcessor:
         self.force_recompute = force_recompute
         self.repro_dir = repro_dir
         self.tracker = tracker
-        self.tracker_options = tracker_options
         self.lowres_options = lowres_options
         self.keyframe_options = keyframe_options
         self.salient_options = salient_options
 
-    def process(self) -> KeyframePlan:
-        """Select keyframes and return their certified ordered plans."""
-        from vidmap.utils.profiling import log_memory, record_timing, sync_time
-
-        sequence = self.frames.names
-        timestamps = self.frames.timestamps
-        keyframes_metadata = keyframe_cache.keyframe_cache_metadata(
+    def load_cached(self, track_pairs_metadata) -> KeyframePlan | None:
+        """Load the admitted plan from its adjacent track-pair chain."""
+        if self.keyframe_options.intrinsics_source == "geocalib":
+            validate_keyframe_bootstrap_frame_dimensions(
+                self.scene_parser.rgb_dir,
+                self.frames.names,
+            )
+        keyframe_names = keyframe_cache.load_cached_names(
             scene_parser=self.scene_parser,
-            sequence=sequence,
-            timestamps=timestamps,
-            tracker_options=self.tracker_options,
-            lowres_options=self.lowres_options,
+            sequence=self.frames.names,
+            timestamps=self.frames.timestamps,
+            track_pairs_path=self.paths.track_pairs_path,
+            salient_features_path=self.paths.salient_features_path,
+            force_recompute=self.force_recompute,
             keyframe_options=self.keyframe_options,
             salient_options=self.salient_options,
+            track_pairs_metadata=track_pairs_metadata,
         )
-        keyframe_dependency_metadata = keyframes_metadata
-        if cache_is_valid(self.paths.keyframes_path, keyframes_metadata):
-            keyframe_dependency_metadata = read_cache_metadata(self.paths.keyframes_path)
-        salient_metadata = keyframe_cache.salient_feature_cache_metadata(
-            salient_options=self.salient_options,
-            sequence=sequence,
-            timestamps=timestamps,
-            keyframe_metadata=keyframe_dependency_metadata,
-        )
+        if keyframe_names is None:
+            return None
+        plan = self._certified_plan(keyframe_names, track_pairs_metadata)
+        self._write_repro_plan(plan)
+        return plan
 
-        started = sync_time()
-        keyframe_ids = self._select_keyframe_ids(keyframes_metadata, salient_metadata)
-        record_timing("keyframing", sync_time() - started)
-        log_memory("keyframing")
-
-        keyframe_sequence = tuple(sequence[index] for index in keyframe_ids)
+    def _certified_plan(self, keyframe_sequence, track_pairs_metadata) -> KeyframePlan:
+        keyframe_sequence = tuple(keyframe_sequence)
         keyframe_pairs = tuple(zip(keyframe_sequence, keyframe_sequence[1:]))
-        if self.repro_dir is not None:
-            write_sequence_artifact(
-                self.repro_dir / "stage1_keyframe_order.json",
-                keyframe_sequence,
-                label="keyframe_order",
-            )
-            write_pair_order_artifact(
-                self.repro_dir / "stage1_keyframe_pair_order.json",
-                keyframe_pairs,
-                label="keyframe_pairs",
-            )
         if len(keyframe_sequence) < 2 or not keyframe_pairs:
             raise CacheMetadataMismatch("Frontend requires at least two keyframes and one track pair")
         return KeyframePlan(
             names=keyframe_sequence,
             track_pairs=keyframe_pairs,
-            keyframes=certify_complete_artifact(self.paths.keyframes_path, keyframes_metadata),
+            track_pairs_artifact=certify_complete_artifact(self.paths.track_pairs_path, track_pairs_metadata),
         )
 
-    def _select_keyframe_ids(self, keyframes_metadata, salient_metadata):
+    def _write_repro_plan(self, plan: KeyframePlan) -> None:
+        if self.repro_dir is None:
+            return
+        write_sequence_artifact(
+            self.repro_dir / "stage1_keyframe_order.json",
+            plan.names,
+            label="keyframe_order",
+        )
+        write_pair_order_artifact(
+            self.repro_dir / "stage1_keyframe_pair_order.json",
+            plan.track_pairs,
+            label="keyframe_pairs",
+        )
+
+    def select_candidates(self, salient_metadata) -> KeyframeCandidates:
+        """Select low-resolution candidates without publishing final keyframes."""
         sequence = list(self.frames.names)
         keyframe_options = self.keyframe_options
         scene_parser = self.scene_parser
-        if keyframe_options.intrinsics_source == "geocalib":
-            validate_keyframe_bootstrap_frame_dimensions(scene_parser.rgb_dir, sequence)
-        cached_keyframes = keyframe_cache.load_or_repair_cached_ids(
-            scene_parser=scene_parser,
-            sequence=self.frames.names,
-            keyframes_path=self.paths.keyframes_path,
-            salient_features_path=self.paths.salient_features_path,
-            force_recompute=self.force_recompute,
-            keyframe_options=keyframe_options,
-            salient_options=self.salient_options,
-            keyframes_metadata=keyframes_metadata,
-            salient_metadata=salient_metadata,
-        )
-        if cached_keyframes is not None:
-            return cached_keyframes
-
         bootstrap_intrinsics = None
         if keyframe_options.intrinsics_source == "geocalib":
             bootstrap_intrinsics = estimate_keyframe_bootstrap_intrinsics(
@@ -162,10 +152,10 @@ class KeyframeProcessor:
             )
         tracker_model = self.tracker.get()
         logger.info("Starting streaming keyframe detection and salient-feature extraction")
-        keyframe_cache.prepare_salient_feature_cache(
+        prepare_incremental_cache(
             self.paths.salient_features_path,
             salient_metadata,
-            overwrite=self.force_recompute,
+            overwrite=True,
         )
 
         loader, total_pairs, original_width, original_height = keyframe_matching.build_pair_loader(
@@ -210,21 +200,37 @@ class KeyframeProcessor:
                         progress.update(1)
 
             keyframe_ids = selector.finish()
-            keyframe_cache.commit_keyframes(
-                sequence=self.frames.names,
-                timestamps=self.frames.timestamps,
-                keyframe_ids=keyframe_ids,
-                gt_frame_indices=selector.gt_frame_indices,
-                keyframes_path=self.paths.keyframes_path,
-                salient_features_path=self.paths.salient_features_path,
-                keyframe_options=keyframe_options,
-                salient_options=self.salient_options,
-                keyframes_metadata=keyframes_metadata,
-                salient_metadata=salient_metadata,
+            if keyframe_options.intrinsics_source == "geocalib":
+                calibrations = {index: bootstrap_intrinsics for index in keyframe_ids}
+            else:
+                calibration_plan = keyframe_selector.ground_truth_intrinsics_plan(scene_parser, sequence)
+                calibrations = {index: calibration_plan[index][1] for index in keyframe_ids}
+            return KeyframeCandidates(
+                indices=tuple(keyframe_ids),
+                names=tuple(self.frames.names[index] for index in keyframe_ids),
+                forced_indices=frozenset(selector.gt_frame_indices),
+                calibrations=calibrations,
             )
-            return keyframe_ids
         finally:
             del selector
             del aliked_model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+    def commit_keyframes(self, admitted_ids, forced_ids, track_pairs_metadata) -> KeyframePlan:
+        """Publish the candidates retained by lookahead admission."""
+        keyframe_cache.commit_keyframes(
+            sequence=self.frames.names,
+            timestamps=self.frames.timestamps,
+            keyframe_ids=admitted_ids,
+            gt_frame_indices=forced_ids,
+            track_pairs_path=self.paths.track_pairs_path,
+            salient_features_path=self.paths.salient_features_path,
+            keyframe_options=self.keyframe_options,
+            salient_options=self.salient_options,
+            track_pairs_metadata=track_pairs_metadata,
+        )
+        names = tuple(self.frames.names[index] for index in admitted_ids)
+        plan = self._certified_plan(names, track_pairs_metadata)
+        self._write_repro_plan(plan)
+        return plan
