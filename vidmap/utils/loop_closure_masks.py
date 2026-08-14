@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
-import uuid
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-_INDEX_WIDTH = 8
 
 
 def _validated_pair(pair: object) -> tuple[str, str]:
@@ -38,108 +37,107 @@ def write_loop_closure_masks(
     loop_closure_masks: Mapping[tuple[str, str], np.ndarray],
     path: str | Path,
 ) -> None:
-    """Atomically write ordered image pairs and boolean masks to HDF5."""
-
+    """Atomically store dense in-memory masks as sparse match indices."""
     if not isinstance(loop_closure_masks, Mapping):
         raise TypeError("loop_closure_masks must be a mapping")
-    path = Path(path)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+
+    pairs = []
     seen_pairs: set[frozenset[str]] = set()
+    for raw_pair, raw_mask in loop_closure_masks.items():
+        pair = _validated_pair(raw_pair)
+        undirected = frozenset(pair)
+        if undirected in seen_pairs:
+            raise ValueError(f"Duplicate undirected loop-closure mask pair: {pair!r}")
+        seen_pairs.add(undirected)
+        mask = _validated_mask(raw_mask, pair=pair)
+        pairs.append(
+            {
+                "first": pair[0],
+                "second": pair[1],
+                "matchCount": len(mask),
+                "loopClosureMatchIndices": np.flatnonzero(mask).astype(int).tolist(),
+            }
+        )
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
     try:
-        with h5py.File(temporary, "w") as hfile:
-            hfile.attrs["schema_version"] = SCHEMA_VERSION
-            pairs = hfile.create_group("pairs", track_order=True)
-            for index, (raw_pair, raw_mask) in enumerate(loop_closure_masks.items()):
-                pair = _validated_pair(raw_pair)
-                undirected = frozenset(pair)
-                if undirected in seen_pairs:
-                    raise ValueError(f"Duplicate undirected loop-closure mask pair: {pair!r}")
-                seen_pairs.add(undirected)
-                mask = _validated_mask(raw_mask, pair=pair)
-                entry = pairs.create_group(f"{index:0{_INDEX_WIDTH}d}")
-                entry.attrs["first"] = pair[0]
-                entry.attrs["second"] = pair[1]
-                entry.create_dataset("mask", data=mask, dtype=np.bool_, track_times=False)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            json.dump(
+                {"schemaVersion": SCHEMA_VERSION, "pairs": pairs},
+                stream,
+                separators=(",", ":"),
+            )
+            stream.write("\n")
         temporary.replace(path)
     finally:
-        temporary.unlink(missing_ok=True)
-    logger.info("Wrote %d loop-closure masks to %s", len(loop_closure_masks), path)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    logger.info("Wrote %d loop-closure match masks to %s", len(pairs), path)
 
 
-def _read_name(entry: h5py.Group, name: str, *, path: Path) -> str:
-    value = entry.attrs.get(name)
-    if isinstance(value, bytes):
-        value = value.decode("utf-8")
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Invalid loop-closure mask {name!r} in {path}")
+def _validated_nonnegative_integer(value: object, *, label: str, path: Path) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Invalid loop-closure mask {label} in {path}")
     return value
 
 
-def _require_hard_link(group: h5py.Group | h5py.File, name: str, *, path: Path) -> None:
-    if not isinstance(group.get(name, getlink=True), h5py.HardLink):
-        raise ValueError(f"Loop-closure mask schema contains a non-local link {name!r}: {path}")
-
-
 def read_loop_closure_masks(path: str | Path) -> dict[tuple[str, str], np.ndarray]:
-    """Read and validate ordered loop-closure masks without executable decoding."""
-
+    """Read sparse match indices and reconstruct their dense Boolean masks."""
     path = Path(path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"Invalid loop-closure mask file: {path}") from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"schemaVersion", "pairs"}
+        or payload["schemaVersion"] != SCHEMA_VERSION
+        or isinstance(payload["schemaVersion"], bool)
+        or not isinstance(payload["pairs"], list)
+    ):
+        raise ValueError(f"Invalid loop-closure mask schema: {path}")
+
     masks: dict[tuple[str, str], np.ndarray] = {}
     seen_pairs: set[frozenset[str]] = set()
-    try:
-        with h5py.File(path, "r") as hfile:
-            schema_version = hfile.attrs.get("schema_version")
-            if (
-                set(hfile.attrs) != {"schema_version"}
-                or isinstance(schema_version, (bool, np.bool_))
-                or not isinstance(schema_version, (int, np.integer))
-                or int(schema_version) != SCHEMA_VERSION
-            ):
-                raise ValueError(f"Unsupported loop-closure mask schema: {path}")
-            if set(hfile) != {"pairs"}:
-                raise ValueError(f"Invalid loop-closure mask root: {path}")
-            _require_hard_link(hfile, "pairs", path=path)
-            if not isinstance(hfile["pairs"], h5py.Group):
-                raise ValueError(f"Invalid loop-closure mask root: {path}")
-            pairs = hfile["pairs"]
-            if set(pairs.attrs):
-                raise ValueError(f"Invalid loop-closure mask pair metadata: {path}")
-            expected_names = tuple(f"{index:0{_INDEX_WIDTH}d}" for index in range(len(pairs)))
-            if tuple(pairs) != expected_names:
-                raise ValueError(f"Loop-closure mask entries are not contiguous and ordered: {path}")
-            for entry_name in expected_names:
-                _require_hard_link(pairs, entry_name, path=path)
-                entry = pairs[entry_name]
-                if (
-                    not isinstance(entry, h5py.Group)
-                    or set(entry.attrs) != {"first", "second"}
-                    or set(entry) != {"mask"}
-                ):
-                    raise ValueError(f"Invalid loop-closure mask entry {entry_name!r}: {path}")
-                _require_hard_link(entry, "mask", path=path)
-                if not isinstance(entry["mask"], h5py.Dataset):
-                    raise ValueError(f"Invalid loop-closure mask entry {entry_name!r}: {path}")
-                pair = _validated_pair(
-                    (
-                        _read_name(entry, "first", path=path),
-                        _read_name(entry, "second", path=path),
-                    )
-                )
-                undirected = frozenset(pair)
-                if undirected in seen_pairs:
-                    raise ValueError(f"Duplicate undirected loop-closure mask pair {pair!r}: {path}")
-                seen_pairs.add(undirected)
-                dataset = entry["mask"]
-                if (
-                    set(dataset.attrs)
-                    or dataset.dtype != np.dtype(np.bool_)
-                    or dataset.ndim != 1
-                    or dataset.is_virtual
-                    or dataset.external is not None
-                ):
-                    raise ValueError(f"Invalid loop-closure mask array for {pair!r}: {path}")
-                masks[pair] = dataset[:]
-    except OSError as error:
-        raise ValueError(f"Invalid loop-closure mask file: {path}") from error
+    for entry in payload["pairs"]:
+        if not isinstance(entry, dict) or set(entry) != {
+            "first",
+            "second",
+            "matchCount",
+            "loopClosureMatchIndices",
+        }:
+            raise ValueError(f"Invalid loop-closure mask entry in {path}")
+        pair = _validated_pair((entry["first"], entry["second"]))
+        undirected = frozenset(pair)
+        if undirected in seen_pairs:
+            raise ValueError(f"Duplicate undirected loop-closure mask pair {pair!r} in {path}")
+        seen_pairs.add(undirected)
+        match_count = _validated_nonnegative_integer(
+            entry["matchCount"],
+            label="count",
+            path=path,
+        )
+        indices = entry["loopClosureMatchIndices"]
+        if not isinstance(indices, list):
+            raise ValueError(f"Invalid loop-closure mask indices in {path}")
+        validated_indices = [_validated_nonnegative_integer(index, label="index", path=path) for index in indices]
+        if any(index >= match_count for index in validated_indices) or validated_indices != sorted(
+            set(validated_indices)
+        ):
+            raise ValueError(f"Invalid loop-closure mask indices in {path}")
+        mask = np.zeros(match_count, dtype=np.bool_)
+        mask[validated_indices] = True
+        masks[pair] = mask
+
     logger.info("Read %d loop-closure masks from %s", len(masks), path)
     return masks

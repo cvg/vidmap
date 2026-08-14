@@ -141,22 +141,12 @@ def write_local_input_provenance(directory: str | Path, image_dir: str | Path, *
 
 
 def local_input_image_dir(mapper_inputs: str | Path | MapperInputs) -> Path | None:
-    """Return the RGB root recorded beside a mapper-inputs boundary, when present."""
+    """Return the RGB root recorded in a mapper-inputs boundary, when present."""
     directory = (
         Path(mapper_inputs).expanduser() if isinstance(mapper_inputs, (str, Path)) else Path(mapper_inputs.directory)
     )
-    source = directory.parent / LOCAL_INPUT_MANIFEST_NAME
+    source = directory / LOCAL_INPUT_MANIFEST_NAME
     return _read_local_input_provenance(source) if source.is_file() else None
-
-
-def propagate_local_input_provenance(
-    mapper_inputs: str | Path | MapperInputs, output_dir: str | Path, *, overwrite: bool
-) -> Path | None:
-    """Carry optional local-media provenance from a frontend into its mapping run."""
-    image_dir = local_input_image_dir(mapper_inputs)
-    if image_dir is None:
-        return None
-    return write_local_input_provenance(output_dir, image_dir, overwrite=overwrite)
 
 
 def extract_point_colors(
@@ -190,9 +180,8 @@ def extract_point_colors(
 
 
 def local_run_image_dir(run: str | Path) -> Path | None:
-    """Return and validate the RGB root recorded by a local reconstruction run."""
-    path = Path(run).expanduser() / LOCAL_INPUT_MANIFEST_NAME
-    return _read_local_input_provenance(path) if path.is_file() else None
+    """Return the RGB root recorded in a local run's mapper inputs."""
+    return local_input_image_dir(Path(run).expanduser() / "mapper_inputs")
 
 
 def _read_local_input_provenance(path: Path) -> Path:
@@ -493,16 +482,6 @@ def run_mapping(
         mapper_inputs,
         image_dir=None if scene_parser is None else scene_parser.rgb_dir,
     )
-    if run_options.save_3d_html:
-        from vidmap.visualization.interactive_html import write_model_html
-
-        write_model_html(
-            reconstruction,
-            scene_parser=scene_parser,
-            database=mapper_inputs.database_path,
-            point_covariance_percentile=run_options.html_point_covariance_percentile,
-            output=output_dir / "3d.html",
-        )
     if mapper_inputs.full_depth_maps_path is not None:
         from vidmap.depth_artifacts import write_reference
 

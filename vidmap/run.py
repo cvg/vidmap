@@ -90,7 +90,7 @@ def main(argv=None):
     )
     logger.info("Mapper inputs ready: tag=%s path=%s", frontend.tag, frontend.path)
 
-    from vidmap.reconstruction import propagate_local_input_provenance, reconstruct
+    from vidmap.reconstruction import reconstruct
 
     output_dir = Path(args.output).expanduser()
     reconstruction = reconstruct(
@@ -108,7 +108,6 @@ def main(argv=None):
     reconstruction_dir = output_dir / "rec"
     reconstruction_dir.mkdir(parents=True, exist_ok=True)
     reconstruction.write(reconstruction_dir)
-    propagate_local_input_provenance(frontend.mapper_inputs, output_dir, overwrite=args.overwrite)
     logger.info("Reconstruction written to %s", reconstruction_dir)
     return 0
 

@@ -93,37 +93,21 @@ under `$OUTPUT_DIR`.
 
 ## Visualization
 
-Repeat the reconstruction with visualization artifacts enabled:
+### Browser viewer
 
-```bash
-python -m vidmap.map \
-  --mapper-inputs "$MAPPER_INPUTS" \
-  --output "$OUTPUT_DIR" \
-  --save-playback-trace \
-  --save-3d-html
-```
-
-`--save-playback-trace` records optimization states for Rerun playback.
-`--save-3d-html` independently writes an interactive reconstruction HTML file;
-it does not require playback tracing. Both outputs are stored under
-`$OUTPUT_DIR`.
+Open the [vidmap-viewer](vidmap/visualization/vidmap-viewer.html) in a
+Chromium-based browser and choose a run folder containing `rec/` and
+`mapper_inputs/`. The viewer requires internet access.
 
 <details>
-<summary>[Regenerate HTML visualization after reconstruction - click to expand]</summary>
+<summary>[Embed a reconstruction - click to expand]</summary>
 
 ```bash
-python -m vidmap.visualization.html \
-  --rec "$OUTPUT_DIR/rec" \
-  --ground-truth-rec /path/to/gt-reconstruction \
-  --database "$MAPPER_INPUTS/database_complete.db" \
-  --point-covariance-percentile 90
+python -m vidmap.visualization.html --run-dir "$OUTPUT_DIR"
 ```
 
-Omitting `--ground-truth-rec` renders the reconstruction without a ground-truth
-trajectory. Including `--database`
-adds two-view edges. `--point-covariance-percentile` retains the lowest-covariance
-points, removing noisy low-parallax points. The output defaults to
-`$OUTPUT_DIR/3d.html`; use `--output` to choose another path.
+This embeds the reconstruction in `$OUTPUT_DIR/vidmap-viewer-embedded.html`, so
+it opens without selecting a run folder.
 
 </details>
 
@@ -132,6 +116,17 @@ points, removing noisy low-parallax points. The output defaults to
 </p>
 
 ### Rerun playback
+
+To render optimization playback, record solver states during mapping:
+
+```bash
+python -m vidmap.map \
+  --mapper-inputs "$MAPPER_INPUTS" \
+  --output "$OUTPUT_DIR" \
+  --save-playback-trace
+```
+
+This writes the trace to `$OUTPUT_DIR/playback_trace/`.
 
 Create solver-playback and flythrough recordings. Local images, frame timing,
 and missing ground truth are detected automatically:

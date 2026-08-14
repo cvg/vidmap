@@ -1,0 +1,275 @@
+<!doctype html>
+<!-- Generated from VidMap's browser viewer sources; do not edit generated copies. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VidMap reconstruction</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #ffffff; }
+    #background-layer {
+      position: fixed; z-index: 0; inset: 0; background-position: center;
+      background-repeat: no-repeat; background-size: contain; pointer-events: none;
+    }
+    canvas { position: fixed; z-index: 1; inset: 0; display: block; }
+    #toolbar {
+      position: fixed; z-index: 10; top: 12px; left: 12px; padding: 9px 12px;
+      box-sizing: border-box; min-width: min(470px, calc(100vw - 24px));
+      max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow: auto;
+      border-radius: 6px; background: rgba(255,255,255,.9); color: #222;
+      font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 1px 5px rgba(0,0,0,.2);
+    }
+    #toolbar:not([open]) { min-width: 0; }
+    #toolbar summary {
+      width: max-content; cursor: pointer; font-weight: 600; user-select: none;
+    }
+    #toolbar-content { margin-top: 6px; }
+    .control-group { padding: 4px 0; border-top: 1px solid rgba(0,0,0,.12); }
+    .control-group:first-child { border-top: 0; }
+    .control-group > summary { color: #333; font-size: 12px; letter-spacing: .02em; }
+    .control-group-content { padding: 3px 0 2px 10px; }
+    .separate-folder-loader { margin: 2px 0 4px 10px; }
+    .separate-folder-loader > summary { color: #555; cursor: pointer; font-size: 11px; }
+    .separate-folder-content { padding: 3px 0 0 10px; }
+    #toolbar label { display: block; white-space: nowrap; cursor: pointer; }
+    .control-row { display: flex; align-items: center; gap: 10px; min-height: 27px; }
+    .toggle { width: 165px; }
+    .setting { color: #555; }
+    .setting input {
+      width: 58px; margin-left: 3px; padding: 2px 4px; border: 1px solid #bbb;
+      border-radius: 3px; background: white; color: #222;
+    }
+    .setting input[type="color"] {
+      width: 30px; height: 24px; padding: 1px; vertical-align: middle; cursor: pointer;
+    }
+    .setting select {
+      margin-left: 3px; padding: 2px 4px; border: 1px solid #bbb;
+      border-radius: 3px; background: white; color: #222;
+    }
+    .keyframe-timeline-row input[type="range"] { width: 230px; }
+    .keyframe-playback-row button { width: 54px; }
+    #covariance-percentile { width: 220px; vertical-align: middle; }
+    #load-status { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #keyframe-label {
+      max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: #555;
+    }
+    #keyframe-preview-panel {
+      position: fixed; z-index: 9; left: 14px; bottom: 14px;
+      box-sizing: border-box; width: min(26vw, 420px); max-width: calc(100vw - 28px);
+      max-height: calc(100vh - 28px); resize: both; overflow: auto;
+      padding: 5px; border-radius: 6px; background: rgba(255,255,255,.9);
+      color: #222; font: 13px/1.5 system-ui, sans-serif;
+      box-shadow: 0 2px 12px rgba(0,0,0,.45);
+    }
+    #keyframe-preview-panel:not([open]) { width: max-content; height: auto; resize: none; overflow: hidden; }
+    #keyframe-preview-panel summary {
+      width: max-content; cursor: pointer; font-weight: 600; user-select: none;
+    }
+    #keyframe-preview {
+      display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain;
+      border-radius: 3px; background: #111;
+    }
+    #keyframe-preview-stage { position: relative; width: 100%; margin-top: 4px; line-height: 0; }
+    #tracked-keypoints-overlay {
+      position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    }
+    #loop-closure-pair-panel {
+      position: fixed; z-index: 12; right: 14px; bottom: 14px; width: min(48vw, 900px);
+      box-sizing: border-box; min-width: 360px; min-height: 150px;
+      max-width: calc(100vw - 28px); max-height: calc(100vh - 28px); resize: both; overflow: auto;
+      padding: 9px; border-radius: 7px; background: rgba(255,255,255,.95); color: #222;
+      font: 13px/1.4 system-ui, sans-serif; box-shadow: 0 2px 14px rgba(0,0,0,.5);
+    }
+    #loop-closure-pair-close { position: absolute; top: 5px; right: 6px; font-size: 18px; line-height: 1; }
+    #loop-closure-pair-title { padding-right: 28px; font-weight: 650; }
+    .loop-closure-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 7px; }
+    .loop-closure-pair-grid figure { min-width: 0; margin: 0; }
+    .loop-closure-image-stage { position: relative; line-height: 0; }
+    .loop-closure-image-stage img { display: block; width: 100%; height: auto; border-radius: 3px; background: #111; }
+    .loop-closure-image-stage canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    }
+    .loop-closure-pair-grid figcaption {
+      margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555;
+    }
+    #loop-closure-pair-status { margin-top: 5px; color: #555; }
+    .lc-rejected { color: rgb(240,70,70); }
+    .lc-accepted { color: rgb(0,210,130); }
+    button, .file-button {
+      padding: 3px 7px; border: 1px solid #aaa; border-radius: 3px;
+      background: white; color: #222; font: inherit; cursor: pointer;
+    }
+    button:hover, .file-button:hover { background: #eee; }
+    #help { margin-top: 5px; color: #666; }
+    #error { display: none; color: #a00; max-width: 480px; }
+  </style>
+  <script src="__THREE_JS_URL__"></script>
+  <script src="__ORBIT_CONTROLS_URL__"></script>
+__WIDE_LINE_SCRIPTS__
+__SQLITE_SCRIPT__
+</head>
+<body>
+  <div id="background-layer"></div>
+  <details id="keyframe-preview-panel" open>
+    <summary>Keyframe</summary>
+    <div id="keyframe-preview-stage">
+      <img id="keyframe-preview" alt="Selected keyframe">
+      <canvas id="tracked-keypoints-overlay"></canvas>
+    </div>
+  </details>
+  <aside id="loop-closure-pair-panel" hidden>
+    <button id="loop-closure-pair-close" type="button" aria-label="Close shared-track pair">×</button>
+    <div id="loop-closure-pair-title">Loop closure</div>
+    <div class="loop-closure-pair-grid">
+      <figure>
+        <div class="loop-closure-image-stage">
+          <img id="loop-closure-left-image" alt="First loop-closure keyframe">
+          <canvas id="loop-closure-left-keypoints"></canvas>
+        </div>
+        <figcaption id="loop-closure-left-name"></figcaption>
+      </figure>
+      <figure>
+        <div class="loop-closure-image-stage">
+          <img id="loop-closure-right-image" alt="Second loop-closure keyframe">
+          <canvas id="loop-closure-right-keypoints"></canvas>
+        </div>
+        <figcaption id="loop-closure-right-name"></figcaption>
+      </figure>
+    </div>
+    <div id="loop-closure-pair-status"></div>
+  </aside>
+  <details id="toolbar" open>
+    <summary>VidMap viewer</summary>
+    <div id="toolbar-content">
+    <details class="control-group" open>
+      <summary>Data &amp; filters</summary>
+      <div class="control-group-content">
+    <div class="control-row">
+      <button id="run-folder-button" type="button">choose run folder</button>
+      <span id="load-status">model not loaded</span>
+    </div>
+    <details class="separate-folder-loader">
+      <summary>Alternative: load separate folders</summary>
+      <div class="separate-folder-content">
+        <div class="control-row">
+          <button id="reconstruction-folder-button" type="button">choose reconstruction</button>
+          <span id="reconstruction-folder-label">not selected</span>
+        </div>
+        <div class="control-row">
+          <button id="mapper-inputs-folder-button" type="button">choose mapper inputs</button>
+          <span id="mapper-inputs-folder-label">not selected</span>
+        </div>
+        <div class="control-row">
+          <button id="separate-load-button" type="button" disabled>load selected folders</button>
+        </div>
+      </div>
+    </details>
+    <div class="control-row">
+      <button id="covariance-compute" type="button" disabled>compute covariance</button>
+      <label class="setting">lowest covariance
+        <input id="covariance-percentile" type="range" min="1" max="100" step="1" value="100" disabled>
+      </label>
+      <span id="covariance-percentile-label">all points</span>
+    </div>
+    <div class="control-row">
+      <label class="setting">minimum track length
+        <input id="minimum-track-length" type="range" min="1" max="20" step="1" value="1" disabled>
+      </label>
+      <span id="minimum-track-length-label">1 observation</span>
+    </div>
+      </div>
+    </details>
+    <details class="control-group" open>
+      <summary>Playback</summary>
+      <div class="control-group-content">
+    <div class="control-row keyframe-timeline-row">
+      <span class="toggle">keyframe</span>
+      <input id="keyframe-slider" type="range" min="0" max="0" step="1" value="0" disabled>
+      <span id="keyframe-label"></span>
+    </div>
+    <div class="control-row keyframe-playback-row">
+      <button id="keyframe-play" type="button" disabled>play</button>
+      <label class="setting">speed
+        <select id="keyframe-speed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <label class="setting"><input id="tracked-keypoints-toggle" type="checkbox" checked> tracked points</label>
+      <span id="keyframe-playback-status">timestamps unavailable</span>
+    </div>
+      </div>
+    </details>
+    <details class="control-group" open>
+      <summary>Geometry</summary>
+      <div class="control-group-content">
+    <div class="control-row">
+      <label class="toggle"><input id="points-toggle" type="checkbox" checked> points</label>
+      <label class="setting">size <input id="points-size" type="number" min="0.01" max="20" step="0.01" value="0.7"></label>
+      <label class="setting">mode
+        <select id="points-color-mode">
+          <option value="solid">solid</option>
+          <option value="rgb" selected>image RGB</option>
+        </select>
+      </label>
+      <label class="setting">color <input id="points-color" type="color" value="#ffffff"></label>
+    </div>
+    <div class="control-row">
+      <label class="toggle"><input id="estimated-frusta-toggle" type="checkbox" checked> estimated cameras</label>
+      <label class="setting">size <input id="estimated-frusta-size" type="number" min="0.01" max="20" step="0.05" value="0.3"></label>
+      <label class="setting">line <input id="estimated-frusta-width" type="number" min="0.5" max="20" step="0.5" value="1"></label>
+      <label class="setting">color <input id="estimated-frusta-color" type="color" value="#d62728"></label>
+    </div>
+    <div class="control-row">
+      <label class="toggle"><input id="paths-toggle" type="checkbox" checked> trajectories</label>
+      <label class="setting">line <input id="paths-width" type="number" min="0.5" max="20" step="0.5" value="6"></label>
+      <label class="setting">estimated <input id="estimated-path-color" type="color" value="#0064ff"></label>
+    </div>
+    <div class="control-row">
+      <label class="toggle"><input id="loop-closures-toggle" type="checkbox" checked> loop closures</label>
+      <label class="setting">line <input id="loop-closures-width" type="number" min="0.5" max="20" step="0.5" value="3"></label>
+      <label class="setting"><span class="lc-rejected">red</span>/<span class="lc-accepted">green</span> min shared <input id="loop-closures-min-shared" type="number" min="0" step="1" value="__LOOP_CLOSURE_MIN_SHARED_POINTS__"></label>
+    </div>
+      </div>
+    </details>
+    <details class="control-group">
+      <summary>View &amp; background</summary>
+      <div class="control-group-content">
+    <div class="control-row">
+      <span class="toggle">view</span>
+      <label class="setting">projection
+        <select id="projection">
+          <option value="perspective">perspective</option>
+          <option value="orthographic">orthographic</option>
+        </select>
+      </label>
+    </div>
+    <div class="control-row">
+      <span class="toggle">background</span>
+      <label class="setting">color <input id="background-color" type="color" value="#ffffff"></label>
+      <label class="file-button" for="background-file">choose image</label>
+      <input id="background-file" type="file" accept="image/*" hidden>
+      <label class="setting">fit
+        <select id="background-fit">
+          <option value="contain">contain</option>
+          <option value="cover">cover</option>
+          <option value="stretch">stretch</option>
+        </select>
+      </label>
+      <button id="background-clear" type="button">clear</button>
+    </div>
+      </div>
+    </details>
+    <div id="help">drag: orbit · middle-drag: roll view · Shift+middle-drag: orbit gravity axis · wheel: zoom · right-drag: pan</div>
+    <div id="error"></div>
+    </div>
+  </details>
+  <script>
+__VIEWER_SCRIPT__
+  </script>
+</body>
+</html>

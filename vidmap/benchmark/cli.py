@@ -110,8 +110,6 @@ def validate_stage_arguments(parser, args) -> None:
             "--run-only": args.run_only,
             "--overwrite": args.overwrite,
             "--name": hasattr(args, "name"),
-            "--save-3d-html": args.save_3d_html,
-            "--html-point-covariance-percentile": (args.html_point_covariance_percentile is not None),
             "--save-playback-trace": args.save_playback_trace,
             "--playback-trace-point-cap": args.playback_trace_point_cap is not None,
         }

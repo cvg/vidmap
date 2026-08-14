@@ -23,7 +23,11 @@ def point_covariance_trace(model: Any, point3D: Any) -> float:
         if camera.model in (
             pycolmap.CameraModelId.SIMPLE_PINHOLE,
             pycolmap.CameraModelId.SIMPLE_RADIAL,
+            pycolmap.CameraModelId.RADIAL,
             pycolmap.CameraModelId.SIMPLE_RADIAL_FISHEYE,
+            pycolmap.CameraModelId.RADIAL_FISHEYE,
+            pycolmap.CameraModelId.SIMPLE_DIVISION,
+            pycolmap.CameraModelId.SIMPLE_FISHEYE,
         ):
             fx = fy = params[0]
         else:

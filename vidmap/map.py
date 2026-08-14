@@ -46,7 +46,7 @@ def build_parser() -> ArgumentParser:
 
 
 def _run_local(mapping_conf, frontend_conf, args, run_options) -> int:
-    from vidmap.reconstruction import propagate_local_input_provenance, run_mapping
+    from vidmap.reconstruction import run_mapping
 
     output_dir = Path(args.output).expanduser()
     reconstruction = run_mapping(
@@ -61,7 +61,6 @@ def _run_local(mapping_conf, frontend_conf, args, run_options) -> int:
     reconstruction_dir = output_dir / "rec"
     reconstruction_dir.mkdir(parents=True, exist_ok=True)
     reconstruction.write(reconstruction_dir)
-    propagate_local_input_provenance(args.mapper_inputs, output_dir, overwrite=args.overwrite)
     logger.info("Reconstruction written to %s", reconstruction_dir)
     return 0
 

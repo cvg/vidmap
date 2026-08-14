@@ -73,7 +73,6 @@ def run_local_frontend(
         reference_image_ids=reference_image_ids,
     )
     temporary_dir = workspace / "tmp_cache_dir"
-    write_local_input_provenance(workspace, image_dir, overwrite=force_frontend)
     mapper_inputs_dir = (
         workspace / "mapper_inputs" if mapper_inputs_path is None else Path(mapper_inputs_path).expanduser()
     )
@@ -84,6 +83,7 @@ def run_local_frontend(
             expected_identity=identity.as_dict(),
         )
         mapper_inputs.validate(use_geocalib=conf.pipeline.use_geocalib)
+        write_local_input_provenance(mapper_inputs.directory, image_dir, overwrite=True)
         if cache_depth_maps:
             import h5py
 
@@ -137,6 +137,7 @@ def run_local_frontend(
     )
     mapper_inputs = frontend.run(frontend_identity=identity.as_dict())
     mapper_inputs.validate(use_geocalib=conf.pipeline.use_geocalib)
+    write_local_input_provenance(mapper_inputs.directory, image_dir, overwrite=True)
     if temporary_dir.exists():
         shutil.rmtree(temporary_dir)
     return FrontendTargetResult(identity, mapper_inputs, reused=False)
@@ -151,6 +152,8 @@ class FrontendRunner:
 
     def run_with_results(self, *, force_frontend: bool = False) -> FrontendRunResult:
         """Run frontend and return every concrete finalized boundary."""
+        from vidmap.reconstruction import write_local_input_provenance
+
         failure_count = 0
         completed = []
         for (
@@ -189,6 +192,7 @@ class FrontendRunner:
                     )
                     if existing is not None:
                         existing.validate(use_geocalib=self.conf.pipeline.use_geocalib)
+                        write_local_input_provenance(existing.directory, scene_parser.rgb_dir, overwrite=True)
                         result = FrontendTargetResult(identity, existing, reused=True)
                         completed.append(result)
                         logger.info(
@@ -217,6 +221,7 @@ class FrontendRunner:
                         frontend.run_pre_geom()
                     else:
                         mapper_inputs = frontend.run(frontend_identity=identity.as_dict())
+                        write_local_input_provenance(mapper_inputs.directory, scene_parser.rgb_dir, overwrite=True)
                         result = FrontendTargetResult(identity, mapper_inputs, reused=False)
                         completed.append(result)
                         logger.info(
