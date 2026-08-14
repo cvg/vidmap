@@ -13,19 +13,24 @@ namespace vidmap {
 class SolverPlaybackIterationCallback final : public ceres::IterationCallback {
  public:
   SolverPlaybackIterationCallback(const int interval,
+                                  const int iteration_offset,
                                   std::function<void(int)> capture)
-      : interval_(interval), capture_(std::move(capture)) {}
+      : interval_(interval),
+        iteration_offset_(iteration_offset),
+        capture_(std::move(capture)) {}
 
   ceres::CallbackReturnType operator()(
       const ceres::IterationSummary& summary) override {
-    if (summary.iteration % interval_ == 0) {
-      capture_(summary.iteration);
+    const int iteration = summary.iteration + iteration_offset_;
+    if (iteration % interval_ == 0) {
+      capture_(iteration);
     }
     return ceres::SOLVER_CONTINUE;
   }
 
  private:
   int interval_;
+  int iteration_offset_;
   std::function<void(int)> capture_;
 };
 
@@ -55,22 +60,28 @@ void SolveWithPlayback(const SolverPlaybackOptions& playback,
                        ceres::Solver::Options solver_options,
                        ceres::Problem* problem,
                        Capture&& capture,
-                       ceres::Solver::Summary* summary) {
+                       ceres::Solver::Summary* summary,
+                       const int iteration_offset = 0) {
   if (!playback.IsEnabled()) {
     ceres::Solve(solver_options, problem, summary);
     return;
   }
 
-  capture("initial", -1);
+  if (iteration_offset == 0) {
+    capture("initial", -1);
+  }
   SolverPlaybackIterationCallback callback(
       playback.snapshot_every_n_iterations,
+      iteration_offset,
       [&capture](const int iteration) { capture("iteration", iteration); });
   solver_options.update_state_every_iteration = true;
   solver_options.callbacks.push_back(&callback);
   ceres::Solve(solver_options, problem, summary);
   if (summary->IsSolutionUsable()) {
     const int iteration =
-        summary->iterations.empty() ? -1 : summary->iterations.back().iteration;
+        summary->iterations.empty()
+            ? iteration_offset - 1
+            : summary->iterations.back().iteration + iteration_offset;
     capture("final", iteration);
   }
 }

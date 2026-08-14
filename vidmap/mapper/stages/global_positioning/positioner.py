@@ -537,6 +537,13 @@ class GlobalPositioner:
         native_options, self.first_pass_tolerances = build_first_global_positioning_options(
             self.options,
             depth_outliers_marked=self.boundary_depth_outliers_marked or max_depth is not None,
+            image_timeline=[
+                int(image_id)
+                for image_id, _index in sorted(
+                    self.sequence_id_to_index.items(),
+                    key=lambda item: item[1],
+                )
+            ],
         )
         configure_temporal_acceleration_options(
             native_options,

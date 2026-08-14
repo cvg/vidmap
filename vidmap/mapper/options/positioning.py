@@ -59,6 +59,9 @@ class GPFirstPassOptions:
     scale_reg_loss_name: ScaleLossName = "trivial"
     scale_reg_weight: float = 1.0
     initialize_warm_start_scales: bool = True
+    sequential_support_warmup_rounds: Annotated[int, Field(ge=0)] = 16
+    sequential_support_observations_per_track: Annotated[int, Field(ge=0)] = 16
+    sequential_support_loss: Optional[LossConfig] = LossConfig(name="trivial", weight=1.0)
     loss_lc_geometry: LossConfig = LossConfig(name="cauchy", scale=2.0, weight=0.4)
     loss_lc_depth: LossConfig = LossConfig(name="cauchy", scale=2.0, weight=0.4)
     loss_normal_geometry: LossConfig = LossConfig(name="huber")
@@ -74,8 +77,18 @@ class GPFirstPassOptions:
                 "loss_lc_depth",
                 "loss_normal_geometry",
                 "loss_normal_depth",
+                "sequential_support_loss",
             ),
         )
+
+    @model_validator(mode="after")
+    def validate_sequential_support(self):
+        enabled = self.sequential_support_warmup_rounds > 0
+        if enabled != (self.sequential_support_observations_per_track > 0) or enabled != (
+            self.sequential_support_loss is not None
+        ):
+            raise ValueError("sequential support requires warm-up rounds, observations per track, and a loss")
+        return self
 
 
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
