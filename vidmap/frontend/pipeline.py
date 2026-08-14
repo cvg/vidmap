@@ -35,7 +35,6 @@ __all__ = [
 class FrontendArtifacts:
     """Cache identities and expected item plans exposed by tracking frontend."""
 
-    keyframes: CompleteArtifactContract
     track_pairs: CompleteArtifactContract
     retrieval_pairs: CompleteArtifactContract
     sparse_features: IncrementalArtifactContract

@@ -8,7 +8,6 @@ from pathlib import Path
 class FrontendPaths:
     """Filesystem artifacts produced or consumed by one frontend run."""
 
-    keyframes_path: Path
     track_pairs_path: Path
     retrieval_pairs_path: Path
     sparse_features_path: Path
@@ -50,7 +49,6 @@ def build_frontend_paths(
     if cache_variant:
         trajectory_frontend_dir /= _path_component(cache_variant, "cache_variant")
 
-    keyframes_path = trajectory_frontend_dir / "keyframes.h5"
     track_pairs_path = trajectory_frontend_dir / "track_pairs.h5"
     retrieval_pairs_path = trajectory_frontend_dir / "retrieval_pairs.h5"
     salient_features_path = trajectory_frontend_dir / "salient_features.h5"
@@ -65,7 +63,6 @@ def build_frontend_paths(
         geocalib_batch_path = trajectory_frontend_dir / "geocalib_batch.h5"
 
     return FrontendPaths(
-        keyframes_path=keyframes_path,
         track_pairs_path=track_pairs_path,
         retrieval_pairs_path=retrieval_pairs_path,
         sparse_features_path=sparse_features_path,

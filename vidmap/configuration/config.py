@@ -66,6 +66,12 @@ class FrontendConfig:
                 values[name] = option_type(**value)
         return values
 
+    @model_validator(mode="after")
+    def _validate_lookahead_hop(self):
+        if self.keyframes.selection.lookahead_pruning and 2 not in self.tracks.propagation.multiflow_hops:
+            raise ValueError("lookahead keyframe pruning requires multiflow hop 2")
+        return self
+
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class MappingConfig:

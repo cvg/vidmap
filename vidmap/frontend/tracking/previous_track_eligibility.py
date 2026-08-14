@@ -64,7 +64,7 @@ def select_previous_track_mask(
         bundle_opt = poselib.BundleOptions(bundle_kwargs)
         tvg_killed = 0
 
-        for k in range(1, options.window):
+        for k in range(1, history.reach):
             survivor_idx = np.where(base_mask)[0]
             if len(survivor_idx) < options.tvg_min_inliers:
                 break
@@ -86,7 +86,7 @@ def select_previous_track_mask(
             logger.debug(
                 "TVG track filter removed %d tracks across %d hops",
                 tvg_killed,
-                options.window - 1,
+                history.reach - 1,
             )
 
     if options.density_thin_k > 0 and base_mask.sum() > 0:

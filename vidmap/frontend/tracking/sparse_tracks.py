@@ -13,17 +13,13 @@ from vidmap.frontend.cache import (
     CompleteArtifactContract,
     IncrementalArtifactContract,
     artifact_fingerprint,
-    cache_is_valid,
     cache_metadata,
     certify_complete_artifact,
     certify_incremental_artifact,
     incremental_cache_is_complete,
     mark_incremental_cache_complete,
-    prepare_incremental_cache,
     read_cache_metadata,
-    read_pair_artifact,
     semantic_config,
-    write_pair_artifact,
 )
 from vidmap.frontend.correspondences import validate_pair_name_plan
 from vidmap.frontend.keyframes.processing import KeyframePlan
@@ -61,12 +57,6 @@ class _TrackCachePlan:
 
 
 @internal_dataclass(frozen=True)
-class _TrackExecutionResult:
-    pairs: tuple[tuple[str, str], ...]
-    extended_matches: ExtendedMatchCache
-
-
-@internal_dataclass(frozen=True)
 class SparseTrackResult:
     """Certified sparse tracking outputs and the sequential LC cache identity."""
 
@@ -89,7 +79,6 @@ class SparseTrackResult:
 def overlap_pair_plan(keyframe_sequence, *, track_options):
     return generate_multiflow_overlap_pairs(
         sequence=keyframe_sequence,
-        window=track_options.window,
         multiflow_hops=track_options.multiflow_hops,
     )
 
@@ -108,33 +97,6 @@ def _highres_cache_config(highres_options, lowres_match_resolution):
     return config
 
 
-def track_pairs_cache_metadata(
-    track_options,
-    highres_options,
-    lowres_match_resolution,
-    extended_options,
-    tracker_options,
-    keyframe_sequence,
-    keyframe_pairs,
-    keyframe_metadata,
-):
-    return cache_metadata(
-        stage="track_pairs",
-        config={
-            "tracker": romav2_cache_identity(tracker_options),
-            "trackprop": _trackprop_cache_config(track_options, extended_options.lc_match_thresh),
-            "highres": _highres_cache_config(highres_options, lowres_match_resolution),
-        },
-        ordered_inputs={
-            "keyframe_sequence": keyframe_sequence,
-            "keyframe_pairs": keyframe_pairs,
-        },
-        upstream={"keyframes": artifact_fingerprint(keyframe_metadata)},
-        payload_format="ordered-image-pairs",
-        nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
-    )
-
-
 def track_output_cache_metadata(
     track_options,
     highres_options,
@@ -143,7 +105,7 @@ def track_output_cache_metadata(
     tracker_options,
     keyframe_sequence,
     keyframe_pairs,
-    keyframe_metadata,
+    track_pairs_metadata,
     salient_features_fingerprint,
 ):
     common_config = {
@@ -156,7 +118,7 @@ def track_output_cache_metadata(
         "keyframe_pairs": keyframe_pairs,
     }
     upstream = {
-        "keyframes": artifact_fingerprint(keyframe_metadata),
+        "track_pairs": artifact_fingerprint(track_pairs_metadata),
         "salient_features": salient_features_fingerprint,
     }
     return _TrackOutputMetadata(
@@ -187,7 +149,7 @@ def extended_matches_cache_metadata(
     tracker_options,
     keyframe_sequence,
     sequential_pairs,
-    keyframe_metadata,
+    track_pairs_metadata,
     sparse_features_metadata,
 ):
     return cache_metadata(
@@ -204,7 +166,7 @@ def extended_matches_cache_metadata(
             "sequential_pairs": sequential_pairs,
         },
         upstream={
-            "keyframes": artifact_fingerprint(keyframe_metadata),
+            "track_pairs": artifact_fingerprint(track_pairs_metadata),
             "sparse_features": artifact_fingerprint(sparse_features_metadata),
         },
         payload_format="per-pair-extended-matches",
@@ -224,7 +186,7 @@ class SparseTrackBuilder:
         repro_dir: Path | None,
         tracker: LazyRoMaV2Tracker,
         tracker_options: RoMaV2Options,
-        keyframes: KeyframePlan,
+        keyframes: KeyframePlan | None,
         track_options: SparseTrackOptions,
         highres_options: RoMaImageOptions,
         lowres_match_resolution: int,
@@ -253,17 +215,7 @@ class SparseTrackBuilder:
             )
         )
         validate_pair_name_plan(sequential_pairs)
-        keyframes_metadata = self.keyframes.keyframes.metadata
-        track_metadata = track_pairs_cache_metadata(
-            self.track_options,
-            self.highres_options,
-            self.lowres_match_resolution,
-            self.extended_options,
-            self.tracker_options,
-            keyframe_sequence,
-            keyframe_pairs,
-            keyframes_metadata,
-        )
+        track_metadata = self.keyframes.track_pairs_artifact.metadata
         salient_features_fingerprint = artifact_fingerprint(read_cache_metadata(paths.salient_features_path))
         outputs = track_output_cache_metadata(
             self.track_options,
@@ -273,7 +225,7 @@ class SparseTrackBuilder:
             self.tracker_options,
             keyframe_sequence,
             keyframe_pairs,
-            keyframes_metadata,
+            track_metadata,
             salient_features_fingerprint,
         )
         return _TrackCachePlan(
@@ -286,18 +238,14 @@ class SparseTrackBuilder:
 
     def _outputs_complete(self, plan: _TrackCachePlan) -> bool:
         paths = self.paths
-        return (
-            cache_is_valid(paths.track_pairs_path, plan.track_pairs)
-            and incremental_cache_is_complete(
-                paths.sparse_features_path,
-                plan.outputs.sparse_features,
-                plan.keyframe_sequence,
-            )
-            and incremental_cache_is_complete(
-                paths.sparse_matches_path,
-                plan.outputs.sparse_matches,
-                [names_to_pair(*pair) for pair in plan.keyframe_pairs],
-            )
+        return incremental_cache_is_complete(
+            paths.sparse_features_path,
+            plan.outputs.sparse_features,
+            plan.keyframe_sequence,
+        ) and incremental_cache_is_complete(
+            paths.sparse_matches_path,
+            plan.outputs.sparse_matches,
+            [names_to_pair(*pair) for pair in plan.keyframe_pairs],
         )
 
     def _extended_metadata(self, plan: _TrackCachePlan, sparse_features_metadata):
@@ -309,13 +257,12 @@ class SparseTrackBuilder:
             self.tracker_options,
             plan.keyframe_sequence,
             plan.sequential_pairs,
-            self.keyframes.keyframes.metadata,
+            self.keyframes.track_pairs_artifact.metadata,
             sparse_features_metadata,
         )
 
-    def _load(self, plan: _TrackCachePlan) -> _TrackExecutionResult:
+    def _load(self, plan: _TrackCachePlan) -> ExtendedMatchCache:
         paths = self.paths
-        pairs = tuple(read_pair_artifact(paths.track_pairs_path, plan.track_pairs))
         extended_metadata = self._extended_metadata(
             plan,
             read_cache_metadata(paths.sparse_features_path),
@@ -326,72 +273,68 @@ class SparseTrackBuilder:
             force_recompute=self.force_recompute,
         )
         extended_cache.prepare()
-        return _TrackExecutionResult(pairs, extended_cache)
+        return extended_cache
 
-    def _execute(self, plan: _TrackCachePlan) -> _TrackExecutionResult:
+    def _publish(self, plan, staging_path):
+        paths = self.paths
+        mark_incremental_cache_complete(
+            paths.sparse_features_path,
+            plan.outputs.sparse_features,
+            plan.keyframe_sequence,
+        )
+        mark_incremental_cache_complete(
+            paths.sparse_matches_path,
+            plan.outputs.sparse_matches,
+            [names_to_pair(*pair) for pair in plan.keyframe_pairs],
+        )
+        extended_cache = ExtendedMatchCache(
+            paths,
+            self._extended_metadata(plan, read_cache_metadata(paths.sparse_features_path)),
+            force_recompute=self.force_recompute,
+        )
+        extended_cache.publish_staging(staging_path)
+        return extended_cache
+
+    def admit_and_build_tracks(self, candidates, keyframe_options, finalize_keyframes):
+        """Admit candidate keyframes while building their sparse tracks."""
         from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
         paths = self.paths
-        logger.info(
-            "Starting streaming track frontend for %d consecutive pairs",
-            len(plan.keyframe_pairs),
-        )
-        for path, metadata in (
-            (paths.sparse_features_path, plan.outputs.sparse_features),
-            (paths.sparse_matches_path, plan.outputs.sparse_matches),
-        ):
-            prepare_incremental_cache(
-                path,
-                metadata,
-                overwrite=self.force_recompute,
-            )
-
+        paths.sparse_features_path.unlink(missing_ok=True)
+        paths.sparse_matches_path.unlink(missing_ok=True)
         with tempfile.TemporaryDirectory(
             dir=paths.extended_matches_path.parent,
             prefix=".extended-matches-",
         ) as staging_dir:
             staging_path = Path(staging_dir) / paths.extended_matches_path.name
             started = sync_time()
-            StreamingTrackPropagator(
+            accepted_ids = StreamingTrackPropagator(
                 conf=self.track_options,
                 scene_parser=self.scene_parser,
                 paths=paths,
                 tracker_model=self.tracker.get(),
-                keyframe_sequence=plan.keyframe_sequence,
+                keyframe_sequence=candidates.names,
+                candidate_indices=candidates.indices,
+                forced_candidate_indices=candidates.forced_indices,
+                calibrations=candidates.calibrations,
+                keyframe_options=keyframe_options,
                 conf_highres=self.highres_options,
                 lowres_match_resolution=self.lowres_match_resolution,
                 extended_matches_path=staging_path,
                 lc_match_thresh=self.extended_options.lc_match_thresh,
-                sequential_pairs=plan.sequential_pairs,
             ).run()
             record_timing("track_propagation", sync_time() - started)
             log_memory("track_propagation")
 
-            write_pair_artifact(paths.track_pairs_path, plan.keyframe_pairs, plan.track_pairs)
-            mark_incremental_cache_complete(
-                paths.sparse_features_path,
-                plan.outputs.sparse_features,
-                plan.keyframe_sequence,
-            )
-            mark_incremental_cache_complete(
-                paths.sparse_matches_path,
-                plan.outputs.sparse_matches,
-                [names_to_pair(*pair) for pair in plan.keyframe_pairs],
-            )
-            extended_metadata = self._extended_metadata(
-                plan,
-                read_cache_metadata(paths.sparse_features_path),
-            )
-            extended_cache = ExtendedMatchCache(
-                paths,
-                extended_metadata,
-                force_recompute=self.force_recompute,
-            )
-            extended_cache.publish_staging(staging_path)
-        return _TrackExecutionResult(plan.keyframe_pairs, extended_cache)
+            self.keyframes = finalize_keyframes(accepted_ids)
+            plan = self._cache_plan()
+            extended_cache = self._publish(plan, staging_path)
 
-    def _repair_sequential_matches(self, plan: _TrackCachePlan, execution: _TrackExecutionResult, *, loaded):
-        present_count, _ = execution.extended_matches.repair(
+        self._repair_sequential_matches(plan, extended_cache, loaded=False)
+        return self.keyframes, self._result(plan, extended_cache)
+
+    def _repair_sequential_matches(self, plan: _TrackCachePlan, extended_cache: ExtendedMatchCache, *, loaded):
+        present_count, _ = extended_cache.repair(
             plan.sequential_pairs,
             label="sequential",
             tracker=self.tracker,
@@ -403,10 +346,10 @@ class SparseTrackBuilder:
         if loaded:
             logger.info("Loaded %d cached track-overlap pairs", present_count)
 
-    def _result(self, plan: _TrackCachePlan, execution: _TrackExecutionResult) -> SparseTrackResult:
+    def _result(self, plan: _TrackCachePlan, extended_cache: ExtendedMatchCache) -> SparseTrackResult:
         sparse_match_items = tuple(names_to_pair(*pair) for pair in plan.keyframe_pairs)
         result = SparseTrackResult(
-            track_pairs=execution.pairs,
+            track_pairs=plan.keyframe_pairs,
             sequential_pairs=plan.sequential_pairs,
             track_pairs_artifact=certify_complete_artifact(self.paths.track_pairs_path, plan.track_pairs),
             sparse_features=certify_incremental_artifact(
@@ -419,20 +362,23 @@ class SparseTrackBuilder:
                 plan.outputs.sparse_matches,
                 sparse_match_items,
             ),
-            extended_matches=execution.extended_matches,
+            extended_matches=extended_cache,
         )
         if self.repro_dir is not None:
             write_pair_order_artifact(
                 self.repro_dir / "stage1_track_pair_order.json",
-                execution.pairs,
+                plan.keyframe_pairs,
                 label="track_pairs",
             )
         return result
 
-    def build(self) -> SparseTrackResult:
-        """Load or execute tracking, repair sequential matches, and certify the result."""
+    def load_complete(self) -> SparseTrackResult | None:
+        """Load only a fully published core tracking section."""
+        if self.force_recompute or self.keyframes is None:
+            return None
         plan = self._cache_plan()
-        loaded = not self.force_recompute and self._outputs_complete(plan)
-        execution = self._load(plan) if loaded else self._execute(plan)
-        self._repair_sequential_matches(plan, execution, loaded=loaded)
-        return self._result(plan, execution)
+        if not self._outputs_complete(plan):
+            return None
+        extended_cache = self._load(plan)
+        self._repair_sequential_matches(plan, extended_cache, loaded=True)
+        return self._result(plan, extended_cache)

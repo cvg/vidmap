@@ -11,13 +11,10 @@ from vidmap.configuration.validators import dataclass
 from vidmap.frontend.options.matching import RoMaImageOptions
 
 
-def normalize_multiflow_hops(multiflow_hops: Optional[Iterable[int]], window: int) -> tuple[int, ...] | None:
-    """Validate and normalize an opt-in sparse hop schedule."""
+def normalize_multiflow_hops(multiflow_hops: Iterable[int]) -> tuple[int, ...]:
+    """Validate and normalize the explicit sparse hop schedule."""
     if multiflow_hops is None:
-        return None
-    if window < 1:
-        raise ValueError("window must be positive")
-
+        raise ValueError("multiflow_hops must be explicit")
     raw_hops = tuple(multiflow_hops)
     if len(raw_hops) == 0:
         raise ValueError("multiflow_hops must not be empty")
@@ -28,12 +25,8 @@ def normalize_multiflow_hops(multiflow_hops: Optional[Iterable[int]], window: in
         raise ValueError("multiflow_hops must be positive")
     if len(set(hops)) != len(hops):
         raise ValueError("multiflow_hops must be unique")
-    if max(hops) > window:
-        raise ValueError("multiflow_hops cannot contain hops greater than window")
     if 1 not in hops:
         raise ValueError("multiflow_hops must include hop 1")
-    if max(hops) != window:
-        raise ValueError("multiflow_hops must preserve window reach; use a smaller window for shorter reach")
     return tuple(sorted(hops, reverse=True))
 
 
@@ -45,7 +38,6 @@ class SparseTrackOptions:
     nms_radius: int = 3
     max_kps: int = 1500
     min_conf: float = 0.05
-    window: int = 9
     max_sequential_track_sigma_roma_px: Optional[float] = 8.0
     density_thin_k: float = 0.05
     density_thin_std: float = 0.013
@@ -58,7 +50,12 @@ class SparseTrackOptions:
     salient_density_max_scale: float = 3.0
     salient_density_power: float = 1.0
     lt_cov_scale: float = 4.0
-    multiflow_hops: Optional[tuple[int, ...]] = (9, 7, 5, 3, 1)
+    multiflow_hops: tuple[int, ...] = (8, 6, 4, 2, 1)
+
+    @field_validator("multiflow_hops", mode="before")
+    @classmethod
+    def _normalize_multiflow_hops(cls, value):
+        return normalize_multiflow_hops(value)
 
     @field_validator("max_sequential_track_sigma_roma_px", mode="before")
     @classmethod
@@ -68,8 +65,7 @@ class SparseTrackOptions:
         return value
 
     @model_validator(mode="after")
-    def _validate_multiflow_hops(self):
-        normalize_multiflow_hops(self.multiflow_hops, self.window)
+    def _validate_sequential_sigma_threshold(self):
         sequential_threshold = self.max_sequential_track_sigma_roma_px
         if sequential_threshold is not None and (not math.isfinite(sequential_threshold) or sequential_threshold <= 0):
             raise ValueError("max_sequential_track_sigma_roma_px must be finite and positive")

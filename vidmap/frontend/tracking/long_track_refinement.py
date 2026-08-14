@@ -44,7 +44,7 @@ def refine_long_tracks_adaptive(
     cont_indices = np.flatnonzero(continuing)
     track_indices = np.where(prev_tracks_mask)[0][cont_indices]
 
-    window = int(options.window)
+    max_hop = max(scheduled_hops)
     min_conf = float(options.min_conf)
     _s2d = nn_sample_2d
 
@@ -55,12 +55,11 @@ def refine_long_tracks_adaptive(
     best_cov = seq_cov_trace.copy()
     best_pred = seq_pred.copy()
 
-    max_n_per_track = np.minimum(tl_prev[cont_indices].astype(int) + 1, window)
+    max_n_per_track = np.minimum(tl_prev[cont_indices].astype(int) + 1, max_hop)
 
     track_buf_len = history.track.shape[0]
-    available_dense_hops = scheduled_hops
-    for n in range(2, window + 1):
-        if available_dense_hops is not None and n not in available_dense_hops:
+    for n in sorted(scheduled_hops):
+        if n == 1:
             continue
         anchor_idx = -(n - 1)
         if (n - 1) > track_buf_len:

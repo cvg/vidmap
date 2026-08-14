@@ -1,26 +1,21 @@
-"""Keyframe and salient-feature cache identities, repair, and publication."""
+"""Admitted track-pair and salient-feature cache identities and publication."""
 
 import logging
-
-import torch
 
 from vidmap.frontend.cache import (
     cache_is_valid,
     cache_metadata,
     incremental_cache_is_complete,
-    inspect_incremental_items,
     mark_incremental_cache_complete,
     ordered_files_fingerprint,
-    prepare_incremental_cache,
     prune_incremental_items,
     read_cache_metadata,
-    read_keyframe_artifact,
+    read_pair_artifact,
     semantic_config,
-    write_keyframe_artifact,
+    write_pair_artifact,
 )
 from vidmap.frontend.geocalib import keyframe_bootstrap_cache_identity
 from vidmap.frontend.keyframes import selector as keyframe_selector
-from vidmap.frontend.keyframes.selection import compute_aliked_features_for_frame
 from vidmap.frontend.models.aliked import aliked_cache_identity
 from vidmap.frontend.models.romav2 import romav2_cache_identity
 
@@ -39,22 +34,24 @@ def _ordered_timestamps(sequence, timestamps):
     return values
 
 
-def keyframe_cache_metadata(
+def admitted_track_pairs_cache_metadata(
     *,
     scene_parser,
     sequence,
     timestamps,
     tracker_options,
     lowres_options,
+    highres_options,
     keyframe_options,
     salient_options,
 ):
-    """Build the keyframe cache identity from explicit stage dependencies."""
+    """Build the admitted adjacent-pair identity from both selection passes."""
     intrinsics_source = keyframe_options.intrinsics_source
     keyframe_config = semantic_config(keyframe_options, exclude_fields=frozenset({"intrinsics_source"}))
     config = {
         "tracker": romav2_cache_identity(tracker_options),
         "lowres": lowres_options,
+        "highres": highres_options,
         "keyframes": keyframe_config,
         "salient_features": semantic_config(salient_options),
         "salient_feature_model": aliked_cache_identity(),
@@ -78,60 +75,79 @@ def keyframe_cache_metadata(
             scene_parser, sequence
         )
     return cache_metadata(
-        stage="keyframes",
+        stage="track_pairs",
         config=config,
         ordered_inputs=ordered_inputs,
-        payload_format="ordered-keyframe-indices",
+        payload_format="ordered-image-pairs",
         nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
     )
 
 
-def salient_feature_cache_metadata(*, salient_options, sequence, timestamps, keyframe_metadata):
-    """Build the salient-feature identity from the committed keyframe artifact."""
-    keyframe_fingerprint = keyframe_metadata.get(
+def salient_feature_cache_metadata(*, salient_options, sequence, timestamps, track_pairs_metadata):
+    """Build the salient-feature identity from the admitted pair plan."""
+    track_pairs_fingerprint = track_pairs_metadata.get(
         "artifact_fingerprint",
-        keyframe_metadata["identity_fingerprint"],
+        track_pairs_metadata["identity_fingerprint"],
     )
     return cache_metadata(
         stage="salient_features",
-        config={"features": semantic_config(salient_options), "model": aliked_cache_identity()},
+        config={
+            "features": semantic_config(salient_options),
+            "model": aliked_cache_identity(),
+        },
         ordered_inputs={
             "sequence": sequence,
             "timestamps": _ordered_timestamps(sequence, timestamps),
         },
-        upstream={"keyframes": keyframe_fingerprint},
+        upstream={"track_pairs": track_pairs_fingerprint},
         payload_format="per-image-local-features",
         nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
     )
 
 
-def load_or_repair_cached_ids(
+def load_cached_names(
     *,
     scene_parser,
     sequence,
-    keyframes_path,
+    timestamps,
+    track_pairs_path,
     salient_features_path,
     force_recompute,
     keyframe_options,
     salient_options,
-    keyframes_metadata,
-    salient_metadata,
+    track_pairs_metadata,
 ):
     if force_recompute or not cache_is_valid(
-        keyframes_path,
-        keyframes_metadata,
+        track_pairs_path,
+        track_pairs_metadata,
     ):
         return None
-    keyframe_ids = read_keyframe_artifact(keyframes_path, keyframes_metadata)
+    pairs = tuple(read_pair_artifact(track_pairs_path, track_pairs_metadata))
+    if not pairs:
+        logger.info("Cached admitted track-pair plan is empty")
+        return None
+    names = (pairs[0][0], *(pair[1] for pair in pairs))
+    if pairs != tuple(zip(names, names[1:])):
+        logger.info("Cached admitted track pairs do not form one adjacent chain")
+        return None
+    positions = {name: index for index, name in enumerate(sequence)}
+    if any(name not in positions for name in names):
+        logger.info("Cached admitted track pairs contain images outside the source sequence")
+        return None
+    keyframe_ids = [positions[name] for name in names]
     last_frame_idx = len(sequence) - 1
-    if len(keyframe_ids) < 2 or keyframe_ids[0] != 0 or keyframe_ids[-1] != last_frame_idx:
+    if (
+        keyframe_ids[0] != 0
+        or keyframe_ids[-1] != last_frame_idx
+        or any(right <= left for left, right in zip(keyframe_ids, keyframe_ids[1:]))
+    ):
         logger.info(
             f"Cached keyframes invalid: first={keyframe_ids[0] if keyframe_ids else None}, "
             f"last={keyframe_ids[-1] if keyframe_ids else None}, expected first=0, last={last_frame_idx}"
         )
         return None
-    logger.debug("Loaded cached keyframes (by sequence index): %s", keyframe_ids)
-    logger.info("Loaded %d cached keyframes", len(keyframe_ids))
+    logger.debug("Loaded admitted keyframes (by sequence index): %s", keyframe_ids)
+    logger.info("Loaded %d admitted keyframes from track pairs", len(keyframe_ids))
     if keyframe_options.force_gt_keyframes:
         gt_indices = keyframe_selector.get_gt_frame_indices(sequence, scene_parser)
         missing_gt = set(gt_indices) - set(keyframe_ids)
@@ -142,51 +158,21 @@ def load_or_repair_cached_ids(
                 "This should not happen with the fixed code. Re-run with --force-frontend to regenerate keyframes."
             )
 
+    salient_metadata = salient_feature_cache_metadata(
+        salient_options=salient_options,
+        sequence=sequence,
+        timestamps=timestamps,
+        track_pairs_metadata=read_cache_metadata(track_pairs_path),
+    )
     expected_names = [sequence[index] for index in keyframe_ids]
     if incremental_cache_is_complete(
         salient_features_path,
         salient_metadata,
         expected_names,
     ):
-        return keyframe_ids
-
-    prepare_incremental_cache(
-        salient_features_path,
-        salient_metadata,
-        overwrite=False,
-    )
-    prune_incremental_items(salient_features_path, expected_names)
-    _present, missing = inspect_incremental_items(
-        salient_features_path,
-        expected_names,
-        salient_metadata,
-        repair_malformed=True,
-    )
-    if missing:
-        aliked_model = keyframe_selector.create_aliked_model(salient_options)
-        try:
-            for name in missing:
-                compute_aliked_features_for_frame(
-                    scene_parser,
-                    salient_features_path,
-                    name,
-                    aliked_model,
-                    salient_options,
-                )
-        finally:
-            del aliked_model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-    mark_incremental_cache_complete(salient_features_path, salient_metadata, expected_names)
-    return keyframe_ids
-
-
-def prepare_salient_feature_cache(salient_features_path, salient_metadata, *, overwrite):
-    prepare_incremental_cache(
-        salient_features_path,
-        salient_metadata,
-        overwrite=overwrite,
-    )
+        return names
+    logger.info("Cached admission and track-propagation section is incomplete")
+    return None
 
 
 def commit_keyframes(
@@ -195,34 +181,26 @@ def commit_keyframes(
     timestamps,
     keyframe_ids,
     gt_frame_indices,
-    keyframes_path,
+    track_pairs_path,
     salient_features_path,
     keyframe_options,
     salient_options,
-    keyframes_metadata,
-    salient_metadata,
+    track_pairs_metadata,
 ):
     count_message = f"Number of detected keyframes: {len(keyframe_ids)}"
     if keyframe_options.force_gt_keyframes:
         count_message += f" (including {sum(index in gt_frame_indices for index in keyframe_ids)} GT frames)"
     logger.debug("Detected keyframes (by sequence index): %s", keyframe_ids)
     logger.info(count_message)
-    write_keyframe_artifact(keyframes_path, keyframe_ids, keyframes_metadata)
     expected_names = [sequence[index] for index in keyframe_ids]
-    mark_incremental_cache_complete(
-        salient_features_path,
-        salient_metadata,
-        expected_names,
-    )
+    track_pairs = tuple(zip(expected_names, expected_names[1:]))
+    write_pair_artifact(track_pairs_path, track_pairs, track_pairs_metadata)
+    prune_incremental_items(salient_features_path, expected_names)
     final_metadata = salient_feature_cache_metadata(
         salient_options=salient_options,
         sequence=sequence,
         timestamps=timestamps,
-        keyframe_metadata=read_cache_metadata(keyframes_path),
+        track_pairs_metadata=read_cache_metadata(track_pairs_path),
     )
-    mark_incremental_cache_complete(
-        salient_features_path,
-        final_metadata,
-        expected_names,
-    )
-    logger.info("Cached keyframes to: %s", keyframes_path)
+    mark_incremental_cache_complete(salient_features_path, final_metadata, expected_names)
+    logger.info("Cached admitted track pairs to: %s", track_pairs_path)

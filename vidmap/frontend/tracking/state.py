@@ -69,13 +69,13 @@ class SparseTrackState:
         self.original_size = original_size
         self.current_size = current_size
         self.scale_ratio = np.array(original_size) / np.array(current_size)
-        self.scheduled_hops = scheduled_hops
         self.prev_keypoints = None
         self.prev_conf = None
         self.prev_covar = None
         self.track_length = None
+        self.scheduled_hops = tuple(scheduled_hops)
         self.history = SparseTrackHistory(
-            window=self.conf.window,
+            history_reach=max(self.scheduled_hops),
             max_keypoints=self.conf.max_kps,
         )
         self.salient_keypoint_selector = SalientKeypointSelector(self.conf)
