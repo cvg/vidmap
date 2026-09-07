@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<base href="../">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LIN · Google Earth / VidMap</title>
+  <script>if (new URLSearchParams(location.search).has('embedded')) document.documentElement.classList.add('embedded');</script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 36px 20px; background: #f6f7f9; color: #172033; font: 15px system-ui, sans-serif; }
+    main { max-width: 1200px; margin: auto; }
+    h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.6px; }
+    p { color: #596275; line-height: 1.5; }
+    .source { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 20px 0; }
+    button { border: 1px solid #d7dce4; border-radius: 9px; padding: 10px 15px; background: white; color: inherit; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .4; cursor: default; }
+    :focus-visible { outline: 3px solid #0064ff; outline-offset: 4px; }
+    #status { flex: 1; min-width: 240px; margin: 0; font-size: 13px; }
+    #player { overflow: hidden; background: #fff; border: 1px solid #dfe3e9; border-radius: 18px; box-shadow: 0 10px 40px #1720330b; }
+    #stage { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: white; --split: 50%; }
+    video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: white; pointer-events: none; }
+    #google-layer { position: absolute; inset: 0; clip-path: inset(0 calc(100% - var(--split)) 0 0); }
+    .label { position: absolute; top: 16px; padding: 7px 11px; border-radius: 20px; background: #fffE; color: #172033; font-size: 12px; pointer-events: none; }
+    .label.left { left: 16px; }
+    .label.right { right: 16px; top: auto; bottom: 16px; }
+    #frame-preview-panel { position: absolute; z-index: 3; right: 16px; top: 16px; height: 32%; max-height: 280px; aspect-ratio: 3 / 4; margin: 0; border: 0; border-radius: 12px; overflow: hidden; background: transparent; box-shadow: 0 7px 22px rgba(23,32,51,.13); pointer-events: none; }
+    #frame-preview { display: block; width: 100%; height: 100%; object-fit: contain; }
+    @media(max-width: 600px) { #frame-preview-panel { right: 10px; top: 10px; border-radius: 8px; } }
+    #divider { position: absolute; top: 0; bottom: 0; left: var(--split); width: 36px; transform: translateX(-50%); border: 0; border-radius: 0; padding: 0; background: transparent; cursor: ew-resize; touch-action: none; }
+    #divider::before { content: ''; position: absolute; top: 0; bottom: 0; left: 17px; width: 2px; background: white; box-shadow: 0 0 4px #0008; }
+    #divider span { position: absolute; top: 50%; left: -4px; width: 44px; height: 44px; display: grid; place-items: center; transform: translateY(-50%); border-radius: 50%; background: white; box-shadow: 0 2px 14px #0003; font-size: 20px; }
+    #divider:focus-visible { outline-offset: -5px; }
+    .controls { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid #eef0f4; }
+    #play { min-width: 76px; }
+    #timeline { flex: 1; min-width: 40px; accent-color: #0064ff; }
+    #time { font: 12px ui-monospace, monospace; white-space: nowrap; }
+    [hidden] { display: none !important; }
+    #player:fullscreen { display: flex; flex-direction: column; justify-content: center; border: 0; border-radius: 0; background: #10141b; }
+    #player:fullscreen #stage { width: 100%; max-height: calc(100vh - 68px); flex: 1; }
+    #player:fullscreen .controls { flex-shrink: 0; background: white; }
+    .note { font-size: 12px; }
+    @media(max-width: 600px) { body { padding: 20px 10px; } .controls { gap: 7px; padding: 10px; } #time { font-size: 10px; } #fullscreen { padding: 10px; } }
+    .embedded body { padding: 0; background: white; overflow: hidden; }
+    .embedded main { max-width: none; }
+    .embedded main > h1, .embedded main > p { display: none; }
+    .embedded #player { border: 0; border-radius: 0; box-shadow: none; }
+    .embedded .controls { height: 68px; }
+    .embedded .source { position: absolute; z-index: 5; top: 54px; left: 16px; right: 16px; margin: 0; pointer-events: none; }
+    .embedded #status { min-width: 0; background: #fffffff0; border-radius: 8px; padding: 8px; }
+    .embedded .source[data-ready] { display: none; }
+  </style>
+<link rel="stylesheet" href="entrance_test/lin_polish.css?v=1">
+</head>
+<body>
+<main>
+  <h1>One journey, two views</h1>
+  <p>Drag the vertical divider while the synchronized videos play: Google Earth on the left, VidMap on the right.</p>
+  <div class="source">
+    <p id="status" role="status">Loading the synchronized videos…</p>
+  </div>
+  <section id="player" aria-label="Synchronized video comparison">
+    <div id="stage" tabindex="0" role="group" aria-label="City-scale comparison. Click or press Space to pause or resume.">
+      <video id="city-ending" muted playsinline disablepictureinpicture preload="auto" src="entrance_test/web_media/city_baselines.mp4?v=matched-colors-v98" aria-label="Camera transition and baseline trajectories"></video>
+      <div id="city-transition-label" role="status">Perspective <span aria-hidden="true">→</span> Orthographic</div>
+      <div id="city-legend" aria-label="Trajectory legend" aria-hidden="true">
+        <span><i style="--c:#0064ff"></i>VidMap</span>
+        <span><i style="--c:#ffdc00"></i>Ground truth</span>
+        <span data-reveal="5"><i style="--c:#ff8000"></i>DA3</span>
+        <span data-reveal="4"><i style="--c:#ff28b4"></i>LOGER</span>
+        <span data-reveal="4.5"><i style="--c:#00e6ff"></i>LingBotMap</span>
+      </div>
+      <video id="reconstruction" muted playsinline preload="auto" src="entrance_test/web_media/lin_dense_showcase/LIN_dense_flythrough_1920x1080.mp4?v=growing-blue-v98"></video>
+      <div id="google-layer" hidden>
+        <video id="google" muted playsinline preload="auto" src="entrance_test/web_media/lin_dense_showcase/LIN_google_earth_matched_10fps.mp4?v=occluded-blue-v98"></video>
+      </div>
+      <button id="divider" type="button" role="slider" aria-label="Google Earth reveal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50 percent Google Earth" hidden><span aria-hidden="true">↔</span></button>
+      <figure id="frame-preview-panel" hidden><video id="frame-preview" muted playsinline disablepictureinpicture preload="auto" src="entrance_test/web_media/city_camera_inset.mp4" aria-label="Synchronized camera footage"></video></figure>
+    </div>
+    <div class="controls">
+      <span id="lin-progress-label">Playback</span>
+      <input id="timeline" type="range" min="0" max="60.1" value="0" step="0.01" aria-label="Playback time" disabled>
+    </div>
+  </section>
+  <p class="note">601 matching camera views · Google Earth imagery and VidMap reconstruction · Local playback</p>
+</main>
+
+<script>
+  'use strict';
+  const reconstruction = document.getElementById('reconstruction');
+  const google = document.getElementById('google');
+  const stage = document.getElementById('stage');
+  const divider = document.getElementById('divider');
+  const layer = document.getElementById('google-layer');
+  const timeline = document.getElementById('timeline');
+  const status = document.getElementById('status');
+  const framePreview = document.getElementById('frame-preview');
+  const framePanel = document.getElementById('frame-preview-panel');
+  function updatePreview() {
+    if (!ready || reconstruction.seeking || framePreview.seeking) return;
+    const target = Math.min(reconstruction.currentTime, framePreview.duration - .001);
+    const drift = framePreview.currentTime - target;
+    const running = playing && !buffering && !scrubbing;
+    if (Math.abs(drift) > (running ? .06 : .001)) {
+      framePreview.currentTime = target;
+      framePreview.playbackRate = reconstruction.playbackRate;
+    } else {
+      framePreview.playbackRate = reconstruction.playbackRate *
+        (running && Math.abs(drift) > .012 ? (drift > 0 ? .96 : 1.04) : 1);
+    }
+  }
+  reconstruction.addEventListener('seeked', updatePreview);
+  let ready = false, playing = false, buffering = false;
+  let generation = 0, dragging = false, scrubbing = false, resumeAfterScrub = false;
+  let duration = 60.1, split = 100;
+  function updateTime() {
+    if (!scrubbing) timeline.value = String(reconstruction.currentTime);
+    document.querySelector('.controls').style.setProperty('--progress', `${100 * reconstruction.currentTime / duration}%`);
+  }
+  function pause() {
+    playing = false; buffering = false;
+    reconstruction.pause(); google.pause(); framePreview.pause(); google.playbackRate = framePreview.playbackRate = reconstruction.playbackRate;
+    document.getElementById('lin-progress-label').textContent = 'Paused';
+  }
+  function fail(message) {
+    generation++; pause(); ready = false; timeline.disabled = true;
+    layer.hidden = divider.hidden = true; status.textContent = message;
+    document.querySelector('.source').removeAttribute('data-ready');
+  }
+  async function start(restartAtEnd = false) {
+    if (!ready) return;
+    const token = generation;
+    if (reconstruction.ended || reconstruction.currentTime >= duration) {
+      if (!restartAtEnd) { pause(); return; }
+      reconstruction.currentTime = 0; google.currentTime = 0;
+    } else if (Math.abs(google.currentTime - reconstruction.currentTime) > .02) {
+      google.currentTime = Math.min(reconstruction.currentTime, duration);
+    }
+    if (Math.abs(framePreview.currentTime - reconstruction.currentTime) > .02) framePreview.currentTime = Math.min(reconstruction.currentTime, framePreview.duration - .001);
+    framePreview.playbackRate = reconstruction.playbackRate;
+    playing = true; document.getElementById('lin-progress-label').textContent = 'Playback';
+    try {
+      await Promise.all([reconstruction.play(), google.play(), framePreview.play()]);
+      if (token !== generation || !playing) { reconstruction.pause(); google.pause(); framePreview.pause(); }
+    } catch (error) {
+      if (token === generation && playing && !buffering) {
+        pause(); status.textContent = 'Playback could not start. Click the footage to try again.';
+      }
+    }
+  }
+  function validate() {
+    if (ready || reconstruction.readyState < 2 || google.readyState < 2 || framePreview.readyState < 2) return;
+    if (!Number.isFinite(framePreview.duration) || Math.abs(framePreview.duration - reconstruction.duration) > .01) {
+      fail('The camera footage timeline does not match the comparison.'); return;
+    }
+    if (!Number.isFinite(google.duration) || Math.abs(google.duration - reconstruction.duration) > .01) {
+      fail('The video timelines do not match. Rebuild the matched Google Earth video.'); return;
+    }
+    const ratio = reconstruction.videoWidth / reconstruction.videoHeight;
+    if (Math.abs(google.videoWidth / google.videoHeight - ratio) > .005) {
+      fail('The video aspect ratios do not match. Rebuild the matched Google Earth video.'); return;
+    }
+    duration = Math.min(google.duration, reconstruction.duration);
+    timeline.max = String(duration); ready = true; framePanel.hidden = false;
+    document.querySelector('.source').setAttribute('data-ready', '');
+    layer.hidden = divider.hidden = false; timeline.disabled = false;
+    framePreview.currentTime = google.currentTime = reconstruction.currentTime = 0;
+    status.textContent = 'Click the footage to pause or resume; drag the divider to compare.';
+    updateTime();
+  }
+  [reconstruction, google, framePreview].forEach(video => {
+    video.addEventListener('loadeddata', validate);
+    video.addEventListener('error', () => fail(`${video === framePreview ? 'Camera footage' : video === google ? 'Google Earth' : 'Reconstruction'} video could not be loaded. Keep this HTML next to the lin_dense_showcase folder.`));
+    video.addEventListener('waiting', () => {
+      if (playing && !scrubbing) { buffering = true; reconstruction.pause(); google.pause(); framePreview.pause(); }
+    });
+    video.addEventListener('canplay', () => {
+      if (playing && buffering && reconstruction.readyState >= 3 && google.readyState >= 3 && framePreview.readyState >= 3) {
+        buffering = false; start();
+      }
+    });
+  });
+  reconstruction.addEventListener('ended', pause);
+  function synchronize() {
+    if (ready && playing && !buffering && !scrubbing && !google.seeking && !reconstruction.seeking) {
+      const drift = google.currentTime - reconstruction.currentTime;
+      if (Math.abs(drift) > .065) { google.currentTime = reconstruction.currentTime; google.playbackRate = reconstruction.playbackRate; }
+      else google.playbackRate = reconstruction.playbackRate * (Math.abs(drift) > .012 ? (drift > 0 ? .96 : 1.04) : 1);
+    }
+    updateTime(); updatePreview(); requestAnimationFrame(synchronize);
+  }
+  requestAnimationFrame(synchronize);
+  function startScrub() {
+    if (scrubbing || !ready) return;
+    resumeAfterScrub = playing; pause(); scrubbing = true;
+  }
+  timeline.addEventListener('pointerdown', startScrub);
+  timeline.addEventListener('input', () => {
+    startScrub(); if (!ready) return;
+    reconstruction.currentTime = google.currentTime = Math.min(Number(timeline.value), duration - .001);
+    updateTime();
+  });
+  function finishScrub() {
+    if (!scrubbing) return;
+    scrubbing = false; if (resumeAfterScrub) start(); resumeAfterScrub = false;
+  }
+  timeline.addEventListener('change', finishScrub);
+  timeline.addEventListener('pointerup', finishScrub);
+  timeline.addEventListener('pointercancel', finishScrub);
+  function setSplit(value) {
+    split = Math.max(0, Math.min(100, value)); stage.style.setProperty('--split', `${split}%`);
+    divider.setAttribute('aria-valuenow', String(Math.round(split)));
+    divider.setAttribute('aria-valuetext', `${Math.round(split)} percent Google Earth`);
+  }
+  function moveDivider(event) { const rect = stage.getBoundingClientRect(); setSplit(100 * (event.clientX - rect.left) / rect.width); }
+  divider.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    dragging = true; divider.setPointerCapture(event.pointerId); moveDivider(event); event.preventDefault();
+  });
+  divider.addEventListener('pointermove', event => { if (dragging) moveDivider(event); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(name => divider.addEventListener(name, () => { dragging = false; }));
+  divider.addEventListener('keydown', event => {
+    const values = {ArrowLeft: split - 2, ArrowRight: split + 2, Home: 0, End: 100};
+    if (event.key in values) { setSplit(values[event.key]); event.preventDefault(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+  window.addEventListener('pagehide', pause);
+  validate();
+  if (!frameData) status.textContent = 'Camera-frame preview data could not be loaded. Keep the frame_previews assets beside this page.';
+</script>
+<script src="entrance_test/lin_polish.js?v=1"></script>
+</body>
+</html>

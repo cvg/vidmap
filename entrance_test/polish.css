@@ -1,0 +1,52 @@
+/* Shared presentation polish; reconstruction and plot styling stay untouched. */
+.section { padding: 62px 24px; }
+.section-head { margin-bottom: 26px; }
+.section-head h2 { font-size: clamp(1.75rem, 3.2vw, 2.5rem); text-wrap: balance; }
+.section-head p { max-width: 700px; margin: 12px auto 0; }
+.tldr { border: 0; box-shadow: none; padding: 0; max-width: 880px; margin: auto; }
+.tldr strong { display: none; }
+.tldr { display: block; text-align: center; }
+.viewer-shell { border: 1px solid var(--line); background: white; border-radius: 18px; box-shadow: 0 12px 36px #1720330d; }
+.lin-dense-stage { height: auto !important; padding-top: 0; aspect-ratio: 16/9; }
+.lin-dense-stage iframe { width: 100%; height: 100%; display: block; border: 0; }
+.city-modes { display: flex; width: max-content; max-width: 100%; margin: 0 auto 16px; box-shadow: 0 4px 16px #17203306; }
+.switcher-bar { padding: 12px 18px; }
+.switcher-bar h3 { margin: 0; font-size: 1rem; }
+.switcher-caption { display: none; }
+.switcher-image { background: white; }
+.switcher { box-shadow: 0 8px 26px #17203308; }
+.plot-card { box-shadow: none; padding: 14px; }
+.plot-card img { cursor: zoom-in; }
+.method-tracking { margin-bottom: 24px; }
+.method-tracking img { margin-top: 12px; }
+.plot-card img:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
+.abstract { max-width: 760px; text-align: left; }
+footer { padding: 32px 24px; }
+.footer-brand { text-decoration: none; font-weight: 800; }
+.working-notes { margin: 12px auto 0; max-width: 760px; font-size: .75rem; }
+.working-notes summary { cursor: pointer; }
+.working-notes p { margin: 12px 0; }
+.figure-dialog { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 24px; border: 0; background: transparent; overflow: hidden; }
+.figure-dialog[open] { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; animation: figure-enter .22s ease-out; }
+.figure-dialog::backdrop { background: #080c14cc; }
+.figure-tools { display: flex; align-items: center; gap: 16px; padding: 6px 12px; background: #fffffff2; border-radius: 999px; color: var(--ink); font-size: .8rem; }
+.figure-tools button { background: transparent; border: 0; cursor: pointer; min-width: 36px; min-height: 36px; font-size: 1rem; color: inherit; }
+.figure-tools button:disabled { opacity: .35; cursor: default; }
+.figure-tools :focus-visible { outline: 2px solid var(--blue); border-radius: 6px; }
+.figure-sheet { max-width: 1200px; width: 100%; max-height: calc(100dvh - 120px); overflow: auto; background: white; border-radius: 18px; overscroll-behavior: contain; }
+.figure-sheet img { display: block; width: 100%; max-width: none; height: auto; }
+body.figure-open { overflow: hidden; }
+@keyframes figure-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (max-width: 700px) {
+  .section { padding: 42px 13px; }
+  .section-head { margin-bottom: 22px; }
+  .section-head p { font-size: .9rem; }
+  .switcher-bar { gap: 10px; padding: 12px; }
+  .tabs { width: 100%; }
+  .tab { flex: 1; font-size: .75rem; padding: 8px; }
+  .figure-dialog { padding: 12px; }
+  .figure-sheet { border-radius: 12px; }
+  .plot-card h3 { font-size: 1rem; }
+  .plot-card p { font-size: .8rem; }
+}
+@media (prefers-reduced-motion: reduce) { .figure-dialog[open] { animation: none; } }

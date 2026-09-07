@@ -1,0 +1,36 @@
+/* Same filled-bubble control as the optimization scrubber, with native timing. */
+#keyframe-timeline-panel {
+  --keyframe-progress: 100%;
+  box-sizing: border-box;
+  width: 240px; max-width: calc(100vw - 60px); padding: 13px;
+  border: 1px solid rgba(23,32,51,.16); border-radius: 12px;
+  background: rgba(255,255,255,.9); color: #172033;
+  box-shadow: 0 7px 22px rgba(23,32,51,.13);
+  font: 700 11px/1 system-ui, sans-serif; text-align: center; backdrop-filter: blur(8px);
+}
+#keyframe-timeline-panel::before {
+  content: ""; position: absolute; z-index: 0; inset: 0 auto 0 0;
+  width: var(--keyframe-progress);
+  background: linear-gradient(90deg, rgba(0,100,255,.24), rgba(0,185,255,.3));
+}
+#keyframe-label {
+  position: relative; z-index: 1; display: block; margin: 0;
+  font: inherit; letter-spacing: .015em; pointer-events: none;
+}
+#keyframe-slider {
+  position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; margin: 0;
+  appearance: none; background: transparent; cursor: ew-resize; touch-action: none;
+}
+#keyframe-slider::-webkit-slider-runnable-track { height: 100%; border-radius: 0; background: transparent; }
+#keyframe-slider::-webkit-slider-thumb {
+  appearance: none; width: 4px; height: 100%; margin: 0; border: 0;
+  border-radius: 3px; background: rgba(0,100,255,.65);
+}
+#keyframe-slider::-moz-range-track { height: 100%; border-radius: 0; background: transparent; }
+#keyframe-slider::-moz-range-thumb { width: 4px; height: 32px; border: 0; border-radius: 3px; background: rgba(0,100,255,.65); }
+#keyframe-timeline-panel:not([inert]):has(#keyframe-slider:enabled) { outline: 2px solid #0064ff; outline-offset: 3px; }
+#keyframe-slider:focus-visible { outline: none; }
+#keyframe-slider:disabled { cursor: default; }
+@media (max-width: 600px) {
+  #keyframe-timeline-panel { width: 160px; padding: 11px; font-size: 10px; right: 10px; bottom: 10px; }
+}

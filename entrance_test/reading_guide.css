@@ -1,0 +1,73 @@
+/* Explanations stay outside the visuals; protocol details are opt-in. */
+.entrance-title .entrance-promise { max-width: 640px; margin: 0 auto 4px; color: var(--muted); font-size: 1rem; line-height: 1.5; text-wrap: balance; }
+.entrance-title .subtitle { margin-bottom: 16px; }
+.method-explanation, .figure-guide { padding: 16px 18px; }
+.method-explanation p { margin: 0; max-width: 920px; color: var(--muted); font-size: .92rem; line-height: 1.65; }
+.figure-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: .78rem; color: var(--ink); }
+.figure-legend span { display: flex; align-items: center; gap: 7px; }
+.figure-legend i { width: 22px; height: 4px; border-radius: 2px; background: var(--c); }
+.reading-note { margin: 16px 0 0; text-align: left; color: var(--muted); font-size: .85rem; line-height: 1.65; }
+.reading-note summary { width: fit-content; max-width: 100%; cursor: pointer; color: var(--ink); font-weight: 600; }
+.reading-note p { margin: 12px 0 0; }
+.reading-note a { color: var(--blue); text-underline-offset: 3px; }
+.reading-note summary:focus-visible { outline: 2px solid #0064ff; outline-offset: 4px; border-radius: 3px; }
+.scene-note { max-width: 880px; margin: 20px auto 0; }
+.interaction-hint { margin: 0; color: var(--muted); font-size: .78rem; }
+.closing-section { max-width: 880px; }
+.closing-section .actions { justify-content: center; margin: 0 0 28px; }
+.citation { overflow-x: auto; padding: 16px; background: white; border: 1px solid var(--line); border-radius: 12px; font-size: .75rem; }
+.figure-dismiss-hint { margin: 0; color: #fff; font-size: .75rem; }
+.gallery-interaction-hint { display: none; }
+.is-spotlight .gallery-interaction-hint { display: block; position: absolute; top: calc(100% + 12px); left: 0; width: 100%; margin: 0; text-align: center; color: white; font-size: .72rem; }
+.hero-mobile-dock { display: none; }
+.entrance-visual > .hero-summary { opacity: 1; transform: none; max-width: 880px; font-size: 1rem; line-height: 1.65; margin-top: 22px; }
+.method-description { max-width: 860px; margin: 0 auto 26px; text-align: center; color: var(--muted); font-size: 1rem; line-height: 1.7; text-wrap: pretty; }
+.switcher.method-comparison { background: transparent; border: 0; box-shadow: none; overflow: visible; margin-top: 64px; }
+.method-comparison .ablation-frame { border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 8px 26px #17203308; }
+.method-controls { display: flex; justify-content: center; margin: 0 auto 20px; }
+.method-controls .tabs { padding: 5px; border: 1px solid var(--line); border-radius: 20px; background: white; box-shadow: 0 4px 16px #17203306; }
+.method-controls .tab { border-radius: 15px; }
+.method-comparison .figure-legend { justify-content: center; margin-top: 18px; }
+.method-tracking { margin-bottom: 0; }
+#benchmarks .plot-card > p { text-align: center; max-width: 850px; margin: 18px auto 8px; }
+.section-head a { color: inherit; text-underline-offset: 3px; }
+.github-link { min-width: 48px; padding: 9px 14px; }
+.github-link svg { flex: none; display: block; }
+#cite-toggle { font: inherit; font-weight: 700; cursor: pointer; }
+#citation-panel { text-align: left; }
+@media (max-width: 700px) {
+  .entrance-title { padding-top: 45px; padding-bottom: 80px; }
+  .entrance-title .eyebrow { white-space: normal; }
+  .entrance-title .entrance-promise { max-width: 340px; font-size: .83rem; }
+  .entrance-title .subtitle { margin-top: 16px; margin-bottom: 12px; }
+  .entrance-title .authors { margin-top: 14px; }
+  .entrance-title .actions { margin-top: 18px; }
+  .method-explanation, .figure-guide { padding: 13px; }
+  .method-explanation p { font-size: .85rem; }
+  .hero-mobile-dock { display: flex; flex-direction: column; align-items: center; gap: 16px; margin-top: 18px; }
+  .hero-mobile-dock .entrance-optimization-progress { position: relative; inset: auto; flex: none; width: min(240px, calc(100% - 16px)); }
+  .entrance-test .hero-mobile-dock .legend { position: static; display: flex; flex-wrap: wrap; justify-content: center; max-width: 100%; margin: 0; padding: 0; gap: 9px 14px; color: var(--ink); background: transparent; border: 0; box-shadow: none; backdrop-filter: none; font-size: .68rem; }
+  .entrance-test .hero-mobile-dock .legend span { gap: 5px; }
+  .entrance-visual > .caption { margin-top: 14px; }
+  .entrance-visual > .hero-summary { font-size: .82rem; max-width: 100%; line-height: 1.55; }
+  .method-description { font-size: .9rem; margin-bottom: 20px; }
+  .method-controls .tabs { width: auto; max-width: 100%; }
+  .switcher.method-comparison { margin-top: 44px; }
+  .ablation-frame { aspect-ratio: auto; padding-bottom: 70px; }
+  .ablation-frame > .switcher-image { aspect-ratio: 16/9; height: auto; }
+  .ablation-frame > video { bottom: 70px; height: calc(100% - 70px); }
+  .ablation-frame .ablation-scrubber { bottom: 15px; right: 16px; }
+}
+@media (max-height: 650px) and (min-width: 701px) {
+  .entrance-title .entrance-promise { font-size: .85rem; max-width: 580px; }
+}
+@media (max-height: 700px) and (max-width: 700px) {
+  .entrance-title { padding: 28px 20px 78px; }
+  .entrance-title h1 { font-size: 4.8rem; }
+  .entrance-title .subtitle { font-size: 1rem; margin: 12px 0 10px; }
+  .entrance-title .entrance-promise { font-size: .78rem; }
+  .entrance-title .authors { font-size: .75rem; margin-top: 12px; }
+  .entrance-title .affiliations { font-size: .65rem; }
+  .entrance-title .actions { margin-top: 12px; }
+  .entrance-cue { bottom: 12px; }
+}

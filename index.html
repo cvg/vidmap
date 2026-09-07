@@ -1,0 +1,991 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="VidMap reconstructs challenging long videos with video-aware matching, metric depth priors, and robust global optimization.">
+  <title>VidMap — Exploiting Temporal Structure for Video-Based Structure-from-Motion</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #667085;
+      --line: #e5e9f0;
+      --paper: #ffffff;
+      --soft: #f6f8fb;
+      --blue: #0064ff;
+      --blue-dark: #004dcc;
+      --yellow: #ffdc00;
+      --red: #d62728;
+      --radius: 18px;
+      --shadow: 0 18px 55px rgba(23, 32, 51, .10);
+      --content: 1120px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    img, video { display: block; max-width: 100%; }
+    a { color: inherit; }
+    button { font: inherit; }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      border-bottom: 1px solid rgba(229, 233, 240, .85);
+      background: rgba(255, 255, 255, .88);
+      backdrop-filter: blur(15px);
+    }
+    .nav-inner {
+      width: min(calc(100% - 36px), var(--content));
+      min-height: 58px;
+      margin: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand {
+      color: var(--ink);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      text-decoration: none;
+    }
+    .nav-links { display: flex; align-items: center; gap: 20px; }
+    .nav-links a {
+      color: var(--muted);
+      font-size: .9rem;
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .nav-links a:hover { color: var(--blue); }
+
+    .hero {
+      padding: 76px 18px 58px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 15% 10%, rgba(0,100,255,.10), transparent 26rem),
+        radial-gradient(circle at 87% 5%, rgba(255,220,0,.12), transparent 23rem),
+        linear-gradient(180deg, #f8faff 0%, #fff 82%);
+    }
+    .hero-inner { width: min(100%, 1240px); margin: auto; text-align: center; }
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--blue);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 1040px;
+      margin: 0 auto;
+      font-size: clamp(2.45rem, 5.8vw, 5rem);
+      line-height: .99;
+      letter-spacing: -.055em;
+    }
+    .subtitle {
+      max-width: 870px;
+      margin: 24px auto 16px;
+      color: #3f4b62;
+      font-size: clamp(1.1rem, 2vw, 1.48rem);
+      line-height: 1.45;
+    }
+    .authors { margin: 19px 0 4px; font-size: 1.05rem; }
+    .affiliations { margin: 0; color: var(--muted); font-size: .9rem; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin: 26px 0 36px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 18px;
+      border: 1px solid #ccd4e0;
+      border-radius: 999px;
+      background: #fff;
+      color: var(--ink);
+      font-size: .91rem;
+      font-weight: 750;
+      text-decoration: none;
+      box-shadow: 0 4px 16px rgba(23,32,51,.05);
+      transition: transform .18s ease, border-color .18s ease, color .18s ease;
+    }
+    .pill:hover { transform: translateY(-2px); border-color: var(--blue); color: var(--blue); }
+    .pill.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+    .pill.primary:hover { background: var(--blue-dark); color: #fff; }
+
+    .hero-modes {
+      display: inline-flex;
+      gap: 5px;
+      margin: 0 auto 13px;
+      padding: 5px;
+      border: 1px solid #d5dce7;
+      border-radius: 999px;
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 6px 20px rgba(23,32,51,.07);
+    }
+    .hero-mode {
+      padding: 8px 16px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #697488;
+      cursor: pointer;
+      font-size: .84rem;
+      font-weight: 780;
+    }
+    .hero-mode.active { background: var(--ink); color: #fff; }
+    .hero-modes { flex-wrap: wrap; justify-content: center; }
+
+    #hero-optimization { position: absolute; z-index: 3; inset: 0; background: #fff url("entrance_test/web_media/images/complete_official_final_tuners/optimization_gp_smooth/HGE_optimization_blueprint_final_1920x1080.webp?v=gp-quadratic-120fps") center / contain no-repeat; }
+    #optimization-video { position: relative; z-index: 2; display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; background: white; opacity: 0; }
+    #hero-optimization.is-ready #optimization-video { opacity: 1; }
+    .hero-load-error { position: absolute; z-index: 20; top: 16px; left: 16px; right: 16px; padding: 12px 16px; border-radius: 12px; background: #fff; color: #a00; box-shadow: 0 4px 16px #0002; font-size: 14px; }
+    .hero-visual.optimization-active #hero-interactive,
+    .hero-visual.optimization-active #hero-topdown { visibility: hidden; }
+    .hero-visual.optimization-active #hero-blueprint-transition,
+    .hero-visual.optimization-active #hero-projection-progress { display: none; }
+    .optimization-timeline {
+      position: absolute; z-index: 5; right: 16px; bottom: 18px; width: min(300px, calc(100% - 32px));
+      padding: 12px 14px; border: 1px solid rgba(23,32,51,.16); border-radius: 12px;
+      background: rgba(255,255,255,.94); color: #172033; text-align: left;
+      box-shadow: 0 7px 22px rgba(23,32,51,.13); font: 500 12px/1.4 system-ui, sans-serif;
+    }
+    #optimization-label { display: block; margin-bottom: 6px; font-weight: 650; }
+    #optimization-slider {
+      --optimization-progress: 100%; display: block; width: 100%; height: 20px; margin: 0;
+      appearance: none; -webkit-appearance: none; background: transparent; cursor: ew-resize;
+    }
+    #optimization-slider::-webkit-slider-runnable-track {
+      height: 6px; border-radius: 999px;
+      background: linear-gradient(to right, #0064ff 0 var(--optimization-progress), #dce3ed var(--optimization-progress) 100%);
+    }
+    #optimization-slider::-webkit-slider-thumb {
+      appearance: none; -webkit-appearance: none; width: 14px; height: 14px; margin-top: -4px;
+      border: 0; border-radius: 50%; background: #0064ff;
+    }
+    #optimization-slider::-moz-range-track {
+      height: 6px; border-radius: 999px;
+      background: linear-gradient(to right, #0064ff 0 var(--optimization-progress), #dce3ed var(--optimization-progress) 100%);
+    }
+    #optimization-slider::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: #0064ff; }
+    #optimization-slider:disabled { cursor: default; }
+    #optimization-slider:focus-visible { outline: 2px solid #0064ff; outline-offset: 4px; border-radius: 8px; }
+    .lin-dense-stage { position: relative; padding-top: calc(56.25% + 68px); background: #fff; }
+    #lin-dense .switcher-bar { background: #fff; }
+    .lin-dense-stage iframe { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border: 0; }
+
+    .hero-visual {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #d9dfe9;
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 30px 85px rgba(11,18,31,.20);
+    }
+    .hero-visual img { width: 100%; aspect-ratio: 16/9; object-fit: cover; }
+    .hero-panel[hidden] { display: none; }
+    #hero-topdown.transition-cover {
+      position: absolute;
+      z-index: 3;
+      inset: 0;
+      pointer-events: none;
+    }
+    #hero-interactive {
+      position: relative;
+      z-index: 2;
+      pointer-events: none;
+    }
+    #hero-interactive.is-interactive { pointer-events: auto; }
+    #hero-blueprint-transition {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      overflow: hidden;
+      background: #fff;
+      pointer-events: none;
+    }
+    #hero-blueprint-transition[hidden] { display: none; }
+    .hero-blueprint-floorplan {
+      position: absolute;
+      inset: 0;
+      background-image: url("entrance_test/web_media/images/complete_official_final_tuners/HGE_floorplan_dark_gray_on_black.webp");
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
+      filter: invert(1);
+      transform: translate(.8359375%, -.0462962963%) scale(.8015);
+      transform-origin: center center;
+    }
+    .hero-interactive-frame {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16/9;
+      border: 0;
+      background: transparent;
+    }
+    #hero-projection-progress {
+      --progress: 0%;
+      position: absolute; z-index: 5; top: 16px; right: 16px; width: 240px;
+      overflow: hidden; padding: 13px; border: 1px solid rgba(23,32,51,.16);
+      border-radius: 12px; background: rgba(255,255,255,.9); color: #172033;
+      box-shadow: 0 7px 22px rgba(23,32,51,.13);
+      font: 700 11px/1 system-ui, sans-serif; pointer-events: none;
+      backdrop-filter: blur(8px); transition: opacity .45s ease, transform .45s ease;
+    }
+    #hero-projection-progress::before {
+      content: ""; position: absolute; z-index: 0; inset: 0 auto 0 0;
+      width: var(--progress);
+      background: linear-gradient(90deg, rgba(0,100,255,.24), rgba(0,185,255,.3));
+    }
+    #hero-projection-progress.complete { opacity: 0; transform: translateY(-6px); }
+    #hero-projection-progress[hidden] { display: none; }
+    .hero-projection-progress-labels {
+      position: relative; z-index: 1; display: flex; align-items: center;
+      justify-content: space-between; letter-spacing: .015em;
+    }
+    .hero-projection-progress-arrow { color: #6f7786; font-weight: 600; }
+    .legend {
+      position: absolute;
+      z-index: 4;
+      left: 18px;
+      bottom: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 10px;
+      background: rgba(5,7,10,.70);
+      color: #fff;
+      font-size: .72rem;
+      backdrop-filter: blur(10px);
+    }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .hero-visual.optimization-active .legend .baseline-legend { display: none; }
+    .hero-visual.keyframes-visible .legend { max-width: calc(58% - 36px); pointer-events: none; }
+    .dot { width: 18px; height: 3px; border-radius: 2px; background: var(--c); }
+    .caption { margin: 13px auto 0; color: var(--muted); font-size: .9rem; }
+
+    .section { padding: 82px 18px; }
+    .section.alt { background: var(--soft); }
+    .wrap { width: min(100%, var(--content)); margin: auto; }
+    .section-head { max-width: 820px; margin: 0 auto 34px; text-align: center; }
+    .section-label {
+      margin: 0 0 9px;
+      color: var(--blue);
+      font-size: .74rem;
+      font-weight: 850;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h2 { margin: 0; font-size: clamp(1.9rem, 4vw, 3rem); line-height: 1.12; letter-spacing: -.04em; }
+    h3 { margin: 0; font-size: 1.12rem; letter-spacing: -.018em; }
+    .section-head p { margin: 14px auto 0; color: var(--muted); font-size: 1.02rem; }
+
+    .tldr {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      padding: 25px 28px;
+      border: 1px solid #dce3ed;
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+    .tldr strong {
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--ink);
+      color: #fff;
+      font-size: .77rem;
+      letter-spacing: .08em;
+    }
+    .tldr p { margin: 0; font-size: clamp(1.05rem, 2vw, 1.3rem); }
+
+    .video-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .media-card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 13px 38px rgba(23,32,51,.07);
+    }
+    .video-stage {
+      display: grid;
+      place-items: center;
+      height: min(62vh, 620px);
+      overflow: hidden;
+      background: #080b11;
+    }
+    .video-stage video { width: 100%; height: 100%; object-fit: contain; }
+    #video-flythroughs .media-card { border: 0; background: #000; }
+    .flythrough-stage { position: relative; aspect-ratio: 16 / 9; background: #000; cursor: pointer; touch-action: manipulation; }
+    .flythrough-stage:focus-visible { outline: 3px solid #0064ff; outline-offset: -3px; }
+    .flythrough-stage video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+    .flythrough-title { position: absolute; left: 18px; bottom: 16px; margin: 0; color: #fff; font-size: clamp(1rem, 1.7vw, 1.25rem); font-weight: 650; line-height: 1.3; text-shadow: 0 1px 5px #000b, 0 2px 14px #0008; pointer-events: none; }
+    .flythrough-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgba(8, 12, 20, .8); }
+    #video-flythroughs .media-card.is-spotlight { position: fixed; z-index: 1001; margin: 0; overflow: visible; box-shadow: 0 24px 100px #0009; }
+    .is-spotlight .flythrough-stage { width: 100%; height: 100%; overflow: hidden; border-radius: inherit; }
+    .card-copy { padding: 18px 20px 20px; }
+    .card-copy p { margin: 6px 0 0; color: var(--muted); font-size: .9rem; }
+    .card-topline { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .duration { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
+
+    .filmstrip {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(110px, 1fr));
+      gap: 8px;
+      overflow-x: auto;
+      padding: 3px 3px 13px;
+      scrollbar-color: #b8c1cf transparent;
+    }
+    .frame {
+      position: relative;
+      overflow: hidden;
+      min-width: 110px;
+      border-radius: 10px;
+      background: #dfe4eb;
+      aspect-ratio: 3/4;
+    }
+    .frame img { width: 100%; height: 100%; object-fit: cover; }
+    .frame span {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      left: 6px;
+      overflow: hidden;
+      padding: 4px 5px;
+      border-radius: 5px;
+      background: rgba(0,0,0,.62);
+      color: #fff;
+      font: 600 .57rem/1.1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .strip-label { margin: 25px 0 10px; color: var(--muted); font-size: .83rem; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+
+    .viewer-shell {
+      overflow: hidden;
+      border: 1px solid #272e3a;
+      border-radius: 20px;
+      background: #07090d;
+      box-shadow: 0 24px 70px rgba(7,9,13,.18);
+    }
+    .viewer-placeholder {
+      position: relative;
+      display: grid;
+      min-height: 520px;
+      place-items: center;
+      background-image:
+        linear-gradient(rgba(4,7,12,.46), rgba(4,7,12,.72)),
+        url("entrance_test/web_media/images/complete_official_final_tuners/uncapped_cov80_topdown_snapshot_3840x2160.webp?v=alignment-20260906");
+      background-position: center;
+      background-size: cover;
+    }
+    .viewer-cta { max-width: 560px; padding: 30px; color: #fff; text-align: center; }
+    .viewer-cta h3 { font-size: clamp(1.4rem, 3vw, 2rem); }
+    .viewer-cta p { margin: 10px 0 19px; color: #d2d8e2; }
+    .viewer-button {
+      padding: 11px 17px;
+      border: 1px solid rgba(255,255,255,.35);
+      border-radius: 999px;
+      background: #fff;
+      color: #111827;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    .viewer-frame { width: 100%; aspect-ratio: 16/9; border: 0; background: #05070a; }
+    .viewer-footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 15px;
+      border-top: 1px solid #272e3a;
+      color: #aeb7c6;
+      font-size: .8rem;
+    }
+    .viewer-footer a { color: #fff; font-weight: 750; text-decoration: none; }
+
+    .switcher {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 12px 36px rgba(23,32,51,.06);
+    }
+    .switcher + .switcher { margin-top: 28px; }
+    .switcher-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .tabs { display: flex; gap: 5px; padding: 4px; border-radius: 999px; background: #eef2f7; }
+    .tab {
+      padding: 7px 13px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #5d687b;
+      cursor: pointer;
+      font-size: .83rem;
+      font-weight: 750;
+    }
+    .tab.active { background: #fff; color: var(--blue); box-shadow: 0 2px 8px rgba(23,32,51,.10); }
+    .switcher-image { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #030609; }
+    .switcher-caption { padding: 12px 18px 16px; color: var(--muted); font-size: .86rem; }
+
+    .plot-grid { display: grid; gap: 24px; }
+    .plot-card { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: 0 12px 36px rgba(23,32,51,.06); }
+    .plot-card img { width: 100%; border-radius: 10px; background: #fff; }
+    .plot-card h3 { margin: 8px 8px 4px; }
+    .plot-card p { margin: 4px 8px 8px; color: var(--muted); font-size: .87rem; }
+
+    .abstract { max-width: 880px; margin: auto; font-size: 1.02rem; text-align: justify; }
+    .abstract p { margin: 0; }
+    .local-note {
+      margin-top: 30px;
+      padding: 18px 20px;
+      border-left: 4px solid var(--blue);
+      border-radius: 0 10px 10px 0;
+      background: #eef5ff;
+      color: #354159;
+      font-size: .9rem;
+    }
+
+    footer { padding: 35px 18px 45px; border-top: 1px solid var(--line); color: var(--muted); text-align: center; font-size: .82rem; }
+
+    @media (max-width: 800px) {
+      .nav-links a:nth-child(-n+2) { display: none; }
+      .hero { padding-top: 56px; }
+      .video-grid { grid-template-columns: 1fr; }
+      .video-stage { height: 520px; }
+      .switcher-bar { align-items: flex-start; flex-direction: column; }
+      .viewer-placeholder { min-height: 390px; }
+    }
+    @media (max-width: 520px) {
+      .nav-inner { width: min(calc(100% - 24px), var(--content)); }
+      .nav-links { gap: 12px; }
+      .nav-links a { font-size: .78rem; }
+      .section { padding: 62px 13px; }
+      .hero { padding-right: 12px; padding-left: 12px; }
+      .tldr { grid-template-columns: 1fr; padding: 21px; }
+      .tldr strong { width: max-content; }
+      .video-stage { height: 440px; }
+      .legend { display: none; }
+      .tabs { max-width: 100%; overflow-x: auto; }
+      .tab { white-space: nowrap; }
+    }
+  </style>
+<link rel="stylesheet" href="entrance_test/entrance.css?v=bottom-right-scrubber">
+<link rel="stylesheet" href="entrance_test/polish.css?v=1">
+<link rel="stylesheet" href="entrance_test/ablation_players.css">
+<link rel="stylesheet" href="entrance_test/reading_guide.css">
+<link rel="canonical" href="https://cvg.github.io/vidmap/">
+<link rel="icon" href="data:,">
+</head>
+<body>
+  <nav class="nav" aria-label="Page navigation">
+    <div class="nav-inner">
+      <a class="brand" href="#top">VidMap</a>
+      <div class="nav-links">
+        <a href="#lin-dense">City-scale</a>
+        <a href="#video-flythroughs">Flythroughs</a>
+        <a href="#ablations">How it works</a>
+        <a href="#benchmarks">Benchmarks</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero entrance-test" id="top">
+    <div class="hero-inner entrance-stage">
+      <div class="entrance-title">
+      <p class="eyebrow">From video to a global map</p>
+      <h1>VidMap</h1>
+      <p class="subtitle">Exploiting Temporal Structure for Video-Based Structure-from-Motion</p>
+      <p class="authors">Zador Pataki<sup>1</sup> · Paul-Edouard Sarlin<sup>2</sup> · Marc Pollefeys<sup>1,3</sup></p>
+      <p class="affiliations"><sup>1</sup>ETH Zurich &nbsp; <sup>2</sup>Google &nbsp; <sup>3</sup>Microsoft Spatial AI Lab</p>
+      <div class="actions">
+        <a class="pill primary" href="https://arxiv.org/abs/2607.27194" target="_blank" rel="noreferrer">Paper</a>
+        <a class="pill github-link" href="https://github.com/cvg/vidmap" target="_blank" rel="noreferrer" aria-label="VidMap on GitHub"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.23c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.6-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.3c0 .32.22.7.83.58A12 12 0 0 0 24 12.5C24 5.87 18.63.5 12 .5Z"/></svg></a>
+        <a class="pill" href="#entrance-view" data-entrance-skip>Explore VidMap</a>
+      </div>
+      </div>
+      <div class="entrance-visual" id="entrance-view" inert>
+      <div class="hero-modes" role="tablist" aria-label="Reconstruction display mode">
+        <button class="hero-mode active" type="button" role="tab" data-hero-mode="topdown" aria-selected="true">Playback + baselines</button>
+        <button class="hero-mode" type="button" role="tab" data-hero-mode="interactive" aria-selected="false">Interactive reconstruction</button>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-panel" id="hero-topdown">
+          <img src="entrance_test/web_media/images/complete_official_final_tuners/uncapped_cov80_topdown_snapshot_3840x2160.webp?v=alignment-20260906" alt="Top-down reconstruction captured from the interactive viewer with VidMap, ground truth, and baseline trajectories">
+        </div>
+        <div class="hero-panel" id="hero-interactive" hidden></div>
+        <div class="hero-panel" id="hero-optimization" hidden>
+          <video id="optimization-video" preload="none" muted playsinline disablepictureinpicture
+                 poster="entrance_test/web_media/images/complete_official_final_tuners/optimization_gp_smooth/HGE_optimization_blueprint_final_1920x1080.webp?v=gp-quadratic-120fps"
+                 aria-label="Recorded optimization in the matched blueprint view"></video>
+          <div class="optimization-timeline" aria-busy="true">
+            <label id="optimization-label" for="optimization-slider">Loading optimization…</label>
+            <input id="optimization-slider" type="range" min="0" max="1679" step="1" value="1679" data-fps="120" data-substeps="4" disabled aria-label="Smooth GP interpolation, recorded BA states, and the final covariance display filter">
+          </div>
+        </div>
+        <div id="hero-blueprint-transition" hidden aria-hidden="true">
+          <div class="hero-blueprint-floorplan"></div>
+        </div>
+        <div class="legend" aria-label="Trajectory legend">
+          <span><i class="dot" style="--c:#0064ff"></i>VidMap</span>
+          <span><i class="dot" style="--c:#ffdc00"></i>Ground truth</span>
+          <span class="baseline-legend"><i class="dot" style="--c:#ff8000"></i>DA3-Long</span>
+          <span class="baseline-legend"><i class="dot" style="--c:#78ff50"></i>VIPE</span>
+          <span class="baseline-legend"><i class="dot" style="--c:#ff28b4"></i>LOGER</span>
+          <span class="baseline-legend"><i class="dot" style="--c:#00e6ff"></i>LingBotMap</span>
+        </div>
+        <div id="hero-projection-progress" role="progressbar" hidden
+             aria-label="Orthographic to perspective transition"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="hero-projection-progress-labels">
+            <span>Orthographic</span>
+            <span class="hero-projection-progress-arrow">→</span>
+            <span>Perspective</span>
+          </div>
+        </div>
+      </div>
+      <p class="caption hero-summary" id="hero-caption">VidMap reconstructs challenging long videos by integrating video-aware matching, metric depth priors, and robust loop-closure handling into global optimization</p>
+      </div>
+      <a class="entrance-cue" href="#entrance-view" data-entrance-skip><span>Scroll to explore</span><span aria-hidden="true">↓</span></a>
+    </div>
+  </header>
+
+  <main>
+
+
+    <section class="section alt" id="lin-dense">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Large-scale reconstruction</h2>
+          <p>VidMap’s camera poses, combined with <a href="https://arxiv.org/abs/2601.04185" target="_blank" rel="noreferrer">dense triangulation</a>, recover dense geometry along a kilometer-long route through Zurich’s old town.</p>
+        </div>
+        <div class="hero-modes city-modes" role="tablist" aria-label="City-scale views">
+            <button id="city-flythrough-tab" class="hero-mode active" type="button" role="tab" data-city-mode="flythrough" aria-selected="true" aria-controls="lin-comparison">Trajectory playback</button>
+            <button id="city-baselines-tab" class="hero-mode" type="button" role="tab" data-city-mode="baselines" aria-selected="false" aria-controls="lin-comparison" tabindex="-1">Baselines</button>
+          </div>
+        <div class="viewer-shell">
+          <div class="lin-dense-stage">
+            <iframe id="lin-comparison" title="Synchronized city-scale comparison with original camera frames" src="entrance_test/lin_comparison.html?embedded=1" loading="lazy" allow="autoplay; fullscreen 'none'"></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="video-flythroughs">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Reconstructing videos from the web</h2>
+          <p>From fast motion to unfamiliar environments, VidMap recovers accurate camera trajectories and 3D structure across diverse videos.</p>
+        </div>
+        <div class="video-grid">
+          <article class="media-card">
+            <div class="flythrough-stage">
+              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/drone.jpg?v=rgb-intro" aria-label="Racing drone reconstruction flythrough with synchronized camera footage">
+                <source src="entrance_test/web_media/gallery_media/drone.mp4?v=crf30" type="video/mp4">
+              </video>
+              <h3 class="flythrough-title">Racing drone</h3>
+            </div>
+          </article>
+          <article class="media-card">
+            <div class="flythrough-stage">
+              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/vienna.jpg?v=rgb-intro" aria-label="Cycling tour reconstruction flythrough with synchronized camera footage">
+                <source src="entrance_test/web_media/gallery_media/vienna.mp4?v=crf30" type="video/mp4">
+              </video>
+              <h3 class="flythrough-title">Cycling tour</h3>
+            </div>
+          </article>
+          <article class="media-card">
+            <div class="flythrough-stage">
+              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/forest.jpg?v=rgb-intro" aria-label="Forest walk reconstruction flythrough with synchronized camera footage">
+                <source src="entrance_test/web_media/gallery_media/forest.mp4?v=crf30" type="video/mp4">
+              </video>
+              <h3 class="flythrough-title">Forest walk</h3>
+            </div>
+          </article>
+          <article class="media-card">
+            <div class="flythrough-stage">
+              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/nightreign.jpg?v=rgb-intro" aria-label="Video game reconstruction flythrough with synchronized camera footage">
+                <source src="entrance_test/web_media/gallery_media/nightreign.mp4?v=crf30" type="video/mp4">
+              </video>
+              <h3 class="flythrough-title">Video game</h3>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" id="ablations">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>How it works</h2>
+
+        </div>
+
+        <p class="method-description">Dense image matching propagates sparse tracks across keyframes, building long, accurate tracks. Multi-flow propagation further reduces drift by selecting reliable matches from multiple preceding keyframes.</p><article class="plot-card method-tracking"><img loading="lazy" src="entrance_test/web_media/images/entrance_test/plots/tracker_ablation_recall_combined_benchmark_style.webp" alt="Tracker recall on ETH3D SLAM and LaMAR"></article>
+
+        <article class="switcher method-comparison" data-switcher data-ablation-player>
+          <p class="method-description">Visually similar places can create false loop closures. Provenance-aware losses distinguish sequential tracks from loop-closure matches, preserving reliable temporal constraints while suppressing visual aliasing.</p><div class="method-controls"><div class="tabs" role="tablist" aria-label="Provenance-aware loss ablation">
+              <button class="tab active" type="button" data-src="entrance_test/web_media/images/final_figure_pngs_3840x2160/control_gp2_scale005_final_frame_3840x2160.webp" data-ablation-key="loop_control" data-ablation-video="entrance_test/web_media/ablation_media/loop_control.mp4?v=color-matrix-601" data-caption="Matched control with loop-closure-specific losses." aria-selected="true">VidMap</button>
+              <button class="tab" type="button" data-src="entrance_test/web_media/images/final_figure_pngs_3840x2160/ablation_lc_match_normal_final_frame_3840x2160.webp" data-ablation-key="no_loop_losses" data-ablation-video="entrance_test/web_media/ablation_media/no_loop_losses.mp4" data-caption="Ablation with the loop-closure-specific loss paths disabled." aria-selected="false">Without provenance-aware losses</button>
+            </div></div>
+          <div class="ablation-frame">
+          <img loading="lazy" decoding="async" class="switcher-image" src="entrance_test/web_media/images/final_figure_pngs_3840x2160/control_gp2_scale005_final_frame_3840x2160.webp" alt="Reconstruction with and without provenance-aware losses">
+          <video muted playsinline disablepictureinpicture preload="none" aria-label="Recorded optimization playback"></video>
+          <div class="ablation-scrubber">
+            <span class="ablation-label">Bundle Adjustment + Filtering</span>
+            <input type="range" min="0" max="1000" value="1000" step="1" aria-label="Optimization playback" disabled>
+          </div>
+        </div><div class="figure-legend" aria-label="Trajectories and loop-edge treatment in optimization"><span><i style="--c:#0064ff"></i>VidMap</span><span><i style="--c:#ffdd00"></i>Ground truth</span><span><i style="--c:#f04646"></i>Outlier</span><span><i style="--c:#00d282"></i>Inlier</span></div><div class="switcher-caption">Matched control with loop-closure-specific losses.</div>
+        </article>
+
+        <article class="switcher method-comparison" data-switcher data-ablation-player>
+          <p class="method-description">Monocular depth priors regularize global positioning, resolving geometric ambiguities and limiting scale drift when camera motion provides weak multi-view constraints.</p><div class="method-controls"><div class="tabs" role="tablist" aria-label="Depth ablation">
+              <button class="tab active" type="button" data-src="entrance_test/web_media/images/final_figure_pngs_3840x2160/original_final_frame_3840x2160.webp" data-ablation-key="depth_control" data-ablation-video="entrance_test/web_media/ablation_media/depth_control.mp4" data-caption="Full VidMap reconstruction." aria-selected="true">VidMap</button>
+              <button class="tab" type="button" data-src="entrance_test/web_media/images/final_figure_pngs_3840x2160/no_depth_final_frame_3840x2160.webp" data-ablation-key="no_depth" data-ablation-video="entrance_test/web_media/ablation_media/no_depth.mp4" data-caption="Ablation without metric depth constraints." aria-selected="false">Without depth</button>
+            </div></div>
+          <div class="ablation-frame">
+          <img loading="lazy" decoding="async" class="switcher-image" src="entrance_test/web_media/images/final_figure_pngs_3840x2160/original_final_frame_3840x2160.webp" alt="Depth ablation reconstruction">
+          <video muted playsinline disablepictureinpicture preload="none" aria-label="Recorded optimization playback"></video>
+          <div class="ablation-scrubber">
+            <span class="ablation-label">Bundle Adjustment + Filtering</span>
+            <input type="range" min="0" max="1000" value="1000" step="1" aria-label="Optimization playback" disabled>
+          </div>
+        </div><div class="figure-legend" aria-label="Trajectory legend"><span><i style="--c:#0064ff"></i>VidMap</span><span><i style="--c:#ffdd00"></i>Ground truth</span></div><div class="switcher-caption">Full VidMap reconstruction.</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="benchmarks">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Accuracy across benchmarks</h2>
+          <p>State-of-the-art reconstruction of long, complex sequences across diverse visual domains.</p>
+        </div>
+        <div class="plot-grid">
+          <article class="plot-card">
+            <img loading="lazy" src="entrance_test/web_media/images/entrance_test/plots/video_benchmark_curves_arxiv_v1_compact_calibration_pairs.webp" alt="Compact paired calibrated and uncalibrated benchmark plots">
+
+            <p>Higher is better throughout. The top row varies the allowed position error; the bottom row varies the length of trajectory being evaluated. Red denotes VidMap in these plots.</p>
+          </article>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" id="abstract"><div class="wrap closing-section">
+      <div class="section-head"><h2>Explore VidMap</h2><p>Explore the method, reproduce the experiments, or use the code on your own videos.</p></div>
+      <div class="actions"><a class="pill primary" href="https://arxiv.org/abs/2607.27194" target="_blank" rel="noreferrer">Read the paper</a><a class="pill github-link" href="https://github.com/cvg/vidmap" target="_blank" rel="noreferrer" aria-label="VidMap on GitHub"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.23c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.6-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.3c0 .32.22.7.83.58A12 12 0 0 0 24 12.5C24 5.87 18.63.5 12 .5Z"/></svg></a><button class="pill" id="cite-toggle" type="button" aria-expanded="false" aria-controls="citation-panel">Cite the paper</button></div>
+      <div id="citation-panel" hidden><pre class="citation">@article{pataki2026vidmap,
+  title={VidMap: Exploiting Temporal Structure for Video-Based Structure-from-Motion},
+  author={Pataki, Zador and Sarlin, Paul-Edouard and Pollefeys, Marc},
+  journal={arXiv preprint arXiv:2607.27194},
+  year={2026}
+}</pre></div></div></section>
+  </main>
+
+
+
+  <script>
+    const heroModes = document.querySelectorAll('[data-hero-mode]');
+    const heroTopdown = document.getElementById('hero-topdown');
+    const heroInteractive = document.getElementById('hero-interactive');
+    const heroBlueprintTransition = document.getElementById('hero-blueprint-transition');
+    const heroCaption = document.getElementById('hero-caption');
+    const heroProjectionProgress = document.getElementById('hero-projection-progress');
+    const heroOptimization = document.getElementById('hero-optimization');
+    const optimizationVideo = document.getElementById('optimization-video');
+    let optimizationLoaded = false;
+    const optimizationSlider = document.getElementById('optimization-slider');
+    const optimizationFps = Number(optimizationSlider.dataset.fps || 30);
+    const optimizationSubsteps = Number(optimizationSlider.dataset.substeps || 1);
+    const optimizationLabel = document.getElementById('optimization-label');
+    let heroMode = 'topdown';
+    let heroOnscreen = true;
+    let optimizationTarget = Number(optimizationSlider.max);
+    let optimizationSeekRequest = null;
+
+    function seekOptimization() {
+      optimizationSeekRequest = null;
+      if (optimizationVideo.readyState < 1 || optimizationVideo.seeking) return;
+      // Seek an encoded sample's midpoint. GP can include intermediate samples;
+      // BA samples hold a recorded state. Never autoplay.
+      const time = (optimizationTarget + .5) / optimizationFps;
+      if (Math.abs(optimizationVideo.currentTime - time) < .00001 && optimizationVideo.readyState >= 2) {
+        commitOptimizationSeek();
+      } else {
+        optimizationVideo.currentTime = time;
+      }
+    }
+
+    function commitOptimizationSeek() {
+      const displayed = Math.min(Number(optimizationSlider.max), Math.floor(optimizationVideo.currentTime * optimizationFps));
+      if (displayed !== optimizationTarget) {
+        seekOptimization();
+        return;
+      }
+      const percent = Math.round(100 * optimizationTarget / Number(optimizationSlider.max));
+      const sourceState = Math.floor(optimizationTarget / optimizationSubsteps);
+      optimizationLabel.textContent = optimizationTarget === 0 ? 'Optimization · Initial state'
+        : sourceState === 419 ? 'Final display filter · Lowest-covariance 80%'
+        : sourceState === 418 ? 'Optimization · Final state before display filtering'
+        : sourceState >= 378 ? `Final refinement and filtering · ${percent}%`
+        : sourceState < 33 ? `Global positioning 1 · ${percent}%`
+        : sourceState < 79 ? `Global positioning 2 · ${percent}%`
+        : `Optimization · ${percent}%`;
+      optimizationSlider.setAttribute('aria-valuetext', optimizationLabel.textContent);
+      optimizationSlider.dataset.displayedFrame = String(optimizationTarget);
+      optimizationSlider.dataset.sourceState = String(sourceState);
+      optimizationSlider.disabled = false;
+      heroOptimization.classList.add('is-ready');
+      heroOptimization.querySelector('.optimization-timeline').setAttribute('aria-busy', 'false');
+    }
+    optimizationVideo.addEventListener('loadedmetadata', seekOptimization);
+    optimizationVideo.addEventListener('seeked', commitOptimizationSeek);
+    optimizationVideo.addEventListener('error', () => {
+      optimizationLabel.textContent = 'Video could not load. Keep the HTML and its asset folders together, then reload.';
+      heroOptimization.querySelector('.optimization-timeline').setAttribute('aria-busy', 'false');
+    });
+
+    function loadOptimization() {
+      if (optimizationLoaded) return;
+      optimizationLoaded = true;
+      optimizationVideo.preload = 'auto';
+      optimizationVideo.src = 'complete_official_final_tuners/optimization_gp_smooth/HGE_optimization_blueprint_1920x1080.mp4?v=gp-quadratic-120fps';
+      optimizationVideo.load();
+    }
+    optimizationSlider.addEventListener('input', () => {
+      optimizationTarget = Number(optimizationSlider.value);
+      optimizationSlider.style.setProperty('--optimization-progress', `${100 * optimizationTarget / Number(optimizationSlider.max)}%`);
+      heroOptimization.querySelector('.optimization-timeline').setAttribute('aria-busy', 'true');
+      // One decode at a time; fast drags skip stale targets on the next seek.
+      if (optimizationSeekRequest === null) optimizationSeekRequest = requestAnimationFrame(seekOptimization);
+    });
+    let heroInteractiveLoaded = false;
+    let heroInteractiveFrame = null;
+    let heroProgressFadeTimer = null;
+    let heroViewerReady = false;
+    let heroInteractiveRequested = false;
+    const heroLoadError = document.createElement('div');
+    heroLoadError.className = 'hero-load-error';
+    heroLoadError.setAttribute('role', 'alert');
+    heroLoadError.hidden = true;
+    heroInteractive.closest('.hero-visual').appendChild(heroLoadError);
+    window.addEventListener('message', event => {
+      const isHero = heroInteractiveFrame !== null && event.source === heroInteractiveFrame.contentWindow;
+      if (!isHero || event.data?.type !== 'vidmap-viewer-error') return;
+      heroLoadError.textContent = 'Viewer could not start: ' + event.data.message;
+      heroLoadError.hidden = false;
+    });
+    new IntersectionObserver(entries => {
+      heroOnscreen = entries[0].isIntersecting;
+      if (heroInteractiveFrame !== null) {
+        heroInteractiveFrame.contentWindow.postMessage({type: 'vidmap-render-visibility', visible: heroOnscreen && heroMode !== 'optimization' && !window.vidmapEntranceIntro?.active}, '*');
+      }
+    }).observe(heroInteractive.closest('.hero-visual'));
+
+    function setHeroViewerInteraction(enabled) {
+      heroInteractive.classList.toggle('is-interactive', enabled);
+      heroInteractive.inert = !enabled;
+      heroInteractive.setAttribute('aria-hidden', String(!enabled));
+      if (heroInteractiveFrame !== null) {
+        heroInteractiveFrame.tabIndex = enabled ? 0 : -1;
+      }
+    }
+
+    function stageHeroTopdown() {
+      heroInteractive.closest('.hero-visual').classList.remove('keyframes-visible');
+      if (heroProgressFadeTimer !== null) clearTimeout(heroProgressFadeTimer);
+      heroProgressFadeTimer = null;
+      heroTopdown.hidden = heroViewerReady;
+      heroTopdown.classList.toggle('transition-cover', !heroViewerReady);
+      heroBlueprintTransition.hidden = false;
+      heroBlueprintTransition.style.opacity = '1';
+      heroProjectionProgress.hidden = true;
+      heroProjectionProgress.classList.remove('complete');
+      heroProjectionProgress.style.setProperty('--progress', '0%');
+      heroProjectionProgress.setAttribute('aria-valuenow', '0');
+    }
+
+    function createHeroViewer() {
+      if (heroInteractiveLoaded) return;
+      heroViewerReady = false;
+      heroInteractive.hidden = false;
+      const frame = document.createElement('iframe');
+      frame.className = 'hero-interactive-frame';
+      frame.title = 'Interactive reconstruction without floor plan';
+      frame.src = 'entrance_test/interactive_viewer.html?v=matched-keyframe-bubble&hideProgress=1&hideLoopClosures=1&showComparisonPaths=1&transparentBackground=1&waitForStart=1&keyframes=1';
+      frame.allowFullscreen = true;
+      heroInteractive.appendChild(frame);
+      heroInteractiveFrame = frame;
+      heroInteractiveLoaded = true;
+      setHeroViewerInteraction(heroInteractiveRequested);
+      stageHeroTopdown();
+    }
+
+    function resetFrozenHeroViewer() {
+      stageHeroTopdown();
+      heroInteractiveFrame.contentWindow.postMessage({ type: 'vidmap-reset-topdown' }, '*');
+    }
+
+    window.addEventListener('message', (event) => {
+      if (heroInteractiveFrame === null || event.source !== heroInteractiveFrame.contentWindow) return;
+      const transitionType = event.data?.type;
+      if (transitionType === 'vidmap-keyframes-reveal' && heroInteractiveRequested) {
+        heroInteractive.closest('.hero-visual').classList.add('keyframes-visible');
+        return;
+      }
+      if (transitionType === 'vidmap-keyframes-ready' && heroInteractiveRequested) {
+        setHeroViewerInteraction(true);
+
+        return;
+      }
+      if (transitionType === 'vidmap-viewer-ready') {
+        heroViewerReady = true;
+        heroInteractiveFrame.contentWindow.postMessage({ type: 'vidmap-render-visibility', visible: heroOnscreen && heroMode !== 'optimization' && !window.vidmapEntranceIntro?.active }, '*');
+        heroTopdown.hidden = true;
+        heroTopdown.classList.remove('transition-cover');
+        if (heroInteractiveRequested) {
+          heroInteractiveFrame.contentWindow.postMessage({ type: 'vidmap-start-transition' }, '*');
+        }
+        return;
+      }
+      if (transitionType !== 'vidmap-appearance-progress' &&
+          transitionType !== 'vidmap-projection-progress') return;
+      if (!heroInteractiveRequested) return;
+      const progress = Math.min(Math.max(Number(event.data.progress), 0), 1);
+      if (!Number.isFinite(progress)) return;
+
+      if (transitionType === 'vidmap-appearance-progress') {
+        heroBlueprintTransition.style.opacity = `${1 - progress}`;
+        if (progress >= 1) {
+          heroBlueprintTransition.hidden = true;
+          heroBlueprintTransition.style.removeProperty('opacity');
+        }
+        return;
+      }
+
+      heroProjectionProgress.hidden = false;
+      heroProjectionProgress.style.setProperty('--progress', `${progress * 100}%`);
+      heroProjectionProgress.setAttribute('aria-valuenow', `${Math.round(progress * 100)}`);
+
+      if (progress >= 1) {
+        heroProgressFadeTimer = setTimeout(
+          () => heroProjectionProgress.classList.add('complete'),
+          550
+        );
+      }
+    });
+
+    heroModes.forEach((button) => {
+      button.addEventListener('click', () => {
+        const nextMode = button.dataset.heroMode;
+        if (nextMode === heroMode) return;
+        const interactive = nextMode === 'interactive';
+        const wasInteractive = heroInteractiveRequested;
+        heroMode = nextMode;
+        heroInteractiveRequested = interactive;
+        setHeroViewerInteraction(interactive);
+        heroOptimization.hidden = nextMode !== 'optimization';
+        heroInteractive.closest('.hero-visual').classList.toggle('optimization-active', nextMode === 'optimization');
+        heroModes.forEach((item) => {
+          const active = item === button;
+          item.classList.toggle('active', active);
+          item.setAttribute('aria-selected', String(active));
+        });
+
+
+        if (interactive) {
+          heroProjectionProgress.hidden = false;
+          heroProjectionProgress.classList.remove('complete');
+          heroProjectionProgress.style.setProperty('--progress', '0%');
+          heroProjectionProgress.setAttribute('aria-valuenow', '0');
+          createHeroViewer();
+          if (heroViewerReady) {
+            heroInteractiveFrame.contentWindow.postMessage({ type: 'vidmap-start-transition' }, '*');
+          }
+        } else if (wasInteractive) {
+          resetFrozenHeroViewer();
+        }
+        if (nextMode === 'optimization') {
+
+          loadOptimization();
+        }
+        if (heroInteractiveFrame !== null) {
+          heroInteractiveFrame.contentWindow.postMessage({ type: 'vidmap-render-visibility', visible: heroOnscreen && nextMode !== 'optimization' }, '*');
+        }
+        optimizationVideo.pause();
+      });
+    });
+
+    // Preload the real viewer as the frozen top-down state. The PNG is shown
+    // only until this same WebGL canvas has rendered its initial black frame.
+    setHeroViewerInteraction(false);
+    window.addEventListener("vidmap-entrance-reset", () => {
+      const wasTopdown = heroMode === 'topdown';
+      document.querySelector('[data-hero-mode=topdown]').click();
+      if (wasTopdown) {
+        if (heroInteractiveFrame !== null) resetFrozenHeroViewer();
+        else stageHeroTopdown();
+      }
+      setHeroViewerInteraction(false);
+    });
+    window.addEventListener("vidmap-entrance-reveal", createHeroViewer, { once: true });
+    window.addEventListener("vidmap-intro-change", () => {
+      if (heroInteractiveFrame !== null) heroInteractiveFrame.contentWindow.postMessage({
+        type: 'vidmap-render-visibility', visible: heroOnscreen && heroMode !== 'optimization' && !window.vidmapEntranceIntro?.active
+      }, "*");
+    });
+
+    document.querySelectorAll('[data-switcher]').forEach((switcher) => {
+      const image = switcher.querySelector('.switcher-image');
+      const caption = switcher.querySelector('.switcher-caption');
+      switcher.querySelectorAll('.tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          switcher.querySelectorAll('.tab').forEach((item) => {
+            const active = item === tab;
+            item.classList.toggle('active', active);
+            item.setAttribute('aria-selected', String(active));
+          });
+          image.src = tab.dataset.src;
+          caption.textContent = tab.dataset.caption;
+        });
+      });
+    });
+
+
+
+  </script>
+  <script src="entrance_test/gallery.js?v=pause-on-dismiss"></script>
+<script src="entrance_test/media_intro.js?v=compact-media"></script>
+<script src="entrance_test/entrance.js"></script>
+<script src="entrance_test/polish.js?v=1"></script>
+<script type="application/json" id="ablation-playback-manifests">{"depth_control":{"frames":946,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":16.0,"stage":"gp2"},{"time":21.0,"stage":"ba1"},{"time":30.366666666666667,"stage":"point_refinement"}]},"no_depth":{"frames":946,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":16.0,"stage":"gp2"},{"time":21.0,"stage":"ba1"},{"time":30.366666666666667,"stage":"point_refinement"}]},"loop_control":{"frames":841,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":8.0,"stage":"gp2"},{"time":14.0,"stage":"ba1"}]},"no_loop_losses":{"frames":841,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":8.0,"stage":"gp2"},{"time":14.0,"stage":"ba1"}]}}</script>
+<script src="entrance_test/ablation_players.js"></script>
+<script src="entrance_test/reading_guide.js"></script>
+</body>
+</html>
