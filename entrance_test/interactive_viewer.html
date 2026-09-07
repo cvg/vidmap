@@ -723,7 +723,13 @@
       } else if (!keyframeVideoLoading) {
         keyframeVideoLoading = true;
         keyframePreview.preload = 'auto';
-        keyframePreview.load();
+        let buffers;
+        try { buffers = parent.vidmapMedia; } catch (_) { /* Standalone file preview. */ }
+        if (buffers) {
+          buffers.get(new URL(keyframePreview.getAttribute('src'), document.baseURI).href, 5).then(url => {
+            keyframePreview.src = url; keyframePreview.load();
+          });
+        } else keyframePreview.load();
       }
       pumpKeyframeSeek();
       return promise;

@@ -7,7 +7,7 @@ document.querySelectorAll('[data-ablation-player]').forEach(card => {
   const bubble = frame.querySelector('.ablation-scrubber');
   const label = frame.querySelector('.ablation-label');
   let revision = 0, manifest = null, loaded = false, loading = false;
-  let targetFrame = 0, painting = false, near = false;
+  let targetFrame = 0, painting = false, near = false, visible = false;
   let selected = card.querySelector('.tab.active');
 
   function updateLabel() {
@@ -47,7 +47,13 @@ document.querySelectorAll('[data-ablation-player]').forEach(card => {
       slider.disabled = false;
     }));
   }
-  async function load() {
+  function warmAlternates() {
+    if (!visible || !loaded || !window.vidmapMedia) return;
+    card.querySelectorAll('.tab').forEach(tab => {
+      if (tab !== selected) window.vidmapMedia.get(tab.dataset.ablationVideo, 60);
+    });
+  }
+  async function load(priority = 20) {
     if (loading || loaded) return;
     const token = revision;
     loading = true;
@@ -58,8 +64,11 @@ document.querySelectorAll('[data-ablation-player]').forEach(card => {
       manifest = data; targetFrame = data.frames - 1;
       slider.max = slider.value = String(targetFrame);
       updateLabel();
+      const source = selected.dataset.ablationVideo;
+      const buffered = window.vidmapMedia ? await window.vidmapMedia.get(source, priority) : source;
+      if (token !== revision) return;
       video.preload = 'auto';
-      video.src = selected.dataset.ablationVideo;
+      video.src = buffered;
       video.load();
     } catch (error) {
       if (token !== revision) return;
@@ -72,7 +81,7 @@ document.querySelectorAll('[data-ablation-player]').forEach(card => {
     if (Math.abs(video.duration-manifest.frames/manifest.fps) > .05) {
       label.textContent = 'Playback unavailable'; return;
     }
-    loaded = true; loading = false; seekLatest();
+    loaded = true; loading = false; seekLatest(); warmAlternates();
   });
   video.addEventListener('seeked', seekLatest);
   video.addEventListener('error', () => {
@@ -89,11 +98,14 @@ document.querySelectorAll('[data-ablation-player]').forEach(card => {
     video.pause(); video.removeAttribute('src'); video.load();
     frame.classList.remove('show-video'); slider.disabled = true;
     slider.max = slider.value = '1000'; updateLabel();
-    if (near) load();
+    if (near) load(1);
   }));
   new IntersectionObserver(entries => {
     near = entries[0].isIntersecting;
     if (near) load();
-  }, {rootMargin:'350px'}).observe(card);
+  }, {rootMargin:'1200px'}).observe(card);
+  new IntersectionObserver(entries => {
+    visible = entries[0].isIntersecting; warmAlternates();
+  }, {rootMargin:'200px'}).observe(card);
   updateLabel();
 });

@@ -99,7 +99,7 @@ window.addEventListener('resize', () => {
 
 document.querySelectorAll('#video-flythroughs .flythrough-stage').forEach(stage => {
   const video = stage.querySelector('video');
-  if (video.querySelector('source')?.getAttribute('src').includes('/drone.mp4')) {
+  if ((video.querySelector('source')?.getAttribute('src') || video.querySelector('source')?.dataset.src || '').includes('/drone.mp4')) {
     video.defaultPlaybackRate = 2;
     video.playbackRate = 2;
   }

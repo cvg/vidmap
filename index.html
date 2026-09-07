@@ -901,7 +901,7 @@ body.figure-open { overflow: hidden; }
           </div>
         <div class="viewer-shell">
           <div class="lin-dense-stage">
-            <iframe id="lin-comparison" title="Synchronized city-scale comparison with original camera frames" src="entrance_test/lin_comparison.html?embedded=1" loading="lazy" allow="autoplay; fullscreen 'none'"></iframe>
+            <iframe id="lin-comparison" title="Synchronized city-scale comparison with original camera frames" data-src="entrance_test/lin_comparison.html?embedded=1&amp;v=priorities-1" loading="lazy" allow="autoplay; fullscreen 'none'"></iframe>
           </div>
         </div>
       </div>
@@ -916,32 +916,32 @@ body.figure-open { overflow: hidden; }
         <div class="video-grid">
           <article class="media-card">
             <div class="flythrough-stage">
-              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/drone.jpg?v=rgb-intro" aria-label="Racing drone reconstruction flythrough with synchronized camera footage">
-                <source src="entrance_test/web_media/gallery_media/drone.mp4?v=crf30" type="video/mp4">
+              <video muted playsinline disablepictureinpicture preload="none" data-poster="youtube_flythrough_videos/drone.jpg?v=rgb-intro" aria-label="Racing drone reconstruction flythrough with synchronized camera footage">
+                <source data-src="entrance_test/web_media/gallery_media/drone.mp4?v=crf30" type="video/mp4">
               </video>
               <h3 class="flythrough-title">Racing drone</h3>
             </div>
           </article>
           <article class="media-card">
             <div class="flythrough-stage">
-              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/vienna.jpg?v=rgb-intro" aria-label="Cycling tour reconstruction flythrough with synchronized camera footage">
-                <source src="entrance_test/web_media/gallery_media/vienna.mp4?v=crf30" type="video/mp4">
+              <video muted playsinline disablepictureinpicture preload="none" data-poster="youtube_flythrough_videos/vienna.jpg?v=rgb-intro" aria-label="Cycling tour reconstruction flythrough with synchronized camera footage">
+                <source data-src="entrance_test/web_media/gallery_media/vienna.mp4?v=crf30" type="video/mp4">
               </video>
               <h3 class="flythrough-title">Cycling tour</h3>
             </div>
           </article>
           <article class="media-card">
             <div class="flythrough-stage">
-              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/forest.jpg?v=rgb-intro" aria-label="Forest walk reconstruction flythrough with synchronized camera footage">
-                <source src="entrance_test/web_media/gallery_media/forest.mp4?v=crf30" type="video/mp4">
+              <video muted playsinline disablepictureinpicture preload="none" data-poster="youtube_flythrough_videos/forest.jpg?v=rgb-intro" aria-label="Forest walk reconstruction flythrough with synchronized camera footage">
+                <source data-src="entrance_test/web_media/gallery_media/forest.mp4?v=crf30" type="video/mp4">
               </video>
               <h3 class="flythrough-title">Forest walk</h3>
             </div>
           </article>
           <article class="media-card">
             <div class="flythrough-stage">
-              <video muted playsinline disablepictureinpicture preload="none" poster="youtube_flythrough_videos/nightreign.jpg?v=rgb-intro" aria-label="Video game reconstruction flythrough with synchronized camera footage">
-                <source src="entrance_test/web_media/gallery_media/nightreign.mp4?v=crf30" type="video/mp4">
+              <video muted playsinline disablepictureinpicture preload="none" data-poster="youtube_flythrough_videos/nightreign.jpg?v=rgb-intro" aria-label="Video game reconstruction flythrough with synchronized camera footage">
+                <source data-src="entrance_test/web_media/gallery_media/nightreign.mp4?v=crf30" type="video/mp4">
               </video>
               <h3 class="flythrough-title">Video game</h3>
             </div>
@@ -1149,7 +1149,7 @@ body.figure-open { overflow: hidden; }
       const frame = document.createElement('iframe');
       frame.className = 'hero-interactive-frame';
       frame.title = 'Interactive reconstruction without floor plan';
-      frame.src = 'entrance_test/interactive_viewer.html?v=matched-keyframe-bubble&hideProgress=1&hideLoopClosures=1&showComparisonPaths=1&transparentBackground=1&waitForStart=1&keyframes=1';
+      frame.src = 'entrance_test/interactive_viewer.html?v=priorities-1&hideProgress=1&hideLoopClosures=1&showComparisonPaths=1&transparentBackground=1&waitForStart=1&keyframes=1';
       frame.allowFullscreen = true;
       heroInteractive.appendChild(frame);
       heroInteractiveFrame = frame;
@@ -1265,7 +1265,7 @@ body.figure-open { overflow: hidden; }
       }
       setHeroViewerInteraction(false);
     });
-    window.addEventListener("vidmap-entrance-reveal", createHeroViewer, { once: true });
+    window.addEventListener("vidmap-entrance-reveal", () => { if (window.vidmapMedia) window.vidmapMedia.afterIntroWarm(createHeroViewer); else createHeroViewer(); }, { once: true });
     window.addEventListener("vidmap-intro-change", () => {
       if (heroInteractiveFrame !== null) heroInteractiveFrame.contentWindow.postMessage({
         type: 'vidmap-render-visibility', visible: heroOnscreen && heroMode !== 'optimization' && !window.vidmapEntranceIntro?.active
@@ -1291,12 +1291,13 @@ body.figure-open { overflow: hidden; }
 
 
   </script>
-  <script src="entrance_test/gallery.js?v=pause-on-dismiss"></script>
-<script src="entrance_test/media_intro.js?v=compact-media"></script>
+  <script src="entrance_test/media_loading.js?v=priorities-1"></script>
+<script src="entrance_test/gallery.js?v=priorities-1"></script>
+<script src="entrance_test/media_intro.js?v=priorities-1"></script>
 <script src="entrance_test/entrance.js"></script>
 <script src="entrance_test/polish.js?v=1"></script>
 <script type="application/json" id="ablation-playback-manifests">{"depth_control":{"frames":946,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":16.0,"stage":"gp2"},{"time":21.0,"stage":"ba1"},{"time":30.366666666666667,"stage":"point_refinement"}]},"no_depth":{"frames":946,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":16.0,"stage":"gp2"},{"time":21.0,"stage":"ba1"},{"time":30.366666666666667,"stage":"point_refinement"}]},"loop_control":{"frames":841,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":8.0,"stage":"gp2"},{"time":14.0,"stage":"ba1"}]},"no_loop_losses":{"frames":841,"fps":30,"stages":[{"time":0.0,"stage":"gp1"},{"time":8.0,"stage":"gp2"},{"time":14.0,"stage":"ba1"}]}}</script>
-<script src="entrance_test/ablation_players.js"></script>
+<script src="entrance_test/ablation_players.js?v=priorities-1"></script>
 <script src="entrance_test/reading_guide.js"></script>
 </body>
 </html>

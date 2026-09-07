@@ -279,18 +279,23 @@
     }
   }
 
+  function warmOptimization() {
+    if (prepared) return;
+    prepared = true;
+    const source = 'entrance_test/web_media/hge_optimization_intro.mp4?v=direct-gp-sampling';
+    const ready = window.vidmapMedia ? window.vidmapMedia.get(source, 0) : Promise.resolve(source);
+    ready.then(url => {
+      optimization.src = url; optimization.preload = 'auto'; optimization.load();
+    });
+  }
+
   function prepare() {
     stop();
     complete = false;
     entered = false;
     layer.hidden = false;
     warmFootage();
-    if (!prepared) {
-      optimization.src = 'entrance_test/web_media/hge_optimization_intro.mp4?v=direct-gp-sampling';
-      optimization.preload = 'auto';
-      optimization.load();
-      prepared = true;
-    }
+    warmOptimization();
     [...tiles, optimization].forEach(video => { if (video.readyState >= 1) video.currentTime = 0; });
     optimization.playbackRate = gpPlaybackRate;
     setPhase('waiting');
@@ -365,7 +370,21 @@
     get active() { return ['waiting', 'loading', 'montage', 'optimization-reveal', 'optimization', 'scrubbing'].includes(hero.dataset.intro); },
   };
   setPhase('idle');
-  // Only the small RGB tiles warm up on the title screen; WebGL and the larger
-  // optimization clip still load on demand. No automatic media for reduced motion.
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) warmFootage();
+  // Both autoplay phases warm on the title screen. Defer the heavy interactive
+  // scene and lower-priority scrub buffers until these small clips are buffered.
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    warmFootage(); warmOptimization();
+    const buffered = video => new Promise(resolve => {
+      const check = () => {
+        if (video.error || (Number.isFinite(video.duration) && video.buffered.length &&
+            video.buffered.end(video.buffered.length - 1) >= video.duration - .15)) {
+          ['progress', 'canplaythrough', 'loadeddata', 'error'].forEach(name => video.removeEventListener(name, check));
+          resolve();
+        }
+      };
+      ['progress', 'canplaythrough', 'loadeddata', 'error'].forEach(name => video.addEventListener(name, check));
+      check();
+    });
+    Promise.all([...tiles, optimization].map(buffered)).then(() => window.vidmapMedia?.markIntroWarm());
+  }
 })();
