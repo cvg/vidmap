@@ -23,6 +23,7 @@ html { scroll-padding-top: 90px; }
 .entrance-title {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; padding: 80px 24px 110px;
+  transform: translateY(0px) scale(1); opacity: 1;
   will-change: transform, opacity;
 }
 .entrance-title .eyebrow { font-size: .73rem; letter-spacing: .2em; margin: 0 0 22px; }
