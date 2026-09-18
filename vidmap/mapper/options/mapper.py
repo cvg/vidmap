@@ -7,6 +7,7 @@ from pydantic_core import ArgsKwargs
 from vidmap.configuration.validators import dataclass as pydantic_dataclass
 from vidmap.configuration.validators import instantiate_nested_options
 
+from .calibration import CalibrationOptions
 from .positioning import DepthConsistencyOptions, GPOptions, MapperTrackOptions
 from .refinement import BAOptions
 from .view_graph import InlierThresholdOptions, MDRPOptions, RAOptions, VGCOptions
@@ -44,6 +45,7 @@ class MapperOptions:
     """Typed options for the mapping stages."""
 
     setup: SetupOptions = dc_field(default_factory=SetupOptions)
+    calibration: CalibrationOptions = dc_field(default_factory=CalibrationOptions)
     depth_consistency: DepthConsistencyOptions = dc_field(default_factory=DepthConsistencyOptions)
     ba: BAOptions = dc_field(default_factory=BAOptions)
     vgc: VGCOptions = dc_field(default_factory=VGCOptions)
@@ -60,6 +62,7 @@ class MapperOptions:
     def instantiate_nested_option_groups(cls, raw):
         """Instantiate nested option groups before strict field validation."""
         option_groups = {
+            "calibration": CalibrationOptions,
             "setup": SetupOptions,
             "depth_consistency": DepthConsistencyOptions,
             "ba": BAOptions,

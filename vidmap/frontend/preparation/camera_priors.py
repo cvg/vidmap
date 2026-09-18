@@ -1,22 +1,9 @@
-"""Initialise per-camera intrinsics from GeoCalib / VGC priors.
-
-Reads the per-camera focal + principal point from the ``geocalib_batch`` H5
-file when GeoCalib is enabled, else seeds intrinsics from
-the median of GT cameras when view-graph calibration is enabled. Also stamps
-"""
+"""Initialize cameras from the extraction's calibration predictions."""
 
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-
-import h5py
 import numpy as np
 import pycolmap
-
-from vidmap.frontend.cache import CacheMetadataMismatch, IncrementalArtifactContract, validate_incremental_cache
-
-logger = logging.getLogger(__name__)
 
 
 def _validate_intrinsics(values, *, label: str, positive: bool) -> np.ndarray:
@@ -67,46 +54,27 @@ def _apply_shared_focal(camera: pycolmap.Camera, focal: float, principal_point=N
     camera.params = params
 
 
-def apply_camera_priors(
-    *,
-    use_geocalib: bool,
-    view_graph_calibration: bool,
-    geocalib_batch_path: Path | None,
-    geocalib_batch_artifact: IncrementalArtifactContract | None,
-    source_reconstruction: pycolmap.Reconstruction,
-    reconstruction: pycolmap.Reconstruction,
-) -> None:
-    """Apply configured camera priors to the preparation reconstruction."""
-    if use_geocalib:
-        if geocalib_batch_path is None or geocalib_batch_artifact is None:
-            raise CacheMetadataMismatch("GeoCalib is enabled but its batch artifact is unavailable")
-        validate_incremental_cache(
-            geocalib_batch_path,
-            geocalib_batch_artifact.metadata,
-            geocalib_batch_artifact.expected_items,
-        )
-        with h5py.File(geocalib_batch_path, "r") as fd:
-            batch_grp = fd["batch_calibration"]
-            focal = batch_grp["focal"][:]
-            principal_point = batch_grp["principal_point"][:]
-
-        cids = {image.camera_id for image in reconstruction.images.values()}
-        for cid in cids:
-            _apply_calibration(reconstruction.cameras[cid], focal, principal_point)
-    elif view_graph_calibration:
-        gt_focals = [camera.mean_focal_length() for camera in source_reconstruction.cameras.values()]
-        if not gt_focals:
-            raise ValueError("View-graph calibration requires at least one source camera")
-        if not np.isfinite(gt_focals).all() or np.any(np.asarray(gt_focals) <= 0):
-            raise ValueError("View-graph calibration source cameras have invalid focal lengths")
-        median_focal = np.median(gt_focals)
-        first_camera = next(iter(source_reconstruction.cameras.values()))
-        shared_principal_point = (
-            first_camera.principal_point_x,
-            first_camera.principal_point_y,
-        )
-
-        cids = {image.camera_id for image in reconstruction.images.values()}
-        for cid in cids:
-            _apply_shared_focal(reconstruction.cameras[cid], median_focal, shared_principal_point)
-        logger.info("View-graph calibration initialized with median GT focal %.1f", median_focal)
+def apply_camera_priors(*, results, shared, reconstruction):
+    """Use the shared estimate or median predicted focal for the input cameras."""
+    if not results:
+        raise ValueError("Predicted initialization requires calibration results")
+    cameras = {image.camera_id: reconstruction.cameras[image.camera_id] for image in reconstruction.images.values()}
+    if any(c.model.name not in {"PINHOLE", "SIMPLE_PINHOLE"} for c in cameras.values()):
+        raise ValueError("Calibration initialization requires pinhole cameras")
+    if len({(c.model.name, c.width, c.height) for c in cameras.values()}) != 1:
+        raise ValueError("Shared initialization requires identical camera models and dimensions")
+    camera = next(iter(cameras.values()))
+    if any(tuple(result["image_size"]) != (camera.width, camera.height) for result in results):
+        raise ValueError("Calibration dimensions disagree with cameras")
+    if shared:
+        if len(results) != 1:
+            raise ValueError("Shared inference requires one camera result")
+        K = np.asarray(results[0]["K"], dtype=np.float32)
+        for camera in cameras.values():
+            _apply_calibration(camera, K[[0, 1], [0, 1]], K[:2, 2])
+    else:
+        intrinsics = np.asarray([result["K"] for result in results], dtype=np.float32)
+        median_focal = float(np.median((intrinsics[:, 0, 0] + intrinsics[:, 1, 1]).astype(np.float64) / 2.0))
+        shared_principal_point = (camera.width / 2, camera.height / 2)
+        for camera in cameras.values():
+            _apply_shared_focal(camera, median_focal, shared_principal_point)

@@ -1,41 +1,53 @@
 #pragma once
 
 #include <algorithm>
-
-#include <Eigen/Core>
+#include <cmath>
+#include <utility>
+#include <vector>
 #include <ceres/ceres.h>
 
 namespace vidmap {
 
-class IntrinsicsPriorCostFunction : public ceres::CostFunction {
+class LogMeanFocalPriorCostFunction final : public ceres::CostFunction {
  public:
-  IntrinsicsPriorCostFunction(const Eigen::VectorXd& values,
-                              const Eigen::VectorXd& stddevs)
-      : values_(values), inverse_stddevs_(stddevs.cwiseInverse()) {
-    set_num_residuals(values.size());
-    mutable_parameter_block_sizes()->push_back(values.size());
+  LogMeanFocalPriorCostFunction(const int num_camera_params,
+                                std::vector<std::size_t> focal_indices,
+                                const double focal,
+                                const double sigma_log_focal)
+      : focal_indices_(std::move(focal_indices)),
+        log_focal_(std::log(focal)),
+        inverse_sigma_log_focal_(1.0 / sigma_log_focal) {
+    set_num_residuals(1);
+    mutable_parameter_block_sizes()->push_back(num_camera_params);
   }
 
   bool Evaluate(double const* const* parameters,
                 double* residuals,
                 double** jacobians) const override {
-    const int dimension = static_cast<int>(values_.size());
-    for (int index = 0; index < dimension; ++index) {
-      residuals[index] =
-          (parameters[0][index] - values_[index]) * inverse_stddevs_[index];
+    const double* camera = parameters[0];
+    double mean_focal = 0.0;
+    for (const std::size_t index : focal_indices_) {
+      mean_focal += camera[index];
     }
+    mean_focal /= static_cast<double>(focal_indices_.size());
+    if (!std::isfinite(mean_focal) || mean_focal <= 0.0) return false;
+    residuals[0] =
+        (std::log(mean_focal) - log_focal_) * inverse_sigma_log_focal_;
     if (jacobians != nullptr && jacobians[0] != nullptr) {
-      std::fill(jacobians[0], jacobians[0] + dimension * dimension, 0.0);
-      for (int index = 0; index < dimension; ++index) {
-        jacobians[0][index * dimension + index] = inverse_stddevs_[index];
+      std::fill(jacobians[0], jacobians[0] + parameter_block_sizes()[0], 0.0);
+      const double derivative =
+          inverse_sigma_log_focal_ / (mean_focal * focal_indices_.size());
+      for (const std::size_t index : focal_indices_) {
+        jacobians[0][index] = derivative;
       }
     }
     return true;
   }
 
  private:
-  const Eigen::VectorXd values_;
-  const Eigen::VectorXd inverse_stddevs_;
+  std::vector<std::size_t> focal_indices_;
+  double log_focal_;
+  double inverse_sigma_log_focal_;
 };
 
 }  // namespace vidmap

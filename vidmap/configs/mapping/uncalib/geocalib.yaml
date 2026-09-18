@@ -1,0 +1,12 @@
+# Original GeoCalib inference/initialization/VGC; intentionally revised BA.
+mapper:
+  ba:
+    focal_prior:
+      enabled: true
+      weight_multiplier: 1.0
+      robust_scale: 1.0
+      normal_loss: huber
+      annealing_loss: cauchy
+  vgc:
+    filter:
+      enabled: true

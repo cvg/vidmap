@@ -47,14 +47,6 @@ def build_bundle_adjustment_options(
     return native_options
 
 
-def make_intrinsics_prior_record(camera_id: int, values: np.ndarray, stddevs: np.ndarray):
-    record = native.IntrinsicsPriorRecord()
-    record.camera_id = int(camera_id)
-    record.values = values
-    record.stddevs = stddevs
-    return record
-
-
 def make_depth_constraint_record(
     image_id: int,
     point3D_id: int,

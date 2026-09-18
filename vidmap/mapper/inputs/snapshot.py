@@ -19,16 +19,17 @@ DATABASE_NAME = "database_complete.db"
 TRACK_PAIRS_NAME = "track_pairs.h5"
 DEPTH_MAPS_NAME = "depth_maps.h5"
 LC_MASKS_NAME = "lc_masks.json"
+GEOCALIB_PER_IMAGE_NAME = "geocalib_per_image.h5"
 GEOCALIB_BATCH_NAME = "geocalib_batch.h5"
 VGC_FILTERED_PAIRS_NAME = "vgc_filtered_pairs.json"
 MANIFEST_NAME = "manifest.json"
-MANIFEST_SCHEMA_VERSION = 6
-_FRONTEND_IDENTITY_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 10
+_FRONTEND_IDENTITY_SCHEMA_VERSION = 3
 SQLITE_SIDECAR_SUFFIXES = ("-journal", "-shm", "-wal")
 
 REQUIRED_PAYLOAD_NAMES = frozenset({DATABASE_NAME, TRACK_PAIRS_NAME, DEPTH_MAPS_NAME, LC_MASKS_NAME})
 REQUIRED_NAMES = REQUIRED_PAYLOAD_NAMES | {MANIFEST_NAME}
-OPTIONAL_NAMES = frozenset({GEOCALIB_BATCH_NAME, VGC_FILTERED_PAIRS_NAME})
+OPTIONAL_NAMES = frozenset({GEOCALIB_PER_IMAGE_NAME, GEOCALIB_BATCH_NAME, VGC_FILTERED_PAIRS_NAME})
 CANONICAL_NAMES = REQUIRED_NAMES | OPTIONAL_NAMES
 FRONTEND_IDENTITY_KEYS = frozenset(
     {
@@ -45,7 +46,18 @@ FRONTEND_IDENTITY_KEYS = frozenset(
         "boundary_options",
     }
 )
-BOUNDARY_OPTION_KEYS = frozenset({"use_geocalib", "view_graph_calibration", "vgc_expand"})
+BOUNDARY_OPTION_KEYS = frozenset({"estimator", "inference", "initialization"})
+
+
+def calibration_artifact_name(estimator: str, inference: str) -> str | None:
+    """Select the existing calibration payload from validated boundary settings."""
+    if estimator == "none":
+        return None
+    if estimator == "da3":
+        return DEPTH_MAPS_NAME
+    if estimator == "geocalib":
+        return GEOCALIB_BATCH_NAME if inference == "selected_batch" else GEOCALIB_PER_IMAGE_NAME
+    raise ValueError(f"Unknown calibration estimator: {estimator}")
 
 
 def sqlite_sidecar_paths(database_path: Path) -> tuple[Path, ...]:
@@ -221,7 +233,11 @@ def _validate_frontend_identity(identity: object, *, manifest_path: Path) -> Non
     if (
         not isinstance(options, dict)
         or set(options) != BOUNDARY_OPTION_KEYS
-        or any(not isinstance(options[key], bool) for key in BOUNDARY_OPTION_KEYS)
+        or options["estimator"] not in {"da3", "geocalib", "none"}
+        or options["inference"] not in {"per_view", "selected_batch"}
+        or options["initialization"] not in {"predicted", "supplied"}
+        or (options["inference"] == "selected_batch" and options["estimator"] != "geocalib")
+        or (options["estimator"] == "none" and options["initialization"] != "supplied")
     ):
         raise ValueError(f"Invalid mapper-input frontend boundary_options: {manifest_path}")
 
@@ -254,7 +270,7 @@ class MapperInputs:
         generation = FileProvenance.from_path(manifest_path) if manifest_path.is_file() else None
         return cls(directory, generation, expected_identity)
 
-    def validate(self, *, use_geocalib: bool) -> None:
+    def validate(self) -> None:
         if not self.directory.is_dir():
             raise FileNotFoundError(f"Mapper-input directory not found: {self.directory}")
 
@@ -270,12 +286,6 @@ class MapperInputs:
                 raise ValueError(f"Mapper inputs must not contain symlinks: {path}")
             if not path.is_file():
                 raise ValueError(f"Mapper input must be a regular file: {path}")
-
-        has_geocalib = GEOCALIB_BATCH_NAME in names
-        if use_geocalib and not has_geocalib:
-            raise FileNotFoundError(f"Missing required GeoCalib mapper input: {self.directory / GEOCALIB_BATCH_NAME}")
-        if not use_geocalib and has_geocalib:
-            raise ValueError(f"Inactive GeoCalib mapper input must be absent: {self.directory / GEOCALIB_BATCH_NAME}")
 
         if VGC_FILTERED_PAIRS_NAME in names:
             self.read_vgc_filtered_pairs()
@@ -297,6 +307,11 @@ class MapperInputs:
         if schema_version != MANIFEST_SCHEMA_VERSION:
             raise ValueError(f"Unsupported mapper-input manifest schema in {manifest_path}: {schema_version!r}")
         frontend_identity = _tagged_identity(manifest, manifest_path=manifest_path)
+        calibration = frontend_identity["boundary_options"]
+        selected_artifact = calibration_artifact_name(calibration["estimator"], calibration["inference"])
+        expected_geocalib = {selected_artifact} & {GEOCALIB_PER_IMAGE_NAME, GEOCALIB_BATCH_NAME}
+        if names & {GEOCALIB_PER_IMAGE_NAME, GEOCALIB_BATCH_NAME} != expected_geocalib:
+            raise ValueError("GeoCalib artifacts disagree with the extraction's predictor settings")
         if self.expected_identity is not None and (
             not isinstance(frontend_identity, dict)
             or any(frontend_identity.get(key) != value for key, value in dict(self.expected_identity).items())
@@ -323,13 +338,6 @@ class MapperInputs:
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"Invalid mapper-input manifest: {manifest_path}") from error
         return _tagged_identity(manifest, manifest_path=manifest_path)
-
-    def boundary_option(self, name: str) -> bool:
-        identity = self.frontend_identity()
-        options = identity.get("boundary_options")
-        if isinstance(options, dict) and isinstance(options.get(name), bool):
-            return options[name]
-        raise KeyError(name)
 
     def read_track_pairs(self) -> list[tuple[str, str]]:
         with h5py.File(self.track_pairs_path, "r") as hfile:
@@ -388,11 +396,6 @@ class MapperInputs:
     @property
     def lc_masks_path(self) -> Path:
         return self.directory / LC_MASKS_NAME
-
-    @property
-    def geocalib_batch_path(self) -> Path | None:
-        path = self.directory / GEOCALIB_BATCH_NAME
-        return path if path.exists() else None
 
     @property
     def vgc_filtered_pairs_path(self) -> Path | None:

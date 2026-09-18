@@ -160,7 +160,6 @@ def refine_run_points(
     try:
         stage_inputs = MappingProblemLoader(
             options=config.setup,
-            use_geocalib=inputs.boundary_option("use_geocalib"),
             inputs=inputs,
             sfm_outputs_dir=staging,
             replay=ReplayCache(ReplayCacheOptions(), staging),
@@ -176,7 +175,7 @@ def refine_run_points(
             solve_state=stage_inputs.solve_state,
             options=config.ba,
             depth_stddev_multiplier=config.depth_stddev_multiplier,
-            focal_uncertainty=stage_inputs.focal_uncertainty,
+            optimize_intrinsics=False,  # This operation fixes cameras independently of saved free-BA policy.
             output_dir=staging,
             replay=ReplayCache(ReplayCacheOptions(), staging),
         )

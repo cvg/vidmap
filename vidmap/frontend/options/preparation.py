@@ -1,6 +1,7 @@
 """Schemas owned by mapper-input preparation."""
 
 from dataclasses import field as dc_field
+from typing import Literal
 
 from pydantic import ConfigDict, model_validator
 from pydantic_core import ArgsKwargs
@@ -10,7 +11,18 @@ from vidmap.configuration.validators import dataclass
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class CameraPriorEstimationOptions:
+    estimator: Literal["geocalib", "da3", "none"] = "geocalib"
+    inference: Literal["per_view", "selected_batch"] = "selected_batch"
+    initialization: Literal["predicted", "supplied"] = "predicted"
     max_images: int = 30
+
+    @model_validator(mode="after")
+    def validate_applicable_options(self):
+        if self.estimator != "geocalib" and self.inference != "per_view":
+            raise ValueError("Selected-batch inference requires GeoCalib")
+        if self.estimator == "none" and self.initialization != "supplied":
+            raise ValueError("Predicted initialization requires an estimator")
+        return self
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

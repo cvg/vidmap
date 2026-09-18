@@ -4,6 +4,7 @@
 
 #include "colmap/estimators/cost_functions/manifold.h"
 #include "colmap/estimators/cost_functions/reprojection_error.h"
+#include "colmap/sensor/models.h"
 #include "colmap/util/threading.h"
 
 #include <algorithm>
@@ -69,7 +70,7 @@ class DefaultBundleAdjuster {
       const BundleAdjustmentOptions& options,
       const std::vector<DepthConstraintRecord>& depth_constraints,
       const std::vector<DepthScaleRecord>& depth_scales,
-      const std::vector<IntrinsicsPriorRecord>& intrinsics_priors,
+      const std::vector<LogFocalPriorRecord>& intrinsics_priors,
       MappingProblem* mapping_problem)
       : options_(options),
         depth_constraints_(depth_constraints),
@@ -159,12 +160,13 @@ class DefaultBundleAdjuster {
         throw std::invalid_argument("duplicate BA depth scale record");
       }
     }
-    for (const IntrinsicsPriorRecord& prior : intrinsics_priors_) {
-      prior.Validate();
-      const CameraRecord& camera = mapping_problem_->Camera(prior.camera_id);
-      if (prior.values.size() != camera.params.size()) {
-        throw std::invalid_argument("intrinsics prior dimension mismatch");
+    std::unordered_set<CameraId> focal_prior_cameras;
+    for (const LogFocalPriorRecord& prior : intrinsics_priors_) {
+      if (!focal_prior_cameras.insert(prior.camera_id).second) {
+        throw std::invalid_argument("duplicate BA log-focal prior camera");
       }
+      prior.Validate();
+      mapping_problem_->Camera(prior.camera_id);
     }
     const std::unordered_set<Point3DId> variable_point3D_ids(
         options_.variable_point3D_ids.begin(),
@@ -413,12 +415,33 @@ class DefaultBundleAdjuster {
   }
 
   void AddIntrinsicsPriors() {
-    for (const IntrinsicsPriorRecord& prior : intrinsics_priors_) {
-      problem_->AddResidualBlock(
-          new IntrinsicsPriorCostFunction(prior.values, prior.stddevs),
-          nullptr,
-          camera_params_.at(prior.camera_id).data());
-      ++result_.diagnostics.num_intrinsics_prior_residuals;
+    constexpr double kFocalLengthLowerBound = 1e-3;
+    for (const LogFocalPriorRecord& prior : intrinsics_priors_) {
+      VectorXd& params = camera_params_.at(prior.camera_id);
+      if (!problem_->HasParameterBlock(params.data())) {
+        // Cameras without surviving reprojection observations stay unchanged.
+        continue;
+      }
+      const auto model_id = static_cast<colmap::CameraModelId>(
+          mapping_problem_->Camera(prior.camera_id).model_id);
+      const auto focal_index_span = colmap::CameraModelFocalLengthIdxs(model_id);
+      const std::vector<std::size_t> focal_indices(focal_index_span.begin(),
+                                                  focal_index_span.end());
+      for (const std::size_t index : focal_indices) {
+        problem_->SetParameterLowerBound(
+            params.data(), static_cast<int>(index), kFocalLengthLowerBound);
+      }
+      owned_losses_.push_back(prior.loss.Create());
+      for (Eigen::Index row = 0; row < prior.observations.rows(); ++row) {
+        problem_->AddResidualBlock(
+            new LogMeanFocalPriorCostFunction(params.size(),
+                                              focal_indices,
+                                              prior.observations(row, 0),
+                                              prior.observations(row, 1)),
+            owned_losses_.back().get(),
+            params.data());
+        ++result_.diagnostics.num_intrinsics_prior_residuals;
+      }
     }
   }
 
@@ -588,7 +611,7 @@ class DefaultBundleAdjuster {
   const BundleAdjustmentOptions& options_;
   const std::vector<DepthConstraintRecord>& depth_constraints_;
   const std::vector<DepthScaleRecord>& depth_scale_records_;
-  const std::vector<IntrinsicsPriorRecord>& intrinsics_priors_;
+  const std::vector<LogFocalPriorRecord>& intrinsics_priors_;
   MappingProblem* mapping_problem_;
 
   std::vector<ImageId> image_order_;
@@ -632,14 +655,6 @@ void DepthScaleRecord::Validate() const {
   scale_prior_loss.Validate();
 }
 
-void IntrinsicsPriorRecord::Validate() const {
-  if (values.size() == 0 || values.size() != stddevs.size() ||
-      !values.allFinite() || !stddevs.allFinite() ||
-      (stddevs.array() <= 0.0).any()) {
-    throw std::invalid_argument("invalid BA intrinsics prior");
-  }
-}
-
 void BundleAdjustmentOptions::Validate() const {
   playback.Validate();
   reprojection_loss.Validate();
@@ -656,7 +671,7 @@ BundleAdjustmentResult RunBundleAdjustment(
     const BundleAdjustmentOptions& options,
     const std::vector<DepthConstraintRecord>& depth_constraints,
     const std::vector<DepthScaleRecord>& depth_scales,
-    const std::vector<IntrinsicsPriorRecord>& intrinsics_priors,
+    const std::vector<LogFocalPriorRecord>& intrinsics_priors,
     MappingProblem* problem) {
   if (problem == nullptr) {
     throw std::invalid_argument("mapping problem must not be null");

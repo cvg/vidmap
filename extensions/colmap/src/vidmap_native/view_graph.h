@@ -2,8 +2,9 @@
 
 #include <cstddef>
 #include <map>
+#include <vector>
 
-#include "vidmap_native/mapping_problem.h"
+#include "vidmap_native/focal_prior.h"
 
 namespace vidmap {
 
@@ -21,6 +22,9 @@ struct ViewGraphCalibrationOptions {
   double max_focal_length_ratio = 10.0;
   double max_calibration_error = 2.0;
   double loss_function_scale = 0.01;
+  std::vector<LogFocalPriorRecord> focal_priors;
+  // Scale prior weights by eligible pairs / prior observations.
+  bool normalize_weight_by_pair_count = false;
   int num_threads = -1;
   int max_num_iterations = 100;
   double function_tolerance = 1e-5;

@@ -29,12 +29,12 @@ void BindBundleAdjustment(py::module_& m) {
       .def_readwrite("scale_prior_loss", &DepthScaleRecord::scale_prior_loss)
       .def("validate", &DepthScaleRecord::Validate);
 
-  py::class_<IntrinsicsPriorRecord>(m, "IntrinsicsPriorRecord")
+  py::class_<LogFocalPriorRecord>(m, "LogFocalPriorRecord")
       .def(py::init<>())
-      .def_readwrite("camera_id", &IntrinsicsPriorRecord::camera_id)
-      .def_readwrite("values", &IntrinsicsPriorRecord::values)
-      .def_readwrite("stddevs", &IntrinsicsPriorRecord::stddevs)
-      .def("validate", &IntrinsicsPriorRecord::Validate);
+      .def_readwrite("camera_id", &LogFocalPriorRecord::camera_id)
+      .def_readwrite("observations", &LogFocalPriorRecord::observations)
+      .def_readwrite("loss", &LogFocalPriorRecord::loss)
+      .def("validate", &LogFocalPriorRecord::Validate);
 
   py::class_<BundleAdjustmentOptions>(m, "BundleAdjustmentOptions")
       .def(py::init<>())
@@ -111,7 +111,7 @@ void BindBundleAdjustment(py::module_& m) {
       [](const BundleAdjustmentOptions& options,
          const std::vector<DepthConstraintRecord>& depth_constraints,
          const std::vector<DepthScaleRecord>& depth_scales,
-         const std::vector<IntrinsicsPriorRecord>& intrinsics_priors,
+         const std::vector<LogFocalPriorRecord>& intrinsics_priors,
          MappingProblem* problem) {
         py::gil_scoped_release release;
         return RunBundleAdjustment(options,

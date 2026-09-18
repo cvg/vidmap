@@ -25,7 +25,7 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
         images: torch.Tensor,
         *,
         ref_view_strategy: str,
-    ) -> tuple[np.ndarray, np.ndarray | None]:
+    ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
         assert images.ndim == 4 and images.shape[1] == 3
         device = next(self.parameters()).device
         batch = images.to(device, non_blocking=True)[None].float()
@@ -37,4 +37,5 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
         confidence = output["depth_conf"]
         if confidence is not None:
             confidence = confidence.squeeze(0).cpu().numpy()
-        return depth, confidence
+        intrinsics = output["intrinsics"].squeeze(0).float().cpu().numpy()
+        return depth, confidence, intrinsics

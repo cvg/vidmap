@@ -1,0 +1,7 @@
+camera_priors:
+  estimator: da3
+  inference: per_view
+  initialization: predicted
+depth:
+  backend:
+    window_size: 1

@@ -9,7 +9,7 @@ from vidmap.configuration.dump import config_to_dict
 from vidmap.configuration.names import config_name_to_output_slug
 from vidmap.frontend.cache import fingerprint
 
-FRONTEND_IDENTITY_SCHEMA_VERSION = 2
+FRONTEND_IDENTITY_SCHEMA_VERSION = 3
 
 
 def semantic_frontend_config(conf) -> dict[str, object]:
@@ -38,9 +38,9 @@ def frontend_config_identity(conf) -> dict[str, object]:
         "config_fingerprint": semantic_frontend_fingerprint(conf),
         "colmap_runtime": conf.colmap_runtime,
         "boundary_options": {
-            "use_geocalib": conf.pipeline.use_geocalib,
-            "view_graph_calibration": conf.pipeline.view_graph_calibration,
-            "vgc_expand": False,
+            "estimator": conf.pipeline.camera_priors.estimator,
+            "inference": conf.pipeline.camera_priors.inference,
+            "initialization": conf.pipeline.camera_priors.initialization,
         },
     }
 
@@ -58,8 +58,9 @@ class FrontendIdentity:
     mode: str
     testset_id: str
     reference_image_ids: tuple[int, ...]
-    use_geocalib: bool
-    view_graph_calibration: bool
+    estimator: str
+    inference: str
+    initialization: str
 
     @classmethod
     def from_config(
@@ -85,8 +86,9 @@ class FrontendIdentity:
             mode=mode,
             testset_id=testset_id,
             reference_image_ids=tuple(reference_image_ids),
-            use_geocalib=conf.pipeline.use_geocalib,
-            view_graph_calibration=conf.pipeline.view_graph_calibration,
+            estimator=conf.pipeline.camera_priors.estimator,
+            inference=conf.pipeline.camera_priors.inference,
+            initialization=conf.pipeline.camera_priors.initialization,
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -102,8 +104,8 @@ class FrontendIdentity:
             "testset_id": self.testset_id,
             "reference_image_ids": list(self.reference_image_ids),
             "boundary_options": {
-                "use_geocalib": self.use_geocalib,
-                "view_graph_calibration": self.view_graph_calibration,
-                "vgc_expand": False,
+                "estimator": self.estimator,
+                "inference": self.inference,
+                "initialization": self.initialization,
             },
         }

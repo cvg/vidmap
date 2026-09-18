@@ -32,7 +32,6 @@ class MappingStageInputs:
     consecutive_pair_ids: list[int]
     sequence_id_to_index: dict[int, int]
     vgc_exclusion_ids: set[int]
-    focal_uncertainty: float | None
 
 
 def _index_lc_masks(
@@ -55,7 +54,6 @@ class MappingProblemLoader:
     """Load one mapping problem in the established byte-reproducible order."""
 
     options: SetupOptions
-    use_geocalib: bool
     inputs: MapperInputs
     sfm_outputs_dir: Path
     replay: ReplayCache
@@ -118,31 +116,14 @@ class MappingProblemLoader:
             image.depth_validity = np.asarray(depth["valid"], dtype=np.uint8)
             state.update_image(image)
 
-    def load(self, *, on_inputs_validated: Callable[[], None] | None = None) -> MappingStageInputs:
-        focal_uncertainty = None
-
-        self.inputs.validate(use_geocalib=self.use_geocalib)
-        if on_inputs_validated is not None:
-            on_inputs_validated()
+    def load(self, *, on_database_loaded: Callable[[SolveState], None] | None = None) -> MappingStageInputs:
+        self.inputs.validate()
         database_path = self.inputs.database_path
         consecutive_pairs = self.inputs.read_track_pairs()
         lc_masks = read_loop_closure_masks(self.inputs.lc_masks_path)
         vgc_filtered_pairs = self.inputs.read_vgc_filtered_pairs()
-        if self.use_geocalib:
-            if self.inputs.geocalib_batch_path is None:
-                raise FileNotFoundError("GeoCalib mapper input is required when use_geocalib=true")
-            with h5py.File(self.inputs.geocalib_batch_path, "r") as hfile:
-                focal_uncertainty = float(min(hfile["batch_calibration/focal_uncertainty"][:]))
-
         if not database_path.exists():
             raise FileNotFoundError(f"Finalized mapper database not found: {database_path}")
-
-        # When enabled, replay captures the protected input database before
-        # any native state is loaded or modified.
-        if self.replay.write_enabled("database"):
-            replay_database = self.replay.root / "database" / "database_complete.db"
-            copy_finalized_database(database_path, replay_database)
-            self.replay.write_json("database", "summary.json", database_file_summary(replay_database))
 
         # Mapping always mutates an output-local database copy; the mapper
         # input boundary remains read-only and reusable.
@@ -151,6 +132,15 @@ class MappingProblemLoader:
             raise ValueError("Mapper inputs and outputs must use separate database paths")
         copy_finalized_database(database_path, working_database_path)
         state = load_finalized_database(working_database_path)
+        if on_database_loaded is not None:
+            on_database_loaded(state)
+
+        # Admit calibration before replacing replay evidence. Both captures
+        # still describe the original database, before depth or pair mutation.
+        if self.replay.write_enabled("database"):
+            replay_database = self.replay.root / "database" / "database_complete.db"
+            copy_finalized_database(database_path, replay_database)
+            self.replay.write_json("database", "summary.json", database_file_summary(replay_database))
         if self.replay.write_enabled("db_to_glomap"):
             summary = database_to_native_summary(
                 working_database_path,
@@ -229,5 +219,4 @@ class MappingProblemLoader:
             consecutive_pair_ids=consecutive_pair_ids,
             sequence_id_to_index=sequence_id_to_index,
             vgc_exclusion_ids=vgc_exclusion_ids,
-            focal_uncertainty=focal_uncertainty,
         )

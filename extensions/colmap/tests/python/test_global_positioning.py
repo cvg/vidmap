@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import vidmap_native._core as native
 
 
@@ -280,3 +281,127 @@ def test_bundle_adjustment_resolves_automatic_thread_count():
     result = native.run_bundle_adjustment(options, [], [], [], problem)
 
     assert result.success
+
+
+def test_bundle_adjustment_applies_robust_log_mean_focal_prior():
+    problem = _playback_problem()
+    options = native.BundleAdjustmentOptions()
+    options.image_order = [1, 2]
+    options.refine_points3D = False
+    options.fix_rotations = True
+    options.num_threads = 1
+    options.max_num_iterations = 50
+
+    prior = native.LogFocalPriorRecord()
+    prior.camera_id = 1
+    prior.observations = np.array([[800.0, 0.05]])
+    prior.loss.type = native.LossFunctionType.HUBER
+    prior.loss.scale = 1.0
+    prior.loss.weight = 1e6
+
+    result = native.run_bundle_adjustment(options, [], [], [prior], problem)
+
+    assert result.success
+    assert result.diagnostics.num_intrinsics_prior_residuals == 1
+    np.testing.assert_allclose(problem.camera(1).params[:2].mean(), 800.0, rtol=1e-3)
+
+
+@pytest.mark.parametrize("weight,scales", [(0.025, [0.05, 0.2]), (0.0002, [0.24, 0.24])])
+def test_bundle_adjustment_log_focal_cost_matches_vgc_equation(weight, scales):
+    """Check the native cost, not merely convergence toward a strong prior."""
+    options = native.BundleAdjustmentOptions()
+    options.image_order = [1, 2]
+    options.refine_points3D = False
+    options.fix_all_poses = True
+    options.refine_focal_length = False
+    options.refine_principal_point = False
+    options.refine_extra_params = False
+    options.num_threads = 1
+    baseline = native.run_bundle_adjustment(options, [], [], [], _playback_problem())
+    observations = np.column_stack(([800.0, 400.0], scales))
+    for loss_type in (
+        native.LossFunctionType.TRIVIAL,
+        native.LossFunctionType.HUBER,
+        native.LossFunctionType.CAUCHY,
+    ):
+        problem = _playback_problem()
+        focal = problem.camera(1).params[:2].mean()
+        prior = native.LogFocalPriorRecord()
+        prior.camera_id = 1
+        prior.observations = observations
+        prior.loss.type = loss_type
+        prior.loss.scale = 1.0
+        prior.loss.weight = weight
+        squared = (np.log(focal / observations[:, 0]) / observations[:, 1]) ** 2
+        if loss_type == native.LossFunctionType.HUBER:
+            rho = np.where(squared <= 1, squared, 2 * np.sqrt(squared) - 1)
+        elif loss_type == native.LossFunctionType.CAUCHY:
+            rho = np.log1p(squared)
+        else:
+            rho = squared
+        result = native.run_bundle_adjustment(options, [], [], [prior], problem)
+        np.testing.assert_allclose(
+            result.diagnostics.initial_cost - baseline.diagnostics.initial_cost,
+            0.5 * prior.loss.weight * rho.sum(),
+            rtol=1e-9,
+            atol=1e-9,
+        )
+
+
+def test_no_focal_prior_leaves_enabled_intrinsics_free():
+    problem = _sequential_support_problem([1, 2, 3])
+    camera = problem.camera(1)
+    camera.params = np.array([650.0, 650.0, 320.0, 240.0])
+    problem.update_camera(camera)
+    options = native.BundleAdjustmentOptions()
+    options.image_order = [1, 2, 3]
+    options.fix_all_poses = True
+    options.refine_points3D = False
+    options.refine_focal_length = True
+    options.refine_principal_point = False
+    options.refine_extra_params = False
+    options.num_threads = 1
+    result = native.run_bundle_adjustment(options, [], [], [], problem)
+    assert result.success
+    assert result.diagnostics.num_intrinsics_prior_residuals == 0
+    np.testing.assert_allclose(problem.camera(1).params, [500.0, 500.0, 320.0, 240.0], atol=1e-5, rtol=0)
+
+
+def test_duplicate_log_focal_camera_records_are_rejected():
+    problem = _playback_problem()
+    options = native.BundleAdjustmentOptions()
+    options.image_order = [1, 2]
+    prior = native.LogFocalPriorRecord()
+    prior.camera_id = 1
+    prior.observations = np.array([[500.0, 0.02]])
+    with np.testing.assert_raises_regex(ValueError, "duplicate BA log-focal prior camera"):
+        native.run_bundle_adjustment(options, [], [], [prior, prior], problem)
+
+
+def test_bundle_adjustment_preserves_camera_without_observations():
+    problem = _playback_problem()
+    camera = problem.camera(1)
+    camera.camera_id = 2
+    problem.add_camera(camera)
+    image = problem.image(3)
+    image.camera_id = 2
+    problem.update_image(image)
+    track = problem.track(7)
+    track.loop_closure_observations = np.empty((0, 2), dtype=np.uint32)
+    track.loop_closure_anchors = np.empty((0, 2), dtype=np.uint32)
+    problem.update_track(track)
+    priors = []
+    for camera_id in (1, 2):
+        prior = native.LogFocalPriorRecord()
+        prior.camera_id = camera_id
+        prior.observations = np.array([[800.0, 0.24]])
+        priors.append(prior)
+    options = native.BundleAdjustmentOptions()
+    options.image_order = [1, 2, 3]
+    options.refine_points3D = False
+    options.fix_all_poses = True
+    options.num_threads = 1
+    result = native.run_bundle_adjustment(options, [], [], priors, problem)
+    assert result.success
+    assert result.diagnostics.num_intrinsics_prior_residuals == 1
+    np.testing.assert_array_equal(problem.camera(2).params, camera.params)

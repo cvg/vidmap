@@ -3,7 +3,9 @@
 from collections.abc import Callable
 from pathlib import Path
 
+from vidmap.mapper.focal_prior import load_focal_prior
 from vidmap.mapper.inputs import MapperInputs
+from vidmap.mapper.inputs.snapshot import calibration_artifact_name
 from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
 from .checkpoints import remove_disabled_intermediate_reconstructions
@@ -59,6 +61,8 @@ class Mapper:
         overwrite_outputs: bool = False,
         on_inputs_validated: Callable[[], None] | None = None,
     ):
+        boundary = self.mapper_inputs.frontend_identity()["boundary_options"]
+        need_factors = self._validate_calibration_request(boundary)
         if save_playback_trace:
             PlaybackTraceRecorder.preflight(self.sfm_outputs_dir, replace=overwrite_outputs)
             playback_options = PlaybackTraceOptions(
@@ -70,17 +74,23 @@ class Mapper:
         replay = ReplayCache(self.conf.replay_cache, self.sfm_outputs_dir)
         working_database = self.sfm_outputs_dir / "database_complete.db"
         try:
-            use_geocalib = self.mapper_inputs.boundary_option("use_geocalib")
             loader = MappingProblemLoader(
                 options=self.conf.setup,
-                use_geocalib=use_geocalib,
                 inputs=self.mapper_inputs,
                 sfm_outputs_dir=self.sfm_outputs_dir,
                 replay=replay,
             )
-            mapping_stage_inputs = (
-                loader.load() if on_inputs_validated is None else loader.load(on_inputs_validated=on_inputs_validated)
-            )
+            prior = {}
+
+            def admit_calibration(state):
+                nonlocal prior
+                if need_factors:
+                    prior = self._prepare_calibration(state, boundary)
+
+            mapping_stage_inputs = loader.load(on_database_loaded=admit_calibration)
+
+            if on_inputs_validated is not None:
+                on_inputs_validated()
             remove_disabled_intermediate_reconstructions(
                 self.sfm_outputs_dir,
                 persist=self.persist_intermediate_reconstructions,
@@ -97,7 +107,7 @@ class Mapper:
                 else None
             )
             try:
-                reconstruction = self._solve(mapping_stage_inputs, replay, playback_trace)
+                reconstruction = self._solve(mapping_stage_inputs, replay, playback_trace, prior)
                 if playback_trace is not None:
                     playback_trace.finish(reconstruction)
             except BaseException:
@@ -109,16 +119,43 @@ class Mapper:
             remove_database_sidecars(working_database)
             working_database.unlink(missing_ok=True)
 
-    def _solve(self, mapping_stage_inputs, replay, playback_trace):
+    def _validate_calibration_request(self, boundary) -> bool:
+        """Check configuration before loading or publishing and resolve whether factors are needed."""
+        calibration = self.conf.calibration
+        predictor = boundary["estimator"]
+        if calibration.vgc_focal_prior and (predictor != "da3" or not calibration.vgc_enabled):
+            raise ValueError("VGC focal prior requires enabled DA3 VGC")
+        need_factors = calibration.vgc_focal_prior or (
+            calibration.optimize_intrinsics and self.conf.ba.focal_prior.enabled
+        )
+        if need_factors and predictor == "none":
+            raise ValueError("Focal regularization requires original predictor factors")
+        return need_factors
+
+    def _prepare_calibration(self, solve_state, boundary):
+        """Construct original-target factors from the validated mapper inputs."""
+        calibration = self.conf.calibration
+        predictor = boundary["estimator"]
+        cameras = solve_state.reconstruction.cameras
+        if any(c.model.name not in {"PINHOLE", "SIMPLE_PINHOLE"} for c in cameras.values()):
+            raise ValueError("Calibration requires pinhole cameras")
+        shared = boundary["inference"] == "selected_batch"
+        path = self.mapper_inputs.directory / calibration_artifact_name(predictor, boundary["inference"])
+        log_focal_stddev = calibration.da3_log_focal_stddev if predictor == "da3" else None
+        return load_focal_prior(path, solve_state, log_focal_stddev=log_focal_stddev, shared=shared)
+
+    def _solve(self, mapping_stage_inputs, replay, playback_trace, prior):
         solve_start_time = sync_time()
         solve_state = mapping_stage_inputs.solve_state
+
+        calibration = self.conf.calibration
 
         # Remove view-graph observations that must not influence calibration or
         # any of the downstream global solves.
         view_graph_filter = ViewGraphFilter(
             solve_state=solve_state,
             options=self.conf.vgc.filter,
-            calibration_enabled=self.mapper_inputs.boundary_option("view_graph_calibration"),
+            calibration_enabled=calibration.vgc_enabled,
             initial_exclusion_ids=mapping_stage_inputs.vgc_exclusion_ids,
         )
         vgc_exclusion_ids = view_graph_filter.filter()
@@ -129,9 +166,10 @@ class Mapper:
         view_graph_calibrator = ViewGraphCalibrator(
             solve_state=solve_state,
             options=self.conf.vgc.calibration,
-            enabled=self.mapper_inputs.boundary_option("view_graph_calibration"),
+            enabled=calibration.vgc_enabled,
             consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
             exclusion_ids=vgc_exclusion_ids,
+            focal_prior=prior if calibration.vgc_focal_prior else None,
         )
         view_graph_calibrator.calibrate()
 
@@ -201,7 +239,8 @@ class Mapper:
             solve_state=solve_state,
             options=self.conf.ba,
             depth_stddev_multiplier=self.conf.mdrp.depth_stddev_multiplier,
-            focal_uncertainty=mapping_stage_inputs.focal_uncertainty,
+            optimize_intrinsics=calibration.optimize_intrinsics,
+            focal_prior=prior,
             output_dir=self.sfm_outputs_dir,
             replay=replay,
             persist_intermediate_reconstructions=self.persist_intermediate_reconstructions,

@@ -224,7 +224,7 @@ def create_database_from_frontend(
     initial_reconstruction: pycolmap.Reconstruction,
     database_path: Path,
     *,
-    view_graph_calibration: bool,
+    estimate_intrinsics: bool,
     matches: dict[ImagePair, object] | None = None,
 ) -> dict[str, int]:
     """Build a COLMAP database from a validated frontend result."""
@@ -255,8 +255,8 @@ def create_database_from_frontend(
         frontend_result.keyframe_sequence,
         paths.sparse_features_path,
         import_pairs,
-        camera_policy="shared" if view_graph_calibration else "per_image",
-        prior_focal_length=not view_graph_calibration,
+        camera_policy="shared" if estimate_intrinsics else "per_image",
+        prior_focal_length=not estimate_intrinsics,
         sparse_matches_path=paths.sparse_matches_path if matches is None else None,
         matches=matches,
     )

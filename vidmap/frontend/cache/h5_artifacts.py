@@ -93,7 +93,7 @@ def inspect_incremental_items(
                     continue
                 try:
                     if expected is not None:
-                        validate_incremental_item(hfile, name, expected["stage"])
+                        validate_incremental_item(hfile, name, expected)
                 except CacheMetadataMismatch:
                     if not repair_malformed:
                         raise
@@ -129,7 +129,7 @@ def mark_incremental_cache_complete(path: Path, expected: Mapping[str, Any], exp
         with h5py.File(path, "r") as hfile:
             missing = [name for name in expected_items if name not in hfile]
             present = [name for name in expected_items if name in hfile]
-            validate_incremental_items(hfile, present, expected["stage"])
+            validate_incremental_items(hfile, present, expected)
             extras = sorted(set(dataset_parent_names(hfile)) - set(expected_items))
     except CacheMetadataMismatch:
         raise

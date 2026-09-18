@@ -454,19 +454,15 @@ Expected WATE-AUC (%, higher is better):
 
 | Dataset | 10 m @ 0.5 m | 25 m @ 1.25 m | 50 m @ 2.5 m | 100 m @ 5 m | Full @ 5% |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| LaMAR | 92.10 | 92.75 | 91.29 | 90.81 | 90.22 |
-| CroCoDL | 94.47 | 95.90 | 96.23 | 94.87 | 96.11 |
+| LaMAR | 92.16 | 92.62 | 91.29 | 90.67 | 90.20 |
+| CroCoDL | 94.90 | 96.18 | 96.44 | 94.21 | 96.60 |
 
 Expected pose AUC (%, higher is better):
 
 | Dataset | 5 cm | 10 cm | 50 cm | 1 m | 10 m |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| EuRoC | 11.39 | 31.40 | 80.50 | 90.25 | 99.03 |
-| ETH3D-SLAM | 49.16 | 65.98 | 88.49 | 92.98 | 98.59 |
-
-**Note:** Results differ from the paper due to a newer COLMAP revision, higher loop-closure loss weights,
-intrinsics-normalized keyframing, and uncertainty-aware track termination (these changes improve robustness on external
-datasets).
+| EuRoC | 11.96 | 32.05 | 81.67 | 90.84 | 99.08 |
+| ETH3D-SLAM | 50.15 | 66.99 | 88.32 | 92.76 | 98.83 |
 
 </details>
 

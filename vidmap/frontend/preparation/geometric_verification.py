@@ -114,14 +114,14 @@ class GeometricVerifier:
         database_path: Path,
         replay: ReplayCache,
         repro_dir: Path | None,
-        view_graph_calibration: bool,
+        estimate_intrinsics: bool,
         pre_geom_db_stop: bool = False,
     ):
         self.options = options
         self.database_path = Path(database_path)
         self.replay = replay
         self.repro_dir = repro_dir
-        self.view_graph_calibration = view_graph_calibration
+        self.estimate_intrinsics = estimate_intrinsics
         self.pre_geom_db_stop = pre_geom_db_stop
 
     def verify(
@@ -146,7 +146,7 @@ class GeometricVerifier:
                 state,
                 initial_reconstruction,
                 tcorr,
-                view_graph_calibration=self.view_graph_calibration,
+                estimate_intrinsics=self.estimate_intrinsics,
                 database_path=temporary_path,
                 pre_geom_db_stop=self.pre_geom_db_stop,
             )
@@ -181,7 +181,7 @@ def _verify_database(
     initial_reconstruction: pycolmap.Reconstruction,
     tcorr: Mapping[ImagePair, Any],
     *,
-    view_graph_calibration: bool,
+    estimate_intrinsics: bool,
     database_path: Path,
     pre_geom_db_stop: bool,
 ) -> frozenset[ImagePair] | None:
@@ -190,7 +190,7 @@ def _verify_database(
             state,
             initial_reconstruction,
             database_path,
-            view_graph_calibration=view_graph_calibration,
+            estimate_intrinsics=estimate_intrinsics,
             matches=tcorr,
         )
 
@@ -200,7 +200,7 @@ def _verify_database(
         state,
         initial_reconstruction,
         database_path,
-        view_graph_calibration=view_graph_calibration,
+        estimate_intrinsics=estimate_intrinsics,
         matches=tcorr,
     )
 

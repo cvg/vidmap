@@ -30,6 +30,9 @@ void BindViewGraph(py::module_& m) {
                      &ViewGraphCalibrationOptions::max_calibration_error)
       .def_readwrite("loss_function_scale",
                      &ViewGraphCalibrationOptions::loss_function_scale)
+      .def_readwrite("focal_priors", &ViewGraphCalibrationOptions::focal_priors)
+      .def_readwrite("normalize_weight_by_pair_count",
+                     &ViewGraphCalibrationOptions::normalize_weight_by_pair_count)
       .def_readwrite("num_threads", &ViewGraphCalibrationOptions::num_threads)
       .def_readwrite("max_num_iterations",
                      &ViewGraphCalibrationOptions::max_num_iterations)

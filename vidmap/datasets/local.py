@@ -131,20 +131,20 @@ class LocalImageParser(PreparedSceneParser):
         image_dir: str | Path,
         imnames: Sequence[str] | None = None,
         intrinsics_path: str | Path | None = None,
-        use_geocalib: bool = False,
+        estimate_intrinsics: bool = False,
     ) -> None:
         self.rgb_dir = Path(image_dir).expanduser()
         if not self.rgb_dir.is_dir():
             raise FileNotFoundError(f"image_dir is not a directory: {self.rgb_dir}")
         self.imnames = _select_images(self.rgb_dir, imnames)
 
-        if use_geocalib:
+        if estimate_intrinsics:
             if intrinsics_path is not None:
-                raise ValueError("intrinsics_path cannot be combined with use_geocalib=True")
+                raise ValueError("intrinsics_path cannot be combined with estimate_intrinsics=True")
             intrinsics: Mapping = {1: {"params": [1000.0, 1000.0, 1000.0, 1000.0], "images": "all"}}
         else:
             if intrinsics_path is None:
-                raise ValueError("intrinsics_path is required when use_geocalib=False")
+                raise ValueError("intrinsics_path is required when estimate_intrinsics=False")
             path = Path(intrinsics_path).expanduser()
             try:
                 with path.open(encoding="utf-8") as file:
