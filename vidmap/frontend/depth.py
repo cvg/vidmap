@@ -159,6 +159,9 @@ def write_sampled_depth_cache(image_result, depth_path):
         image_group.create_dataset("valid", data=valid_kps)
         if conf_kps is not None:
             image_group.create_dataset("conf", data=conf_kps)
+        if "calibration" in depth_data:
+            for key, value in depth_data["calibration"].items():
+                image_group.create_dataset(key, data=value)
 
 
 def write_full_depth_cache(image_result, depth_path):
@@ -202,6 +205,7 @@ def _run_da3_depth(
     full_names=frozenset(),
     *,
     num_workers,
+    calibration_enabled=False,
 ):
     """Run the ordered DA3 sliding-window inference owned by the depth stage."""
     from vidmap.frontend.models.depth.da3_video import DA3_MODEL_ID, Da3Video
@@ -246,7 +250,9 @@ def _run_da3_depth(
         ):
             for batch in windows:
                 name = batch["name"]
-                prediction = model.forward_multiview(batch["images"], batch["center_index"])
+                prediction = model.forward_multiview(
+                    batch["images"], batch["center_index"], batch["original_size"], batch["uncropped_size"]
+                )
                 keypoints = features[name]["keypoints"][:] if name in features else np.array([])
                 original_width, original_height = (int(value) for value in batch["original_size"])
                 depth_map = prediction["depth"]
@@ -288,6 +294,8 @@ def _run_da3_depth(
                     if write_sampled
                     else None
                 )
+                if calibration_enabled and write_sampled:
+                    sampled_payload["calibration"] = prediction["calibration"]
                 writer.put(
                     (
                         name,
@@ -316,6 +324,7 @@ class DepthEstimator:
         keyframes: KeyframePlan,
         options: DepthEstimationOptions,
         image_content_fingerprint: str,
+        calibration_enabled: bool = False,
     ):
         self.scene_parser = scene_parser
         self.paths = paths
@@ -323,6 +332,7 @@ class DepthEstimator:
         self.keyframes = keyframes
         self.options = options
         self.image_content_fingerprint = image_content_fingerprint
+        self.calibration_enabled = calibration_enabled
 
     def estimate(self, *, cache_full_depth_maps: bool = False) -> DepthFrontendResult:
         from vidmap.utils.profiling import log_memory, record_timing, sync_time
@@ -342,7 +352,9 @@ class DepthEstimator:
                 "image_content": self.image_content_fingerprint,
             },
             upstream={"sparse_features": artifact_fingerprint(sparse_features_metadata)},
-            payload_format="per-image-keypoint-depth",
+            payload_format=(
+                "per-image-keypoint-depth-calibration" if self.calibration_enabled else "per-image-keypoint-depth"
+            ),
             nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
         )
         depth_path = self.paths.depth_maps_path
@@ -391,6 +403,7 @@ class DepthEstimator:
                 full_depth_path if cache_full_depth_maps else None,
                 full_names,
                 num_workers=self.options.num_workers,
+                calibration_enabled=self.calibration_enabled,
             )
         else:
             logger.info("No depth maps to estimate; all already exist")

@@ -58,7 +58,6 @@ class BAAnnealingOptions:
     robust_risky_depth: bool = True
     depth_cutoff_cauchy_scales: int = 2
     depth_param_multiplier: float = 0.25
-    prior_std_factor: Annotated[Optional[float], Field(gt=0, allow_inf_nan=False)] = 0.1
     mad_sigma_floor: float = 0.1
     observation_filter_multiplier: float = 4.0
     convergence_filtered_point_ratio: float = 0.001
@@ -67,9 +66,16 @@ class BAAnnealingOptions:
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class BAIntrinsicsOptions:
-    use_prior: bool = True
-    prior_std_factor: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.01
     refine_principal_point: bool = False
+
+
+@pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
+class BAFocalPriorOptions:
+    enabled: bool = True
+    weight_multiplier: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    robust_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    normal_loss: Literal["huber", "cauchy"] = "huber"
+    annealing_loss: Literal["huber", "cauchy"] = "cauchy"
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
@@ -79,6 +85,7 @@ class BAOptions:
     triangulation: BATriangulationOptions = dc_field(default_factory=BATriangulationOptions)
     depth: BADepthOptions = dc_field(default_factory=BADepthOptions)
     intrinsics: BAIntrinsicsOptions = dc_field(default_factory=BAIntrinsicsOptions)
+    focal_prior: BAFocalPriorOptions = dc_field(default_factory=BAFocalPriorOptions)
     solver_backend: SolverBackendOptions = dc_field(default_factory=SolverBackendOptions)
 
     retriangulation_reproj_multiplier: float = 8.0
@@ -88,13 +95,6 @@ class BAOptions:
     num_threads: Optional[int] = None
     variable_point_track_length_threshold: Annotated[int, Field(gt=0)] = 15
     post_annealing_point_refinement: bool = True
-
-    @property
-    def resolved_annealing_prior_std_factor(self) -> float:
-        prior_std_factor = self.annealing.prior_std_factor
-        if prior_std_factor is None:
-            return self.intrinsics.prior_std_factor
-        return prior_std_factor
 
     @model_validator(mode="before")
     @classmethod
@@ -106,6 +106,7 @@ class BAOptions:
                 "annealing": BAAnnealingOptions,
                 "depth": BADepthOptions,
                 "intrinsics": BAIntrinsicsOptions,
+                "focal_prior": BAFocalPriorOptions,
                 "triangulation": BATriangulationOptions,
                 "solver_backend": SolverBackendOptions,
             },

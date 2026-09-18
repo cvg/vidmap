@@ -40,8 +40,6 @@ class FrontendConfig:
     depth: DepthEstimationOptions = dc_field(default_factory=DepthEstimationOptions)
     camera_priors: CameraPriorEstimationOptions = dc_field(default_factory=CameraPriorEstimationOptions)
     preparation: PreparationOptions = dc_field(default_factory=PreparationOptions)
-    use_geocalib: bool = True
-    view_graph_calibration: bool = True
 
     @model_validator(mode="before")
     @classmethod

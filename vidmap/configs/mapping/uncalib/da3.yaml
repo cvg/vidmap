@@ -1,0 +1,19 @@
+mapper:
+  calibration:
+    vgc_focal_prior: true
+    da3_log_focal_stddev: 0.24  # Assumed log-focal standard deviation for whitening.
+  ba:
+    focal_prior:
+      enabled: true
+      # 20x VGC's base weight; BA stays fixed, while VGC scales by
+      # eligible pairs / original predictions.
+      weight_multiplier: 2.0e-4
+      robust_scale: 1.0  # Robust-loss scale in whitened residual units.
+      normal_loss: huber
+      annealing_loss: cauchy
+  vgc:
+    calibration:
+      focal_prior_weight: 1.0e-5
+      normalize_weight_by_pair_count: true
+    filter:
+      enabled: false

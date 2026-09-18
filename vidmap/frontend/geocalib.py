@@ -190,7 +190,21 @@ def _validated_shared_intrinsics(
     return calibration
 
 
-def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: str = "cuda") -> Mapping[str, Any]:
+def _calibration_result(
+    result: Mapping[str, Any],
+    batch_size: int,
+    *,
+    image_size: tuple[int, int],
+) -> dict:
+    """Convert one per-view or shared prediction to the source-pixel cache payload."""
+    calibration = _validated_shared_intrinsics(result, batch_size, expected_image_size=image_size)
+    std = result["focal_uncertainty"].detach().cpu().numpy().reshape(-1)
+    if len(std) != batch_size:
+        raise ValueError("GeoCalib diagnostics must align with the input views")
+    return {"K": calibration[0].astype(np.float32), "image_size": image_size, "focal_std_px": std.astype(np.float32)}
+
+
+def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: str = "cuda") -> dict:
     """Load one same-sized raw-image stack and run one shared GeoCalib forward pass."""
     if not image_paths:
         raise ValueError("GeoCalib shared calibration requires at least one image")
@@ -219,8 +233,13 @@ def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: s
     if not isinstance(result, Mapping):
         raise RuntimeError(f"GeoCalib shared calibration returned {type(result).__name__}, expected a mapping")
     height, width = expected_shape[1:]
-    _validated_shared_intrinsics(result, len(images), expected_image_size=(width, height))
-    return result
+    return _calibration_result(result, len(images), image_size=(width, height))
+
+
+def calibrate_image(model, image_path: Path, *, device: str = "cuda") -> dict:
+    image = model.load_image(image_path).to(device)
+    result = model.calibrate(image, shared_intrinsics=False)
+    return _calibration_result(result, 1, image_size=(int(image.shape[-1]), int(image.shape[-2])))
 
 
 @torch.no_grad()
@@ -230,7 +249,7 @@ def estimate_keyframe_bootstrap_intrinsics(rgb_dir: Path, sequence: Sequence[str
     model = _load_geocalib_model()
     try:
         result = calibrate_shared_intrinsics(model, [Path(rgb_dir) / name for name in images])
-        calibration = _validated_shared_intrinsics(result, len(images))[0].astype(np.float64, copy=True)
+        calibration = result["K"].astype(np.float64, copy=True)
     finally:
         _release_geocalib_model(model)
     logger.info(
@@ -251,18 +270,16 @@ def _verify_geocalib_checkpoint() -> None:
 
 
 def write_image_geocalib_cache(image_result, geocalib_per_image_path):
-    """Write one image's focal-uncertainty and confidence datasets to the GeoCalib H5 cache."""
+    """Write one image's calibration prediction to the GeoCalib H5 cache."""
     image_name, geocalib_result = image_result
-    focal_uncertainty = geocalib_result["focal_uncertainty"]
-    confidence = geocalib_result["confidence"]
 
     # Save individual result to per-image file
     with h5py.File(str(geocalib_per_image_path), "a", libver="latest") as h5_file_handle:
         if image_name in h5_file_handle:
             del h5_file_handle[image_name]
         image_group = h5_file_handle.create_group(image_name)
-        image_group.create_dataset("focal_uncertainty", data=np.array(focal_uncertainty, dtype=np.float32))
-        image_group.create_dataset("confidence", data=np.array(confidence, dtype=np.float32))
+        for key, value in geocalib_result.items():
+            image_group.create_dataset(key, data=value)
 
 
 class CameraPriorEstimator:
@@ -310,18 +327,8 @@ class CameraPriorEstimator:
                 ) as progress,
             ):
                 for image_name in pending_names:
-                    image = model.load_image(Path(self.rgb_dir) / image_name).to("cuda")
-                    result = model.calibrate(image, shared_intrinsics=False)
-                    focal_uncertainty = float(result["focal_uncertainty"].cpu().numpy().reshape(-1)[0])
-                    writer.put(
-                        (
-                            image_name,
-                            {
-                                "focal_uncertainty": focal_uncertainty,
-                                "confidence": float(1 / (focal_uncertainty**0.5)),
-                            },
-                        )
-                    )
+                    result = calibrate_image(model, self.rgb_dir / image_name)
+                    writer.put((image_name, result))
                     progress.update(1)
         finally:
             _release_geocalib_model(model)
@@ -339,44 +346,33 @@ class CameraPriorEstimator:
             logger.info("Batch calibration already exists; skipping")
             return
 
-        confidences = []
+        uncertainties = []
         with h5py.File(str(self.per_image_path), "r") as hfile:
             for name in image_names:
-                if name in hfile:
-                    confidences.append((name, float(hfile[name]["confidence"][()])))
-        confidences.sort(key=lambda item: item[1], reverse=True)
-        selected = [name for name, _ in confidences[: self.options.max_images]]
-        if not selected:
-            logger.info("No images available for batch calibration")
-            return
+                uncertainties.append((name, float(hfile[name]["focal_std_px"][0])))
+        uncertainties.sort(key=lambda item: item[1])
+        selected = [name for name, _ in uncertainties[: self.options.max_images]]
 
         model = None
         try:
             model = _load_geocalib_model()
-            result = calibrate_shared_intrinsics(
+            calibration = calibrate_shared_intrinsics(
                 model,
                 [self.rgb_dir / name for name in selected],
             )
-            focal = result["camera"].f.cpu().numpy()[0]
-            principal_point = result["camera"].c.cpu().numpy()[0]
-            focal_uncertainty = result["focal_uncertainty"].cpu().numpy()
             with h5py.File(str(batch_path), "a", libver="latest") as hfile:
                 if "batch_calibration" in hfile:
                     del hfile["batch_calibration"]
                 group = hfile.create_group("batch_calibration")
-                group.create_dataset("focal", data=focal.astype(np.float32))
-                group.create_dataset("principal_point", data=principal_point.astype(np.float32))
-                group.create_dataset("focal_uncertainty", data=focal_uncertainty.astype(np.float32))
-                group.create_dataset(
-                    "topk_images",
-                    data=np.array([name.encode("utf-8") for name in selected], dtype=object),
-                )
+                for key, value in calibration.items():
+                    group.create_dataset(key, data=value)
+                group.create_dataset("topk_images", data=selected, dtype=h5py.string_dtype())
         finally:
             _release_geocalib_model(model)
         logger.info(
             "Batch calibration complete: focal=%s principal=%s",
-            [int(value) for value in focal],
-            [int(value) for value in principal_point],
+            [int(calibration["K"][i][i]) for i in (0, 1)],
+            [int(calibration["K"][i][2]) for i in (0, 1)],
         )
 
     def estimate(self) -> IncrementalArtifactContract:
@@ -408,6 +404,8 @@ class CameraPriorEstimator:
             per_image_metadata,
             image_names,
         )
+        if self.options.inference == "per_view":
+            return certify_incremental_artifact(self.per_image_path, per_image_metadata, image_names)
         batch_metadata = cache_metadata(
             stage="geocalib_batch",
             config={"options": {"topk": self.options.max_images}, "model": geocalib_cache_identity()},

@@ -5,6 +5,8 @@ from dataclasses import dataclass as result_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import h5py
+
 from vidmap.datasets.base import DatasetParser
 from vidmap.frontend.cache import CacheMetadataMismatch, CompleteArtifactContract, IncrementalArtifactContract
 from vidmap.frontend.correspondences import ImagePair, immutable_array_mapping, validate_correspondence_alignment
@@ -42,7 +44,7 @@ class FrontendArtifacts:
     extended_matches: IncrementalArtifactContract
     depth: IncrementalArtifactContract
     full_depth: IncrementalArtifactContract | None = None
-    geocalib_batch: IncrementalArtifactContract | None = None
+    geocalib: IncrementalArtifactContract | None = None
 
 
 @result_dataclass(frozen=True)
@@ -68,21 +70,23 @@ class TrackingFrontendResult:
         object.__setattr__(self, "lc_masks", immutable_array_mapping(self.lc_masks))
 
 
-def validate_tracking_result(result: TrackingFrontendResult, *, geocalib_enabled: bool) -> None:
+def validate_tracking_result(result: TrackingFrontendResult, *, geocalib_inference: str | None) -> None:
     """Reject inconsistent optional artifacts at the tracking boundary."""
     if len(result.keyframe_sequence) < 2 or not result.track_pairs:
         raise CacheMetadataMismatch("Frontend requires at least two keyframes and one track pair")
     if result.artifacts.depth is None:
         raise CacheMetadataMismatch("Depth frontend is enabled but its certified artifact is unavailable")
-    geocalib_values = (
-        result.paths.geocalib_per_image_path,
-        result.paths.geocalib_batch_path,
-        result.artifacts.geocalib_batch,
-    )
-    if geocalib_enabled and any(value is None for value in geocalib_values):
-        raise CacheMetadataMismatch("GeoCalib is enabled but its certified artifacts are unavailable")
-    if not geocalib_enabled and any(value is not None for value in geocalib_values):
-        raise CacheMetadataMismatch("GeoCalib is disabled but geocalib artifacts were exposed")
+    values = (result.paths.geocalib_per_image_path, result.paths.geocalib_batch_path, result.artifacts.geocalib)
+    if geocalib_inference is not None:
+        path = (
+            result.paths.geocalib_batch_path
+            if geocalib_inference == "selected_batch"
+            else result.paths.geocalib_per_image_path
+        )
+        if path is None or result.artifacts.geocalib is None:
+            raise CacheMetadataMismatch("GeoCalib is enabled but its certified artifact is unavailable")
+    elif any(value is not None for value in values):
+        raise CacheMetadataMismatch("GeoCalib is disabled but an artifact was exposed")
 
 
 class Frontend:
@@ -114,8 +118,7 @@ class Frontend:
             raise ValueError("sample_name is required for frontend")
         self.options = conf
         self.preparation = conf.preparation
-        self.use_geocalib = conf.use_geocalib
-        self.view_graph_calibration = conf.view_graph_calibration
+        self.estimate_intrinsics = conf.camera_priors.initialization == "predicted"
         self.sample_name = str(sample_name)
         self.cache_dir = Path(cache_dir)
         self.outputs_dir = Path(sfm_outputs_dir)
@@ -167,14 +170,17 @@ class Frontend:
         reconstruction = build_initial_reconstruction(
             self.scene_parser, reference_image_names=list(self.reference_image_names)
         )
-        apply_camera_priors(
-            use_geocalib=self.use_geocalib,
-            view_graph_calibration=self.view_graph_calibration,
-            geocalib_batch_path=tracking.paths.geocalib_batch_path,
-            geocalib_batch_artifact=tracking.artifacts.geocalib_batch,
-            source_reconstruction=self.scene_parser.rec,
-            reconstruction=reconstruction,
-        )
+        if self.options.camera_priors.initialization == "predicted":
+            shared = self.options.camera_priors.inference == "selected_batch"
+            if self.options.camera_priors.estimator == "da3":
+                path = tracking.paths.depth_maps_path
+            else:
+                path = tracking.paths.geocalib_batch_path if shared else tracking.paths.geocalib_per_image_path
+            names = ("batch_calibration",) if shared else tracking.keyframe_sequence
+            with h5py.File(path, "r") as hfile:
+                apply_camera_priors(
+                    results=[hfile[name] for name in names], shared=shared, reconstruction=reconstruction
+                )
 
         correspondence_filter = CorrespondenceFilter(
             options=self.preparation.lc,
@@ -199,7 +205,7 @@ class Frontend:
             database_path=self.outputs_dir / ("database_pre_geom.db" if pre_geom_db_stop else "database_complete.db"),
             replay=self.replay,
             repro_dir=self.repro_dir,
-            view_graph_calibration=self.view_graph_calibration,
+            estimate_intrinsics=self.estimate_intrinsics,
             pre_geom_db_stop=pre_geom_db_stop,
         )
         verification = geometric_verifier.verify(tracking, reconstruction, filtered.tcorr)
@@ -211,7 +217,6 @@ class Frontend:
 
         tracking_pipeline = TrackingPipeline(
             options=self.options,
-            use_geocalib=self.use_geocalib,
             sample_name=self.sample_name,
             cache_dir=self.cache_dir,
             cache_namespace=self.frontend_tag if self.namespace_cache_by_config else None,

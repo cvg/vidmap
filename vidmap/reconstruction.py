@@ -48,10 +48,10 @@ def reconstruct(
 ):
     """Reconstruct an image directory or MP4 using the shared mapping API."""
     mapper_inputs = resolve_mapper_inputs(frontend_conf, mapper_inputs_dir)
-    use_geocalib = frontend_conf.pipeline.use_geocalib
-    if use_geocalib and intrinsics_path is not None:
+    estimate_intrinsics = frontend_conf.pipeline.camera_priors.initialization == "predicted"
+    if estimate_intrinsics and intrinsics_path is not None:
         raise ValueError("The selected uncalibrated config cannot be combined with --intrinsics")
-    if not use_geocalib and intrinsics_path is None:
+    if not estimate_intrinsics and intrinsics_path is None:
         raise ValueError("The selected calibrated config requires --intrinsics")
 
     workspace = Path(workspace).expanduser()
@@ -60,7 +60,7 @@ def reconstruct(
         image_dir=image_dir,
         imnames=imnames,
         intrinsics_path=intrinsics_path,
-        use_geocalib=use_geocalib,
+        estimate_intrinsics=estimate_intrinsics,
     )
     output_dir = workspace if output_dir is None else Path(output_dir).expanduser()
     run_options = RunOptions() if run_options is None else run_options
@@ -448,14 +448,15 @@ def run_mapping(
     run_options = RunOptions() if run_options is None else run_options
     output_dir = Path(output_dir).expanduser()
 
+    validate_mapping_config_provenance(
+        frontend_conf,
+        mapping_conf,
+        output_dir,
+        overwrite=overwrite_outputs,
+        context="Reconstruction run",
+    )
+
     def initialize_output() -> None:
-        validate_mapping_config_provenance(
-            frontend_conf,
-            mapping_conf,
-            output_dir,
-            overwrite=overwrite_outputs,
-            context="Reconstruction run",
-        )
         output_dir.mkdir(parents=True, exist_ok=True)
         dump_mapping_configs(
             frontend_conf,

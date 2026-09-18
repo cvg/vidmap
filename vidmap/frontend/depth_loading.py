@@ -107,6 +107,7 @@ class WindowDataset(Dataset):
             "center_index": center_index,
             "images": stack_window([item["image"] for item in items]),
             "original_size": items[center_index]["original_size"],
+            "uncropped_size": tuple(reversed(items[center_index]["image"].shape[-2:])),
         }
 
 

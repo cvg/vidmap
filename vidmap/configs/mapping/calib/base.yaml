@@ -1,9 +1,11 @@
 mapper:
+  calibration:
+    vgc_enabled: false
+    vgc_focal_prior: false
+    optimize_intrinsics: false
   ba:
-    annealing:
-      prior_std_factor: null
-    intrinsics:
-      prior_std_factor: 1.0
+    focal_prior:
+      enabled: false
   vgc:
     filter:
       enabled: false

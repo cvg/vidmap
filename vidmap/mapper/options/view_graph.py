@@ -25,6 +25,9 @@ class VGCFilterOptions:
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class VGCCalibrationOptions:
     unlock_focal: bool = True
+    # Outer prior coefficient before multiplication by eligible pairs / images.
+    focal_prior_weight: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0e-5
+    normalize_weight_by_pair_count: bool = True
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

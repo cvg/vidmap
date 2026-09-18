@@ -59,7 +59,7 @@ class Da3Video(torch.nn.Module):
     Usage:
         model = Da3Video(Da3VideoOptions())
         images = prepared_window  # normalized tensor (N, 3, H, W)
-        out = model.forward_multiview(images, center_idx=1)
+        out = model.forward_multiview(images, 1, (width, height), uncropped_size)
         depth_B = out["depth"]  # (H, W) metric depth in meters
     """
 
@@ -76,24 +76,23 @@ class Da3Video(torch.nn.Module):
         for parameter in self.parameters():
             parameter.requires_grad = False
 
-    def forward(self, images: torch.Tensor):
-        """Infer one prepared image."""
-        return self.forward_multiview(images, 0)
-
-    def forward_multiview(self, images: torch.Tensor, center_idx: int):
+    def forward_multiview(self, images: torch.Tensor, center_idx: int, original_size, uncropped_size):
         """
         Process one prepared image window and return depth for its center frame.
 
         Args:
             images: Normalized tensor with shape (N, 3, H, W).
             center_idx: Index of the center frame to estimate depth for
+            original_size: Center frame's original (width, height)
+            uncropped_size: Center frame's resized (width, height) before window cropping
         Returns:
             dict with:
                 - depth: (H, W) float32 depth map for center frame
                 - conf: (H, W) float32 confidence map for center frame
                 - valid: (H, W) bool validity mask
+                - calibration: Original-image intrinsics
         """
-        depths, confidences = self.model.infer(
+        depths, confidences, intrinsics = self.model.infer(
             images,
             ref_view_strategy=self.conf.ref_view_strategy,
         )
@@ -103,4 +102,23 @@ class Da3Video(torch.nn.Module):
         valid = (depth > 0) & np.isfinite(depth)
         depth[np.isinf(depth)] = 2.0
 
-        return {"depth": depth, "conf": conf, "valid": valid}
+        # Map intrinsics from the center crop back to original-image coordinates.
+        height, width = depth.shape
+        uw, uh = uncropped_size
+        left = int(round((uw - width) / 2))
+        top = int(round((uh - height) / 2))
+
+        ow, oh = original_size
+        scale = np.diag(np.asarray([ow / uw, oh / uh, 1.0], dtype=np.float32))
+        K = np.asarray(intrinsics[center_idx], dtype=np.float32).copy()
+        K[0, 2] += left
+        K[1, 2] += top
+        K = scale @ K
+        calibration = {"K": K, "image_size": tuple(int(n) for n in original_size)}
+
+        return {
+            "depth": depth,
+            "conf": conf,
+            "valid": valid,
+            "calibration": calibration,
+        }

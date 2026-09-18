@@ -3,7 +3,7 @@
 #include <map>
 #include <vector>
 
-#include "vidmap_native/ceres_loss.h"
+#include "vidmap_native/focal_prior.h"
 #include "vidmap_native/mapping_problem.h"
 #include "vidmap_native/solver_backend.h"
 #include "vidmap_native/solver_playback.h"
@@ -27,14 +27,6 @@ struct DepthScaleRecord {
   bool use_scale_prior = false;
   double scale_prior_stddev = 1.0;
   LossConfig scale_prior_loss;
-
-  void Validate() const;
-};
-
-struct IntrinsicsPriorRecord {
-  CameraId camera_id = 0;
-  VectorXd values;
-  VectorXd stddevs;
 
   void Validate() const;
 };
@@ -89,7 +81,7 @@ BundleAdjustmentResult RunBundleAdjustment(
     const BundleAdjustmentOptions& options,
     const std::vector<DepthConstraintRecord>& depth_constraints,
     const std::vector<DepthScaleRecord>& depth_scales,
-    const std::vector<IntrinsicsPriorRecord>& intrinsics_priors,
+    const std::vector<LogFocalPriorRecord>& intrinsics_priors,
     MappingProblem* problem);
 
 }  // namespace vidmap

@@ -4,11 +4,13 @@
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "vidmap_native/conversion.h"
 #include "vidmap_native/view_graph.h"
+#include "stages/intrinsics_prior.h"
 #include <ceres/ceres.h>
 
 namespace vidmap {
@@ -24,6 +26,13 @@ void ViewGraphCalibrationOptions::Validate() const {
       max_calibration_error < 0.0 || loss_function_scale < 0.0 ||
       max_num_iterations <= 0 || function_tolerance < 0.0 || num_threads == 0) {
     throw std::invalid_argument("invalid focal calibration options");
+  }
+  std::unordered_set<CameraId> camera_ids;
+  for (const auto& prior : focal_priors) {
+    prior.Validate();
+    if (!camera_ids.insert(prior.camera_id).second) {
+      throw std::invalid_argument("VGC focal priors require unique cameras");
+    }
   }
 }
 
@@ -53,6 +62,9 @@ FocalLengthCalibResult CalibrateFocalLengths(
     cameras.emplace(camera_id, std::move(camera));
     focal_lengths.emplace(camera_id, FocalLengthState{focal, focal});
   }
+  for (const auto& prior : options.focal_priors) {
+    mapping_problem.Camera(prior.camera_id);
+  }
 
   std::vector<FocalLengthCalibInput> inputs;
   for (const PairId pair_id : mapping_problem.PairIds()) {
@@ -75,20 +87,24 @@ FocalLengthCalibResult CalibrateFocalLengths(
     return result;
   }
 
+  auto loss_function =
+      std::make_unique<ceres::CauchyLoss>(options.loss_function_scale);
+  std::vector<std::unique_ptr<ceres::LossFunction>> focal_observation_losses;
   ceres::Problem::Options problem_options;
   problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
   ceres::Problem problem(problem_options);
-  auto loss_function =
-      std::make_unique<ceres::CauchyLoss>(options.loss_function_scale);
+  std::vector<ceres::ResidualBlockId> fetzer_blocks;
+  fetzer_blocks.reserve(inputs.size());
   for (const FocalLengthCalibInput& input : inputs) {
+    ceres::ResidualBlockId block = nullptr;
     if (input.camera_id1 == input.camera_id2) {
-      problem.AddResidualBlock(
+      block = problem.AddResidualBlock(
           colmap::FetzerFocalLengthSameCameraCostFunctor::Create(
               input.F, cameras.at(input.camera_id1).PrincipalPoint()),
           loss_function.get(),
           &focal_lengths.at(input.camera_id1).optimized);
     } else {
-      problem.AddResidualBlock(
+      block = problem.AddResidualBlock(
           colmap::FetzerFocalLengthCostFunctor::Create(
               input.F,
               cameras.at(input.camera_id1).PrincipalPoint(),
@@ -96,6 +112,27 @@ FocalLengthCalibResult CalibrateFocalLengths(
           loss_function.get(),
           &focal_lengths.at(input.camera_id1).optimized,
           &focal_lengths.at(input.camera_id2).optimized);
+    }
+    fetzer_blocks.push_back(block);
+  }
+
+  std::size_t num_prior_observations = 0;
+  for (const auto& prior : options.focal_priors) {
+    num_prior_observations += prior.observations.rows();
+  }
+  for (const auto& prior : options.focal_priors) {
+    auto loss = prior.loss;
+    if (options.normalize_weight_by_pair_count) {
+      loss.weight = loss.weight * inputs.size() / num_prior_observations;
+    }
+    focal_observation_losses.push_back(loss.Create());
+    double* focal = &focal_lengths.at(prior.camera_id).optimized;
+    for (Eigen::Index row = 0; row < prior.observations.rows(); ++row) {
+      problem.AddResidualBlock(
+          new LogMeanFocalPriorCostFunction(
+              1, {0}, prior.observations(row, 0), prior.observations(row, 1)),
+          focal_observation_losses.back().get(),
+          focal);
     }
   }
 
@@ -142,6 +179,7 @@ FocalLengthCalibResult CalibrateFocalLengths(
   evaluate_options.num_threads =
       colmap::GetEffectiveNumThreads(options.num_threads);
   evaluate_options.apply_loss_function = false;
+  evaluate_options.residual_blocks = fetzer_blocks;
   std::vector<double> residuals;
   problem.Evaluate(evaluate_options, nullptr, &residuals, nullptr, nullptr);
   std::size_t residual_index = 0;

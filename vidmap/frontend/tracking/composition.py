@@ -25,7 +25,6 @@ class TrackingPipeline:
         self,
         *,
         options,
-        use_geocalib,
         sample_name,
         cache_dir,
         cache_namespace,
@@ -36,7 +35,6 @@ class TrackingPipeline:
         cache_full_depth_maps=False,
     ):
         self.options = options
-        self.use_geocalib = use_geocalib
         self.sample_name = sample_name
         self.cache_dir = Path(cache_dir)
         self.cache_namespace = None if cache_namespace is None else str(cache_namespace)
@@ -52,6 +50,7 @@ class TrackingPipeline:
 
         options = self.options
         tracker_options = options.roma
+        use_geocalib = options.camera_priors.estimator == "geocalib"
 
         # Resolve every cache path from the frontend identity so all stages
         # operate on one immutable artifact plan.
@@ -59,7 +58,7 @@ class TrackingPipeline:
             cache_dir=self.cache_dir,
             sample_name=self.sample_name,
             depth_model_name=options.depth.depth_model,
-            use_geocalib=self.use_geocalib,
+            use_geocalib=use_geocalib,
             frontend_tag=None,
             config_name=self.cache_namespace,
             cache_variant="cache-" + fingerprint({"tracker": romav2_cache_identity(tracker_options)})[:16],
@@ -67,7 +66,7 @@ class TrackingPipeline:
         paths.track_pairs_path.parent.mkdir(exist_ok=True, parents=True)
         logger.info("Input sparse features: %s", paths.sparse_features_path)
         logger.info("Depth maps: %s", paths.depth_maps_path)
-        if self.use_geocalib:
+        if use_geocalib:
             logger.info("Geo-calibration (per-image): %s", paths.geocalib_per_image_path)
             logger.info("Geo-calibration (batch): %s", paths.geocalib_batch_path)
         frames = FrameSequence.from_scene(self.scene_parser)
@@ -158,6 +157,7 @@ class TrackingPipeline:
             force_recompute=self.force_recompute,
             keyframes=keyframes,
             options=options.depth,
+            calibration_enabled=options.camera_priors.estimator == "da3",
             image_content_fingerprint=image_content,
         )
         depth = (
@@ -178,7 +178,7 @@ class TrackingPipeline:
                 extended_matches=extended.artifact,
                 depth=depth.sampled,
                 full_depth=depth.full,
-                geocalib_batch=geocalib,
+                geocalib=geocalib,
             ),
             keyframe_sequence=keyframes.names,
             track_pairs=tracks.track_pairs,
@@ -186,14 +186,12 @@ class TrackingPipeline:
             tcorr=extended.tcorr,
             lc_masks=extended.lc_masks,
         )
-        validate_tracking_result(result, geocalib_enabled=self.use_geocalib)
+        validate_tracking_result(result, geocalib_inference=options.camera_priors.inference if use_geocalib else None)
         return result
 
     def _estimate_camera_priors(self, paths, keyframe_names, image_content):
-        if not self.use_geocalib:
+        if self.options.camera_priors.estimator != "geocalib":
             return None
-        if paths.geocalib_per_image_path is None or paths.geocalib_batch_path is None:
-            raise ValueError("GeoCalib frontend paths are required when GeoCalib is enabled")
         return CameraPriorEstimator(
             rgb_dir=self.scene_parser.rgb_dir,
             per_image_path=paths.geocalib_per_image_path,

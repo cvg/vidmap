@@ -13,7 +13,6 @@ from vidmap.mapper.inputs import (
     CANONICAL_NAMES,
     DATABASE_NAME,
     DEPTH_MAPS_NAME,
-    GEOCALIB_BATCH_NAME,
     LC_MASKS_NAME,
     MANIFEST_NAME,
     REQUIRED_PAYLOAD_NAMES,
@@ -112,16 +111,19 @@ def write_verified_mapper_inputs(
         TRACK_PAIRS_NAME: paths.track_pairs_path,
         DEPTH_MAPS_NAME: paths.depth_maps_path,
     }
-    if paths.geocalib_batch_path is not None:
-        geocalib_contract = state.artifacts.geocalib_batch
-        if geocalib_contract is None:
-            raise CacheMetadataMismatch("GeoCalib mapper input has no frontend cache contract")
-        validate_incremental_cache(
-            paths.geocalib_batch_path,
-            geocalib_contract.metadata,
-            geocalib_contract.expected_items,
+    if state.artifacts.geocalib is not None:
+        from vidmap.mapper.inputs.snapshot import calibration_artifact_name
+
+        contract = state.artifacts.geocalib
+        calibration = frontend_identity["boundary_options"]
+        filename = calibration_artifact_name(calibration["estimator"], calibration["inference"])
+        path = (
+            paths.geocalib_batch_path
+            if calibration["inference"] == "selected_batch"
+            else paths.geocalib_per_image_path
         )
-        sources[GEOCALIB_BATCH_NAME] = paths.geocalib_batch_path
+        validate_incremental_cache(path, contract.metadata, contract.expected_items)
+        sources[filename] = path
 
     return write_mapper_inputs(
         directory,

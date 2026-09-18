@@ -12,6 +12,7 @@ import pycolmap
 
 import vidmap.utils.multiview_geometry as multiview_geometry
 from vidmap.mapper.checkpoints import reconstruction_checkpoint_directory
+from vidmap.mapper.focal_prior import native_focal_priors
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.losses import native_loss_type
 from vidmap.mapper.native.state import SolveState
@@ -21,12 +22,7 @@ from vidmap.mapper.replay.cache import ReplayCache
 from vidmap.utils.multiview_geometry import point_has_positive_depth
 from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
-from .native_options import (
-    build_bundle_adjustment_options,
-    make_depth_constraint_record,
-    make_depth_scale_record,
-    make_intrinsics_prior_record,
-)
+from .native_options import build_bundle_adjustment_options, make_depth_constraint_record, make_depth_scale_record
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +68,10 @@ class BundleAdjuster:
     solve_state: SolveState
     options: BAOptions
     depth_stddev_multiplier: float
-    focal_uncertainty: float | None
+    optimize_intrinsics: bool
     output_dir: Path
     replay: ReplayCache
+    focal_prior: dict[int, tuple[tuple[float, float], ...]] | None = None
     persist_intermediate_reconstructions: bool = False
     playback_trace: PlaybackTraceRecorder | None = None
     observation_graph: pycolmap.CorrespondenceGraph = field(init=False)
@@ -82,7 +79,6 @@ class BundleAdjuster:
     triangulator: pycolmap.IncrementalTriangulator = field(init=False)
     triangulator_options: pycolmap.IncrementalTriangulatorOptions = field(init=False)
     shift_scale: dict = field(init=False)
-    optimize_intrinsics: bool = field(init=False)
     truncation_multiplier: float = field(init=False)
 
     @property
@@ -96,10 +92,6 @@ class BundleAdjuster:
             int(image_id): float(np.exp(np.asarray(values, dtype=np.float64)[1]))
             for image_id, values in self.shift_scale.items()
         }
-
-    @property
-    def annealing_intrinsics_prior_std_factor(self) -> float:
-        return self.options.resolved_annealing_prior_std_factor
 
     def adjust(self) -> None:
         self.prepare_workspace()
@@ -145,7 +137,6 @@ class BundleAdjuster:
             self.observations,
         )
         self.triangulator_options = self.build_triangulator_options(self.options.triangulation)
-        self.optimize_intrinsics = bool(self.focal_uncertainty is not None)
 
     def build_observation_graph(self) -> pycolmap.CorrespondenceGraph:
         graph = pycolmap.CorrespondenceGraph()
@@ -200,7 +191,6 @@ class BundleAdjuster:
                         regularize_scale=True,
                     ),
                     param_multiplier=self.options.depth.param_multiplier,
-                    intrinsics_prior_std_factor=self.options.intrinsics.prior_std_factor,
                 )
 
             self.shift_scale = self.reset_and_retriangulate(
@@ -219,7 +209,6 @@ class BundleAdjuster:
                     regularize_scale=True,
                 ),
                 param_multiplier=self.options.depth.param_multiplier,
-                intrinsics_prior_std_factor=self.options.intrinsics.prior_std_factor,
             )
             if solved:
                 logger.debug(
@@ -281,7 +270,6 @@ class BundleAdjuster:
                     regularize_scale=False,
                 ),
                 param_multiplier=adapted_multiplier,
-                intrinsics_prior_std_factor=self.annealing_intrinsics_prior_std_factor,
             )
             if solved:
                 logger.debug(
@@ -319,7 +307,6 @@ class BundleAdjuster:
                 regularize_scale=False,
             ),
             param_multiplier=refinement.final_depth_param_multiplier * self.truncation_multiplier,
-            intrinsics_prior_std_factor=self.annealing_intrinsics_prior_std_factor,
         )
         if solved:
             logger.info(
@@ -344,7 +331,6 @@ class BundleAdjuster:
                 fix_intrinsics=True,
             ),
             param_multiplier=self.options.depth.param_multiplier,
-            intrinsics_prior_std_factor=self.options.intrinsics.prior_std_factor,
         )
         if solved:
             filtered_num = self.observations.filter_all_points3D(
@@ -441,7 +427,6 @@ class BundleAdjuster:
         *,
         policy: BASolvePolicy,
         param_multiplier: float,
-        intrinsics_prior_std_factor: float,
     ) -> bool:
         depth_options = self.options.depth
         refinement_options = self.options.annealing
@@ -483,19 +468,17 @@ class BundleAdjuster:
         )
 
         intrinsics_priors = []
-        if self.optimize_intrinsics and not policy.fix_intrinsics and self.options.intrinsics.use_prior:
-            for camera_id in camera_ids:
-                camera = self.reconstruction.cameras[camera_id]
-                priors = camera.params.copy()
-                effective_focal_uncertainty = (
-                    self.focal_uncertainty if self.focal_uncertainty is not None else 0.05 * priors[0]
-                )
-                focal_stddev = effective_focal_uncertainty * intrinsics_prior_std_factor
-                if camera.model == pycolmap.CameraModelId.SIMPLE_PINHOLE:
-                    stddevs = np.array([focal_stddev, 5, 5])
-                else:
-                    stddevs = np.array([focal_stddev, focal_stddev, 5, 5])
-                intrinsics_priors.append(make_intrinsics_prior_record(camera_id, priors, stddevs))
+        prior_options = self.options.focal_prior
+        if self.optimize_intrinsics and not policy.fix_intrinsics and prior_options.enabled:
+            if not self.focal_prior:
+                raise ValueError("No frozen original focal observations; cannot enable a missing prior")
+            intrinsics_priors = native_focal_priors(
+                self.focal_prior,
+                camera_ids=camera_ids,
+                loss=prior_options.annealing_loss if policy.refinement else prior_options.normal_loss,
+                scale=prior_options.robust_scale,
+                weight=prior_options.weight_multiplier,
+            )
 
         depth_constraints = []
         depth_scales = []

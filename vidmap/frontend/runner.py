@@ -61,7 +61,7 @@ def run_local_frontend(
         image_dir=image_dir,
         imnames=imnames,
         intrinsics_path=intrinsics_path,
-        use_geocalib=conf.pipeline.use_geocalib,
+        estimate_intrinsics=conf.pipeline.camera_priors.initialization == "predicted",
     )
     reference_image_ids = tuple(scene_parser.rec.images)
     identity = FrontendIdentity.from_config(
@@ -82,7 +82,7 @@ def run_local_frontend(
             mapper_inputs_dir,
             expected_identity=identity.as_dict(),
         )
-        mapper_inputs.validate(use_geocalib=conf.pipeline.use_geocalib)
+        mapper_inputs.validate()
         write_local_input_provenance(mapper_inputs.directory, image_dir, overwrite=True)
         if cache_depth_maps:
             import h5py
@@ -136,7 +136,7 @@ def run_local_frontend(
         mapper_inputs_dir=mapper_inputs_dir,
     )
     mapper_inputs = frontend.run(frontend_identity=identity.as_dict())
-    mapper_inputs.validate(use_geocalib=conf.pipeline.use_geocalib)
+    mapper_inputs.validate()
     write_local_input_provenance(mapper_inputs.directory, image_dir, overwrite=True)
     if temporary_dir.exists():
         shutil.rmtree(temporary_dir)
@@ -191,7 +191,7 @@ class FrontendRunner:
                         else results.reusable_mapper_inputs(self.selection.dataset_layout, identity)
                     )
                     if existing is not None:
-                        existing.validate(use_geocalib=self.conf.pipeline.use_geocalib)
+                        existing.validate()
                         write_local_input_provenance(existing.directory, scene_parser.rgb_dir, overwrite=True)
                         result = FrontendTargetResult(identity, existing, reused=True)
                         completed.append(result)

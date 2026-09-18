@@ -1,3 +1,6 @@
+defaults:
+  - base
+
 keyframes:
   selection:
     force_gt_keyframes: true

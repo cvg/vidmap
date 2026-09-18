@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import numpy as np
 import pycolmap
 
+from vidmap.mapper.focal_prior import native_focal_priors
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.view_graph import VGCCalibrationOptions
@@ -23,6 +25,7 @@ class ViewGraphCalibrator:
     enabled: bool
     consecutive_pair_ids: list[int]
     exclusion_ids: set[int]
+    focal_prior: dict[int, tuple[tuple[float, float], ...]] | None = None
 
     def calibrate(self) -> None:
         rec = self.solve_state.reconstruction
@@ -74,6 +77,17 @@ class ViewGraphCalibrator:
                     )
                 num_inputs += 1
 
+            if self.focal_prior is not None:
+                prior = self.focal_prior
+                vgc_options.normalize_weight_by_pair_count = self.options.normalize_weight_by_pair_count
+                vgc_options.min_focal_length_ratio = np.finfo(float).tiny
+                vgc_options.max_focal_length_ratio = np.finfo(float).max
+                vgc_options.focal_priors = native_focal_priors(
+                    prior,
+                    camera_ids=prior,
+                    loss="cauchy",
+                    weight=self.options.focal_prior_weight,
+                )
             result = native.calibrate_focal_lengths(vgc_options, state.native_problem)
             if not result.success:
                 raise RuntimeError("View graph calibration failed")

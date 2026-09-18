@@ -119,7 +119,8 @@ def _numeric(dataset) -> bool:
     }
 
 
-def validate_incremental_item(hfile, name: str, stage: str) -> None:
+def validate_incremental_item(hfile, name: str, metadata: Mapping[str, Any]) -> None:
+    stage = metadata["stage"]
     if name not in hfile or not isinstance(hfile[name], h5py.Group):
         raise CacheMetadataMismatch(f"missing required group {name!r}")
     group = hfile[name]
@@ -188,42 +189,45 @@ def validate_incremental_item(hfile, name: str, stage: str) -> None:
             value = group.attrs[attribute]
             if not isinstance(value, (int, np.integer)) or isinstance(value, (bool, np.bool_)) or int(value) < 1:
                 raise CacheMetadataMismatch(f"{name!r}: expected positive integer attribute {attribute!r}")
-    elif stage == "geocalib_per_image":
-        uncertainty = require("focal_uncertainty", ndim=0)
-        confidence = require("confidence", ndim=0)
-        uncertainty_value = float(uncertainty[()])
-        confidence_value = float(confidence[()])
-        if not np.isfinite(uncertainty_value) or uncertainty_value <= 0:
-            raise CacheMetadataMismatch(f"{name!r}/focal_uncertainty: expected a positive finite scalar")
-        if not np.isfinite(confidence_value) or confidence_value <= 0:
-            raise CacheMetadataMismatch(f"{name!r}/confidence: expected a positive finite scalar")
-        if not np.isclose(confidence_value, 1 / np.sqrt(uncertainty_value), rtol=1e-5):
-            raise CacheMetadataMismatch(f"{name!r}: confidence is inconsistent with focal uncertainty")
-    elif stage == "geocalib_batch":
-        focal = require("focal", ndim=1)
-        principal_point = require("principal_point", ndim=1)
-        uncertainty = require("focal_uncertainty", ndim=1)
-        topk_images = require("topk_images", numeric=False, ndim=1)
-        if focal.shape != (2,) or not np.isfinite(focal[...]).all() or np.any(focal[...] <= 0):
-            raise CacheMetadataMismatch(f"{name!r}/focal: expected two positive finite values")
-        if principal_point.shape != (2,) or not np.isfinite(principal_point[...]).all():
-            raise CacheMetadataMismatch(f"{name!r}/principal_point: expected two finite values")
-        if uncertainty.size == 0 or not np.isfinite(uncertainty[...]).all():
-            raise CacheMetadataMismatch(f"{name!r}/focal_uncertainty: expected finite nonempty values")
-        try:
-            images = [value.decode("utf-8") if isinstance(value, bytes) else str(value) for value in topk_images[...]]
-        except (TypeError, UnicodeDecodeError, ValueError) as exc:
-            raise CacheMetadataMismatch(f"{name!r}/topk_images: expected UTF-8 image names") from exc
-        if not images or any(not image for image in images) or len(images) != len(set(images)):
-            raise CacheMetadataMismatch(f"{name!r}/topk_images: expected unique nonempty image names")
-        if len(uncertainty) != len(images):
-            raise CacheMetadataMismatch(f"{name!r}: uncertainty and selected-image lengths differ")
+
+    if stage in {"geocalib_per_image", "geocalib_batch"} or (
+        stage == "depth" and metadata["payload_format"] == "per-image-keypoint-depth-calibration"
+    ):
+        K = require("K", ndim=2)[...]
+        if K.shape != (3, 3) or not np.isfinite(K).all() or min(K[0, 0], K[1, 1]) <= 0:
+            raise CacheMetadataMismatch("Calibration requires finite positive PINHOLE intrinsics")
+        if not np.array_equal(K[[0, 1, 2, 2, 2], [1, 0, 0, 1, 2]], [0, 0, 0, 0, 1]):
+            raise CacheMetadataMismatch("PINHOLE K requires zero skew and a canonical homogeneous row")
+        size = require("image_size")[...]
+        if (
+            size.shape != (2,)
+            or size.dtype.kind == "b"
+            or not np.isfinite(size).all()
+            or np.any(size <= 0)
+            or np.any(size != np.floor(size))
+        ):
+            raise CacheMetadataMismatch("Calibration requires positive integral original image dimensions")
+        if stage.startswith("geocalib") or "focal_std_px" in group:
+            std = require("focal_std_px", ndim=1)[...]
+            if std.dtype.kind == "b" or not std.size or not np.isfinite(std).all() or np.any(std <= 0):
+                raise CacheMetadataMismatch(
+                    "Reported focal standard deviations must be positive finite numeric source-pixel values"
+                )
+            if stage == "geocalib_per_image" and len(std) != 1:
+                raise CacheMetadataMismatch("Per-view GeoCalib requires one focal standard deviation")
+            if stage == "geocalib_batch":
+                try:
+                    names = tuple(require("topk_images", numeric=False, ndim=1).asstr()[:])
+                except (TypeError, UnicodeError) as error:
+                    raise CacheMetadataMismatch("Shared GeoCalib requires valid encoded image names") from error
+                if any(not name for name in names) or len(set(names)) != len(names) or len(names) != len(std):
+                    raise CacheMetadataMismatch("Shared GeoCalib diagnostics must follow the selected image inventory")
 
 
-def validate_incremental_items(hfile, expected_items: Sequence[str], stage: str) -> None:
+def validate_incremental_items(hfile, expected_items: Sequence[str], metadata: Mapping[str, Any]) -> None:
     for name in expected_items:
-        validate_incremental_item(hfile, name, stage)
-    if stage == "retrieval_features" and expected_items:
+        validate_incremental_item(hfile, name, metadata)
+    if metadata["stage"] == "retrieval_features" and expected_items:
         widths = {hfile[name]["global_descriptor"].shape[0] for name in expected_items}
         if len(widths) != 1:
             raise CacheMetadataMismatch("retrieval descriptors have inconsistent widths")
@@ -308,7 +312,7 @@ def validate_complete_payload(path: Path, metadata: Mapping[str, Any]) -> None:
                 missing = [name for name in expected_items if name not in hfile]
                 if missing:
                     raise CacheMetadataMismatch(f"{path}: missing {len(missing)} expected items")
-                validate_incremental_items(hfile, expected_items, metadata["stage"])
+                validate_incremental_items(hfile, expected_items, metadata)
                 extras = sorted(set(dataset_parent_names(hfile)) - set(expected_items))
                 if extras:
                     raise CacheMetadataMismatch(f"{path}: found {len(extras)} unplanned items")
