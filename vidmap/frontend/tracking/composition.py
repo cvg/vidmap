@@ -1,6 +1,7 @@
 """Concrete composition of frontend's tracking-owned stages."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from vidmap.frontend.cache import fingerprint, ordered_files_fingerprint
@@ -46,6 +47,10 @@ class TrackingPipeline:
 
     def run(self):
         """Run model stages, then depth and optional camera calibration."""
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="da3-verify") as preparation:
+            return self._run(preparation)
+
+    def _run(self, preparation):
         from vidmap.frontend.pipeline import FrontendArtifacts, TrackingFrontendResult, validate_tracking_result
 
         options = self.options
@@ -71,6 +76,7 @@ class TrackingPipeline:
             logger.info("Geo-calibration (batch): %s", paths.geocalib_batch_path)
         frames = FrameSequence.from_scene(self.scene_parser)
 
+        verification = None
         with create_lazy_romav2_tracker(tracker_options) as tracker:
             keyframe_processor = KeyframeProcessor(
                 scene_parser=self.scene_parser,
@@ -116,6 +122,9 @@ class TrackingPipeline:
                     track_pairs_metadata=track_pairs_metadata,
                 )
                 candidates = keyframe_processor.select_candidates(provisional_salient_metadata)
+                from vidmap.frontend.models.depth.da3_video import verify_da3_model_snapshot
+
+                verification = preparation.submit(verify_da3_model_snapshot)
                 keyframes, tracks = sparse_track_builder.admit_and_build_tracks(
                     candidates,
                     options.keyframes.selection if options.keyframes.selection.lookahead_pruning else None,
@@ -151,6 +160,8 @@ class TrackingPipeline:
             )
             extended = extended_match_builder.build()
 
+        if verification is not None:
+            verification.result()
         depth_estimator = DepthEstimator(
             scene_parser=self.scene_parser,
             paths=paths,
