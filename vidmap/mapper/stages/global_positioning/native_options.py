@@ -82,6 +82,8 @@ def build_first_global_positioning_options(
         if not image_timeline:
             raise ValueError("sequential support requires an image timeline")
         native_options.sequential_support_warmup_rounds = first.sequential_support_warmup_rounds
+        # Limit radius growth during warm-up; stock Ceres may still shrink it.
+        native_options.sequential_support_max_trust_region_radius = 1.0e4
         native_options.sequential_support_observations_per_track = first.sequential_support_observations_per_track
         native_options.sequential_support_loss = loss_config_from_options(first.sequential_support_loss)
         native_options.sequential_support_image_timeline = [int(image_id) for image_id in image_timeline]

@@ -82,6 +82,9 @@ void BindGlobalPositioning(py::module_& m) {
       .def_readwrite("sequential_support_warmup_rounds",
                      &GlobalPositionerOptions::sequential_support_warmup_rounds)
       .def_readwrite(
+          "sequential_support_max_trust_region_radius",
+          &GlobalPositionerOptions::sequential_support_max_trust_region_radius)
+      .def_readwrite(
           "sequential_support_observations_per_track",
           &GlobalPositionerOptions::sequential_support_observations_per_track)
       .def_readwrite("sequential_support_loss",

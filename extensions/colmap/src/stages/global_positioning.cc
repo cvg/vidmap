@@ -1029,29 +1029,35 @@ class GlobalPositioner {
   }
 
   void RunSequentialSupportWarmup() {
-    const int rounds = options_.sequential_support_warmup_rounds;
-    if (rounds == 0) return;
+    if (options_.sequential_support_warmup_rounds == 0) return;
     if (!has_sequential_support_candidate_) {
       throw std::runtime_error(
           "sequential support has no eligible regular observations");
     }
 
     ceres::Solver::Options warmup_options = solver_options_;
-    warmup_options.max_num_iterations = 1;
+    warmup_options.max_num_iterations =
+        options_.sequential_support_warmup_rounds;
+    warmup_options.max_trust_region_radius =
+        options_.sequential_support_max_trust_region_radius;
     SetSequentialSupportWarmup(true);
-    for (int round = 0; round < rounds; ++round) {
-      ceres::Solver::Summary summary;
-      ceres::Solve(warmup_options, problem_.get(), &summary);
-      if (!summary.IsSolutionUsable()) {
-        SetSequentialSupportWarmup(false);
-        throw std::runtime_error("sequential support warm-up failed");
-      }
-      if (options_.playback.IsEnabled() &&
-          round % options_.playback.snapshot_every_n_iterations == 0) {
-        WritePlaybackCapture("iteration", round);
-      }
+    // Ceres iteration zero is the initial evaluation, not an update.
+    SolverPlaybackIterationCallback callback(
+        options_.playback.snapshot_every_n_iterations,
+        -1,
+        [this](const int iteration) {
+          if (iteration >= 0) WritePlaybackCapture("iteration", iteration);
+        });
+    if (options_.playback.IsEnabled()) {
+      warmup_options.update_state_every_iteration = true;
+      warmup_options.callbacks.push_back(&callback);
     }
+    ceres::Solver::Summary summary;
+    ceres::Solve(warmup_options, problem_.get(), &summary);
     SetSequentialSupportWarmup(false);
+    if (!summary.IsSolutionUsable()) {
+      throw std::runtime_error("sequential support warm-up failed");
+    }
   }
 
   void SetSequentialSupportWarmup(const bool enabled) {
@@ -1209,7 +1215,6 @@ void GlobalPositionerOptions::Validate() const {
   }
   if (min_num_view_per_track <= 0 || random_seed < -1 ||
       !std::isfinite(random_init_scale) || random_init_scale < 0.0 ||
-      sequential_support_warmup_rounds < 0 ||
       sequential_support_observations_per_track < 0 ||
       !std::isfinite(uncalibrated_loss_downweight) ||
       uncalibrated_loss_downweight < 0.0 ||
@@ -1230,6 +1235,12 @@ void GlobalPositionerOptions::Validate() const {
       gradient_tolerance < 0.0 || !std::isfinite(parameter_tolerance) ||
       parameter_tolerance < 0.0) {
     throw std::invalid_argument("invalid global positioning options");
+  }
+  if (sequential_support_warmup_rounds < 0 ||
+      !std::isfinite(sequential_support_max_trust_region_radius) ||
+      sequential_support_max_trust_region_radius <
+          ceres::Solver::Options().initial_trust_region_radius) {
+    throw std::invalid_argument("invalid sequential support solver options");
   }
   const bool sequential_support_enabled = sequential_support_warmup_rounds > 0;
   if (sequential_support_enabled !=
