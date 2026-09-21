@@ -51,6 +51,8 @@ def canonical_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return value.decode("utf-8")
     if isinstance(value, np.ndarray):
+        if value.ndim and value.dtype.kind in "biufU":
+            return value.tolist()
         return [canonical_value(item) for item in value.tolist()]
     if isinstance(value, np.generic):
         return value.item()

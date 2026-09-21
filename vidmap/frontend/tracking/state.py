@@ -287,8 +287,9 @@ class SparseTrackState:
         if self.prev_keypoints is not None:
             check_existing_kps = scale_keypoints(self.prev_keypoints[previous_mask], self.scale_ratio)
             if len(check_existing_kps) > 0 and len(salient_keypoints) > 0:
-                diff = salient_keypoints[:, None, :] - check_existing_kps[None, :, :]
-                sq_dists = (diff**2).sum(axis=-1)
+                dx = salient_keypoints[:, None, 0] - check_existing_kps[None, :, 0]
+                dy = salient_keypoints[:, None, 1] - check_existing_kps[None, :, 1]
+                sq_dists = dx**2 + dy**2
                 keep_salient_mask = (sq_dists > self.conf.nms_radius**2).all(axis=1)
 
         sample = nn_sample_2d

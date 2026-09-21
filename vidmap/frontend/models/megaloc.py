@@ -14,7 +14,7 @@ from safetensors.torch import load_file
 from vidmap.frontend.cache import file_fingerprint
 from vidmap.model_sources import model_package_root
 
-MEGALOC_SOURCE_REVISION = "1af071c68fc3ab6c6018c5c868391763516e50f7"
+MEGALOC_SOURCE_REVISION = "5fe0dd697c4a70ba3e23607f6716ab3c606b16db"
 MEGALOC_MODEL_REVISION = "7cb9f7970d366fdf059963d04d372e503e8e9df9"
 MEGALOC_MODEL_SHA256 = "d4f9f2bcb60018f91eb6a8e061ed054fd55654e10c2569cf13841ea986ffb4f8"
 MEGALOC_SOURCE = model_package_root("MegaLoc", "third_party/MegaLoc")
@@ -44,8 +44,9 @@ class MegaLocDescriptorModel(torch.nn.Module):
             raise RuntimeError(
                 f"MegaLoc weights at {pinned_weights} have sha256 {actual}, expected {MEGALOC_MODEL_SHA256}"
             )
-        self.net = _create_megaloc_model()
-        self.net.load_state_dict(load_file(pinned_weights))
+        with torch.device("meta"):
+            self.net = _create_megaloc_model()
+        self.net.load_state_dict(load_file(pinned_weights), strict=True, assign=True)
         self.net.eval()
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
@@ -68,4 +69,5 @@ def megaloc_cache_identity():
         "source_sha256": file_fingerprint(MEGALOC_SOURCE_FILE),
         "model_revision": MEGALOC_MODEL_REVISION,
         "model_sha256": MEGALOC_MODEL_SHA256,
+        "torch": torch.__version__,
     }

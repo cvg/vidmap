@@ -13,14 +13,18 @@ class ImagePairDataset(torch.utils.data.Dataset):
     def __init__(self, image_dataset, pair_indices):
         self.image_dataset = image_dataset
         self.pair_indices = pair_indices
+        self.previous = None
 
     def __len__(self):
         return len(self.pair_indices)
 
     def __getitem__(self, index):
         first, second = self.pair_indices[index]
-        image_a = self.image_dataset[first]
+        image_a = (
+            self.previous[1] if self.previous is not None and self.previous[0] == first else self.image_dataset[first]
+        )
         image_b = self.image_dataset[second]
+        self.previous = (second, image_b)
         return image_a["image"], image_b["image"], image_a["name"], image_b["name"]
 
 
