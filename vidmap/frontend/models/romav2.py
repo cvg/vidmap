@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 
 from vidmap.frontend.cache import file_fingerprint
+from vidmap.frontend.models.romav2_compile_cache import CachedRoMaGraph
 from vidmap.frontend.models.romav2_inference import (
     match_lowres_batch,
     match_true_highres_pair,
@@ -17,7 +18,7 @@ from vidmap.frontend.models.romav2_inference import (
 from vidmap.frontend.options.matching import RoMaV2Options
 from vidmap.model_sources import import_model_package, model_package_root
 
-ROMAV2_SOURCE_REVISION = "95c9968145c8906b7b59383258e9f73b02853d89"
+ROMAV2_SOURCE_REVISION = "f23bab45a53ffb3f3c3cdda0566d0de5365e7339"
 ROMAV2_PACKAGE_ROOT = model_package_root(
     "romav2",
     "third_party/RoMaV2/src/romav2",
@@ -71,18 +72,24 @@ class RoMaV2Model(torch.nn.Module):
         module = import_model_package("romav2", ROMAV2_PACKAGE_ROOT)
         _configure_romav2_logging()
 
-        cfg = module.RoMaV2.Cfg(
-            setting="precise",
-            compile=conf.compile,
-        )
         use_native_local_correlation()
-        # RoMaV2 downloads its release checkpoint on first construction.
-        self._net = module.RoMaV2(cfg)
-        _verify_romav2_checkpoint()
-        self._net.bidirectional = False
-        self._net.eval()
-        for parameter in self.parameters():
-            parameter.requires_grad = False
+        cached = conf.compile and torch.cuda.is_available()
+
+        def create_net():
+            # RoMaV2 downloads its release checkpoint on first construction.
+            cfg = module.RoMaV2.Cfg(setting="precise", compile=conf.compile and not cached)
+            net = module.RoMaV2(cfg)
+            _verify_romav2_checkpoint()
+            net.bidirectional = False
+            net.return_intermediates = False
+            return net.eval().requires_grad_(False)
+
+        if cached:
+            self._net = CachedRoMaGraph(
+                create_net, romav2_cache_identity(conf), ROMAV2_PACKAGE_ROOT, component="whole_model"
+            ).eval()
+        else:
+            self._net = create_net()
 
     def forward(self, data):
         raise NotImplementedError("Use the explicit RoMaV2 inference operations")
@@ -216,6 +223,7 @@ def romav2_cache_identity(conf: RoMaV2Options):
             "bidirectional": False,
         },
         "version": ROMAV2_VERSION,
+        "torch": torch.__version__,
         "source_revision": ROMAV2_SOURCE_REVISION,
         "checkpoint_sha256": ROMAV2_CHECKPOINT_SHA256,
         "true_highres": True,

@@ -48,10 +48,11 @@ pip install -e .
 ```
 
 VidMap was last tested on Linux x86-64 with Python 3.10, COLMAP and PyCOLMAP
-4.1, PyTorch 2.7.1, TorchVision 0.22.1, and xFormers 0.0.31 on NVIDIA GPUs.
+4.1, PyTorch 2.14.0, TorchVision 0.29.0 and xFormers 0.0.35 on NVIDIA GPUs.
+Fast loading of cached compiled models requires PyTorch 2.10+.
 
 The first frontend run automatically downloads approximately 9 GB of model
-checkpoints.
+checkpoints and caches approximately 1.2 GB of compiled models.
 
 **Optional visualization setup.** Install [Rerun](https://rerun.io/):
 

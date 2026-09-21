@@ -81,7 +81,7 @@ def match_true_highres_pair(
     predictions = model(
         _resize(image_a_lowres, lowres_size),
         _resize(image_b_lowres, lowres_size),
-        img_A_hr=_resize(image_a_highres, highres_size),
-        img_B_hr=_resize(image_b_highres, highres_size),
+        _resize(image_a_highres, highres_size),
+        _resize(image_b_highres, highres_size),
     )
     return _finalize_predictions(model, predictions)
