@@ -2,7 +2,7 @@
 
 from typing import Optional, Tuple
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from vidmap.configuration.validators import dataclass
 
@@ -12,6 +12,7 @@ class RoMaV2Options:
     """Options for the sole supported RoMaV2 frontend configuration."""
 
     compile: bool = True
+    lc_feature_capacity: int = Field(default=8, ge=2)
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))

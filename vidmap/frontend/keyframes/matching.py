@@ -71,21 +71,21 @@ def build_pair_loader(scene_parser, sequence, lowres_options):
     return loader, len(pair_indices), original_width, original_height
 
 
-def match_lowres_batch(tracker_model, batch, original_width, original_height, first_batch):
+def match_lowres_batch(tracker_model, batch, original_width, original_height, first_batch, *, batch_size):
     from vidmap.utils.profiling import record_timing, sync_time
 
     names_A = batch["names_A"]
     names_B = batch["names_B"]
-    batch_indices = list(range(len(names_A)))
     batch_start = sync_time()
-    im_A = batch["im_A_batch"][batch_indices].cuda(non_blocking=True)
-    im_B = batch["im_B_batch"][batch_indices].cuda(non_blocking=True)
+    im_A = batch["im_A_batch"]
+    im_B = batch["im_B_batch"]
     output = tracker_model.match_lowres_batch(
         im_A,
         im_B,
         names_a=names_A,
         names_b=names_B,
         output_size=(original_width, original_height),
+        batch_size=batch_size,
     )
     if first_batch:
         record_timing("keyframing_first_batch", sync_time() - batch_start, first=True)
