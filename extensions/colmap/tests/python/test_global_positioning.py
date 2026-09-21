@@ -65,8 +65,7 @@ def _sequential_support_problem(storage_order):
     return problem
 
 
-def test_sequential_support_warms_up_with_early_track_observations():
-    problem = _sequential_support_problem([3, 1, 2])
+def _sequential_support_options(iterations):
     options = native.GlobalPositioningOptions()
     options.generate_random_positions = False
     options.generate_random_points = False
@@ -74,32 +73,36 @@ def test_sequential_support_warms_up_with_early_track_observations():
     options.min_num_views_per_track = 2
     options.num_threads = 1
     options.max_num_iterations = 1
-    options.sequential_support_warmup_rounds = 2
+    options.sequential_support_warmup_rounds = iterations
+    options.sequential_support_max_trust_region_radius = 1e4
     options.sequential_support_observations_per_track = 2
-    options.sequential_support_loss.type = native.LossFunctionType.TRIVIAL
     options.sequential_support_image_timeline = [1, 2, 3]
+    return options
+
+
+def test_continuous_support_preserves_capped_reference_solution():
+    problem = _sequential_support_problem([3, 1, 2])
+    options = _sequential_support_options(2)
 
     result = native.run_global_positioning(options, problem)
 
     assert result.success
     np.testing.assert_allclose(
         problem.track(7).xyz,
-        [0.14776050274252941, 0.004862738467740601, 3.4976693525562697],
+        [0.14776050274253688, 0.004862738467740524, 3.497669352556072],
         rtol=0.0,
         atol=1e-12,
     )
     np.testing.assert_allclose(
         [result.final_bata_scales[key] for key in ("7:1:0:0", "7:2:0:0", "7:3:0:0")],
-        [0.5868746726257932, 0.5785674026758529, 1.0],
+        [0.5868746726263283, 0.5785674026757762, 1.0],
         rtol=0.0,
         atol=1e-12,
     )
 
 
 def test_sequential_support_requires_complete_unique_timeline():
-    options = native.GlobalPositioningOptions()
-    options.sequential_support_warmup_rounds = 2
-    options.sequential_support_observations_per_track = 2
+    options = _sequential_support_options(2)
     options.sequential_support_image_timeline = [1, 2]
 
     with np.testing.assert_raises(ValueError):
@@ -113,15 +116,7 @@ def test_sequential_support_uses_explicit_chronology():
             image = problem.image(image_id)
             image.is_inlier = np.ones(1, dtype=np.uint8)
             problem.update_image(image)
-        options = native.GlobalPositioningOptions()
-        options.generate_random_positions = False
-        options.generate_random_points = False
-        options.use_initial_positions = True
-        options.min_num_views_per_track = 2
-        options.num_threads = 1
-        options.max_num_iterations = 1
-        options.sequential_support_warmup_rounds = 2
-        options.sequential_support_observations_per_track = 2
+        options = _sequential_support_options(2)
         options.sequential_support_image_timeline = timeline
         native.run_global_positioning(options, problem)
         return problem.track(7).xyz
@@ -151,17 +146,7 @@ def test_sequential_support_is_disabled_by_default():
 
 def test_sequential_support_playback_starts_before_warmup():
     captures = []
-    options = native.GlobalPositioningOptions()
-    options.generate_random_positions = False
-    options.generate_random_points = False
-    options.use_initial_positions = True
-    options.min_num_views_per_track = 2
-    options.num_threads = 1
-    options.max_num_iterations = 1
-    options.sequential_support_warmup_rounds = 4
-    options.sequential_support_observations_per_track = 2
-    options.sequential_support_loss.type = native.LossFunctionType.TRIVIAL
-    options.sequential_support_image_timeline = [1, 2, 3]
+    options = _sequential_support_options(4)
     options.playback.snapshot_every_n_iterations = 3
     options.playback.callback = captures.append
 
@@ -405,3 +390,60 @@ def test_bundle_adjustment_preserves_camera_without_observations():
     assert result.success
     assert result.diagnostics.num_intrinsics_prior_residuals == 1
     np.testing.assert_array_equal(problem.camera(2).params, camera.params)
+
+
+@pytest.mark.parametrize(("rounds", "function_tolerance", "expected_updates"), [(5, 0.0, 5), (16, 1.0, 0)])
+def test_continuous_warmup_respects_budget_and_early_convergence(rounds, function_tolerance, expected_updates):
+    captures = []
+    options = _sequential_support_options(rounds)
+    options.function_tolerance = function_tolerance
+    options.gradient_tolerance = 0.0
+    options.parameter_tolerance = 0.0
+    options.playback.callback = captures.append
+
+    result = native.run_global_positioning(options, _sequential_support_problem([3, 1, 2]))
+
+    assert result.success
+    warmup = [c for c in captures if c["phase"] == "iteration" and c["iteration"] < rounds]
+    assert [c["iteration"] for c in warmup] == list(range(expected_updates))
+    assert captures[0]["phase"] == "initial"
+    assert captures[-1]["phase"] == "final"
+    assert captures[-1]["iteration"] >= rounds
+
+
+def test_python_radius_cap_preserves_initial_step_and_limits_later_steps():
+    def warmup_updates(cap):
+        captures = []
+        options = _sequential_support_options(2)
+        options.parameter_ordering = native.GlobalPositioningOrdering.SINGLETON
+        options.function_tolerance = options.gradient_tolerance = options.parameter_tolerance = 0.0
+        options.sequential_support_max_trust_region_radius = cap
+        options.playback.callback = captures.append
+        result = native.run_global_positioning(options, _sequential_support_problem([3, 1, 2]))
+        assert result.success
+        updates = [c["points_xyz"] for c in captures if c["phase"] == "iteration" and c["iteration"] < 2]
+        assert len(updates) == 2
+        return updates
+
+    capped, uncapped = warmup_updates(1e4), warmup_updates(1e16)
+    np.testing.assert_array_equal(capped[0], uncapped[0])
+    assert np.linalg.norm(capped[1] - uncapped[1]) > 1e-8
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("warmup_rounds", -1),
+        ("max_trust_region_radius", 1.0),
+        ("max_trust_region_radius", 0.0),
+        ("max_trust_region_radius", float("nan")),
+    ],
+)
+def test_invalid_warmup_solver_options_are_rejected_before_mutation(field, value):
+    problem = _sequential_support_problem([3, 1, 2])
+    before = problem.track(7).xyz.copy()
+    options = _sequential_support_options(16)
+    setattr(options, f"sequential_support_{field}", value)
+    with pytest.raises(ValueError, match="invalid sequential support solver options"):
+        native.run_global_positioning(options, problem)
+    np.testing.assert_array_equal(problem.track(7).xyz, before)

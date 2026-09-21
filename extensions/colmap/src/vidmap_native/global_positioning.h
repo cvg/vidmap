@@ -46,7 +46,10 @@ struct GlobalPositionerOptions {
   bool optimize_points = true;
   bool optimize_scales = true;
   // Temporarily apply a separate loss to early observations of each track.
+  // Zero disables warm-up. All other solver settings are inherited from GP.
   int sequential_support_warmup_rounds = 0;
+  double sequential_support_max_trust_region_radius =
+      ceres::Solver::Options().max_trust_region_radius;
   int sequential_support_observations_per_track = 0;
   LossConfig sequential_support_loss;
   std::vector<ImageId> sequential_support_image_timeline;
