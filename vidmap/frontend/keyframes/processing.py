@@ -193,6 +193,7 @@ class KeyframeProcessor:
                         original_width,
                         original_height,
                         first_batch,
+                        batch_size=self.lowres_options.batch_size,
                     )
                     first_batch = False
                     for pair_match_lr, pair_cert_lr in zip(matches, certainties):

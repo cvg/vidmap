@@ -56,6 +56,9 @@ def admitted_track_pairs_cache_metadata(
         "salient_features": semantic_config(salient_options),
         "salient_feature_model": aliked_cache_identity(),
     }
+    if lowres_options.batch_size > 1:
+        # Zero-pad the final partial batch to reuse the full-batch compiled graph.
+        config["lowres_batch_padding"] = "zeros-to-configured-batch-size"
     ordered_inputs = {
         "sequence": sequence,
         "timestamps": _ordered_timestamps(sequence, timestamps),

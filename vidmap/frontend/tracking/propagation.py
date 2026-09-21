@@ -225,10 +225,10 @@ class StreamingTrackPropagator:
         """Infer one directed dense match with covariance on the CPU."""
         images0 = self._current_window_images[name0]
         images1 = self._current_window_images[name1]
-        im_A_hr = images0["highres"].unsqueeze(0).cuda()
-        im_A_lr = images0["lowres"].unsqueeze(0).cuda()
-        im_B_hr = images1["highres"].unsqueeze(0).cuda()
-        im_B_lr = images1["lowres"].unsqueeze(0).cuda()
+        im_A_hr = images0["highres"].unsqueeze(0)
+        im_A_lr = images0["lowres"].unsqueeze(0)
+        im_B_hr = images1["highres"].unsqueeze(0)
+        im_B_lr = images1["lowres"].unsqueeze(0)
 
         # Run matching
         from vidmap.utils.profiling import record_timing, sync_time
@@ -239,6 +239,8 @@ class StreamingTrackPropagator:
             im_B_lr,
             im_A_hr,
             im_B_hr,
+            names=(name0, name1),
+            retained_names=tuple(self._current_window_images),
             lowres_resolution=self.lowres_match_resolution,
             return_covariance=True,
         )

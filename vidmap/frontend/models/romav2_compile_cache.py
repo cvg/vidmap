@@ -14,9 +14,6 @@ from vidmap.frontend.models.compiled_graph import CachedGraph
 class CachedRoMaGraph(CachedGraph):
     """Lazily capture or load a tensor-only RoMa component."""
 
-    bidirectional = False
-    threshold = None
-
     def __init__(
         self, factory: Callable[[], torch.nn.Module], model_identity: dict, source_root: Path, *, component: str
     ):
@@ -24,7 +21,8 @@ class CachedRoMaGraph(CachedGraph):
             *sorted(source_root.rglob("*.py")),
             Path(__file__),
             Path(__file__).with_name("romav2.py"),
-            Path(__file__).with_name("romav2_inference.py"),
+            Path(__file__).with_name("romav2_features.py"),
+            Path(__file__).with_name("romav2_correlation.py"),
         ]
         super().__init__(
             factory=factory, namespace="romav2", component=component, model_identity=model_identity, sources=sources
@@ -41,11 +39,6 @@ class CachedRoMaGraph(CachedGraph):
             for value in inputs
         ):
             raise ValueError("RoMa components require contiguous float32 or bfloat16 CUDA inference tensors")
-        if self.identity["component"] == "whole_model" and (
-            len(inputs) not in (2, 4)
-            or any(value.dtype != torch.float32 or value.ndim != 4 or value.shape[1] != 3 for value in inputs)
-        ):
-            raise ValueError("RoMa requires two or four float32 image tensors")
         return super().forward(*inputs)
 
     def load_module(self, path):

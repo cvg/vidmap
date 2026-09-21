@@ -160,6 +160,9 @@ def _match_loop_closures_streaming(
         pin_memory=True,
     )
 
+    from vidmap.frontend.loop_closure.feature_plan import retained_feature_names
+
+    retention = retained_feature_names(retrieval_pairs, tracker_model.conf.lc_feature_capacity)
     # Stats for logging
     _stats = {"computed": 0, "total_matches": 0}
     with H5KeypointReader(sparse_features_path, max_size=512) as keypoint_reader:
@@ -174,19 +177,22 @@ def _match_loop_closures_streaming(
             _stats["computed"] += 1
 
             # Use prefetched images from DataLoader
-            im_A_hr = batch["im_A_hr"].unsqueeze(0).cuda()
-            im_B_hr = batch["im_B_hr"].unsqueeze(0).cuda()
-            im_A_lr = batch["im_A_lr"].unsqueeze(0).cuda()
-            im_B_lr = batch["im_B_lr"].unsqueeze(0).cuda()
+            im_A_hr = batch["im_A_hr"].unsqueeze(0)
+            im_B_hr = batch["im_B_hr"].unsqueeze(0)
+            im_A_lr = batch["im_A_lr"].unsqueeze(0)
+            im_B_lr = batch["im_B_lr"].unsqueeze(0)
 
             from vidmap.utils.profiling import record_timing, sync_time
 
             _mt = sync_time()
+            retained = next(retention)
             match = tracker_model.match_highres_pair(
                 im_A_lr,
                 im_B_lr,
                 im_A_hr,
                 im_B_hr,
+                names=(name0, name1),
+                retained_names=retained,
                 lowres_resolution=_lr_res,
             )
             record_timing("lc_first_match", sync_time() - _mt, first=True)
