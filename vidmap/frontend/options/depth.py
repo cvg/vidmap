@@ -3,7 +3,7 @@
 from dataclasses import field as dc_field
 from typing import Literal
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from vidmap.configuration.validators import dataclass
 from vidmap.frontend.options.matching import PreprocessingOptions
@@ -17,6 +17,7 @@ class Da3VideoOptions:
     window_size: int = 1
     ref_view_strategy: Literal["middle", "first", "saddle_balanced"] = "middle"
     process_res: int = 504
+    compile: bool = True
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -26,7 +27,7 @@ class DepthEstimationOptions:
     preprocessing: PreprocessingOptions = dc_field(
         default_factory=lambda: PreprocessingOptions(resize_max=None, resize_force=False)
     )
-    batch_size: int = 1
+    batch_size: int = Field(default=4, ge=1)
     num_workers: int = 4
 
     @property

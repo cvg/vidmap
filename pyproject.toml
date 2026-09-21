@@ -27,6 +27,7 @@ dependencies = [
   "matplotlib==3.10.3",
   "huggingface-hub==0.36.0",
   "safetensors==0.5.3",
+  "accelerate==1.8.1",
   "einops==0.8.1",
   "addict==2.4.0",
   "requests==2.32.4",

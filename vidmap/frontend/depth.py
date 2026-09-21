@@ -50,7 +50,8 @@ def _release_depth_model(model) -> None:
     cleanup_error = None
     if model is not None:
         try:
-            model.cpu()
+            # The owned model is finished; discard storage without copying weights.
+            model.to("meta")
         except Exception as error:
             cleanup_error = error
     try:
@@ -69,6 +70,8 @@ def da3_cache_identity(backend: Da3VideoOptions) -> dict:
         "source_revision": DA3_SOURCE_REVISION,
         "config_sha256": DA3_MODEL_CONFIG_SHA256,
         "checkpoint_sha256": DA3_MODEL_CHECKPOINT_SHA256,
+        "runtime_revision": 3 if backend.compile else 1,
+        "torch": torch.__version__,
     }
 
 
@@ -129,7 +132,7 @@ def write_sampled_depth_cache(image_result, depth_path):
     image_name, depth_data = image_result
     depth_map = depth_data["depth_map"]  # (H, W)
     valid_map = depth_data["valid_map"].astype(np.float32)  # (H, W)
-    conf_map = depth_data.get("conf_map", None)  # (H, W) or None
+    conf_map = depth_data["conf_map"]  # (H, W)
     keypoints = depth_data["keypoints"]  # (M, 2) in original image coordinates
     original_size = depth_data["original_size"]  # (width, height)
 
@@ -143,12 +146,11 @@ def write_sampled_depth_cache(image_result, depth_path):
         # Sample depth and valid at keypoints
         depths_kps = sample_at_keypoints(keypoints, depth_map, sx, sy)
         valid_kps = sample_at_keypoints(keypoints, valid_map, sx, sy, mode="nearest").astype(bool)
-        conf_kps = sample_at_keypoints(keypoints, conf_map, sx, sy) if conf_map is not None else None
+        conf_kps = sample_at_keypoints(keypoints, conf_map, sx, sy)
     else:
         # No keypoints, return empty arrays
         depths_kps = np.array([], dtype=np.float32)
         valid_kps = np.array([], dtype=bool)
-        conf_kps = None
 
     # Save to H5 file
     with h5py.File(str(depth_path), "a", libver="latest") as h5_file_handle:
@@ -157,7 +159,7 @@ def write_sampled_depth_cache(image_result, depth_path):
         image_group = h5_file_handle.create_group(image_name)
         image_group.create_dataset("depth", data=depths_kps)
         image_group.create_dataset("valid", data=valid_kps)
-        if conf_kps is not None:
+        if len(keypoints) > 0:
             image_group.create_dataset("conf", data=conf_kps)
         if "calibration" in depth_data:
             for key, value in depth_data["calibration"].items():
@@ -193,6 +195,29 @@ def _write_depth_results(image_result, *, sampled_path, full_path):
         write_full_depth_cache((image_name, full_payload), full_path)
 
 
+def _iter_depth_predictions(model, windows, *, batch_size):
+    """Batch same-shaped DA3 windows while preserving their order."""
+    if batch_size < 1:
+        raise ValueError("Depth batch_size must be positive")
+
+    def predict(rows):
+        outputs = model.forward_windows(rows, batch_size=batch_size)
+        assert len(outputs) == len(rows)
+        return zip(rows, outputs)
+
+    pending = []
+    for row in windows:
+        if pending and row["images"].shape != pending[0]["images"].shape:
+            yield from predict(pending)
+            pending = []
+        pending.append(row)
+        if len(pending) == batch_size:
+            yield from predict(pending)
+            pending = []
+    if pending:
+        yield from predict(pending)
+
+
 def _run_da3_depth(
     scene_parser,
     image_names,
@@ -206,6 +231,7 @@ def _run_da3_depth(
     *,
     num_workers,
     calibration_enabled=False,
+    batch_size=1,
 ):
     """Run the ordered DA3 sliding-window inference owned by the depth stage."""
     from vidmap.frontend.models.depth.da3_video import DA3_MODEL_ID, Da3Video
@@ -248,16 +274,13 @@ def _run_da3_depth(
                 disable=not progress_bars_enabled(),
             ) as progress,
         ):
-            for batch in windows:
+            for batch, prediction in _iter_depth_predictions(model, windows, batch_size=batch_size):
                 name = batch["name"]
-                prediction = model.forward_multiview(
-                    batch["images"], batch["center_index"], batch["original_size"], batch["uncropped_size"]
-                )
                 keypoints = features[name]["keypoints"][:] if name in features else np.array([])
                 original_width, original_height = (int(value) for value in batch["original_size"])
                 depth_map = prediction["depth"]
                 valid_map = prediction["valid"]
-                conf_map = prediction.get("conf", None)
+                conf_map = prediction["conf"]
                 write_sampled = name in sampled_names
                 write_full = name in full_names
                 original_size = np.array([original_width, original_height])
@@ -281,8 +304,7 @@ def _run_da3_depth(
                         output_size,
                         interpolation=cv2.INTER_NEAREST,
                     ).astype(bool)
-                    if conf_map is not None:
-                        conf_map = cv2.resize(conf_map, output_size, interpolation=cv2.INTER_LINEAR)
+                    conf_map = cv2.resize(conf_map, output_size, interpolation=cv2.INTER_LINEAR)
                 sampled_payload = (
                     {
                         "depth_map": depth_map,
@@ -404,6 +426,7 @@ class DepthEstimator:
                 full_names,
                 num_workers=self.options.num_workers,
                 calibration_enabled=self.calibration_enabled,
+                batch_size=self.options.batch_size,
             )
         else:
             logger.info("No depth maps to estimate; all already exist")
@@ -457,6 +480,7 @@ def cache_full_depth_maps_posthoc(
             output_path,
             frozenset(missing),
             num_workers=options.num_workers,
+            batch_size=options.batch_size,
         )
     else:
         logger.info(
