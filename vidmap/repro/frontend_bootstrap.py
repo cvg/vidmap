@@ -26,6 +26,7 @@ def deterministic_config_patch() -> dict[str, Any]:
         "keyframes": {"matching": {"batch_size": 1, "num_workers": 0}},
         "tracks": {"propagation": {"max_sequential_track_sigma_roma_px": None}},
         "depth": {
+            "backend": {"compile": False},
             "batch_size": 1,
             "num_workers": 0,
             "cache_map": False,

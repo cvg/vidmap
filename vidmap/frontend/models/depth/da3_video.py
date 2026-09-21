@@ -19,7 +19,7 @@ DA3_MODEL_ID = "depth-anything/DA3NESTED-GIANT-LARGE-1.1"
 DA3_MODEL_REVISION = "b2359bdf726fb44ef62acca04d629dcf158053e7"
 DA3_MODEL_CONFIG_SHA256 = "09adf89474017e717bc05aa86fd3a378708ba8914b036d61874eced328069468"
 DA3_MODEL_CHECKPOINT_SHA256 = "8ebe871a022ed58d2fc8fdfb2ebdb31d57b60fe39611c849095851a7b7c6020c"
-DA3_SOURCE_REVISION = "2c21ea849ceec7b469a3e62ea0c0e270afc3281a"
+DA3_SOURCE_REVISION = "b531937f10ae9f3d6f32b6050d13a9b96b3e1c5b"
 DA3_PACKAGE_ROOT = model_package_root(
     "depth_anything_3",
     "third_party/Depth-Anything-3/src/depth_anything_3",
@@ -35,32 +35,23 @@ def _configure_da3_logging() -> None:
 
 
 @cache
-def _verify_da3_model_snapshot(model_id: str, revision: str) -> None:
+def verify_da3_model_snapshot() -> None:
     expected = {
         "config.json": DA3_MODEL_CONFIG_SHA256,
         "model.safetensors": DA3_MODEL_CHECKPOINT_SHA256,
     }
     for filename, expected_sha256 in expected.items():
-        path = hf_hub_download(repo_id=model_id, filename=filename, revision=revision)
+        path = hf_hub_download(repo_id=DA3_MODEL_ID, filename=filename, revision=DA3_MODEL_REVISION)
         actual = file_fingerprint(path)
         if actual != expected_sha256:
             raise RuntimeError(f"DA3 {filename} has sha256 {actual}, expected {expected_sha256}")
 
 
 class Da3Video(torch.nn.Module):
-    """
-    Depth Anything 3 multi-view depth estimation with sliding window.
+    """Estimate center-frame depth and intrinsics for independent image windows.
 
-    Processes multiple frames at once using DA3's global attention to produce
-    temporally consistent depth.
-
-    Uses pretrained weights from HuggingFace Hub.
-
-    Usage:
-        model = Da3Video(Da3VideoOptions())
-        images = prepared_window  # normalized tensor (N, 3, H, W)
-        out = model.forward_multiview(images, 1, (width, height), uncropped_size)
-        depth_B = out["depth"]  # (H, W) metric depth in meters
+    Window records carry normalized frames (N, 3, H, W), a center index, and
+    original and uncropped sizes. Windows in one batch share the image shape.
     """
 
     def __init__(self, conf: Da3VideoOptions):
@@ -70,51 +61,41 @@ class Da3Video(torch.nn.Module):
         with optional_xformers_disabled():
             import_model_package("depth_anything_3", DA3_PACKAGE_ROOT)
             _configure_da3_logging()
-            _verify_da3_model_snapshot(DA3_MODEL_ID, DA3_MODEL_REVISION)
+            verify_da3_model_snapshot()
             self.model = Da3Inference.from_pretrained(DA3_MODEL_ID, revision=DA3_MODEL_REVISION)
         self.model = self.model.cuda().eval()
         for parameter in self.parameters():
             parameter.requires_grad = False
+        self.model.configure_runtime(compile=conf.compile)
 
-    def forward_multiview(self, images: torch.Tensor, center_idx: int, original_size, uncropped_size):
-        """
-        Process one prepared image window and return depth for its center frame.
-
-        Args:
-            images: Normalized tensor with shape (N, 3, H, W).
-            center_idx: Index of the center frame to estimate depth for
-            original_size: Center frame's original (width, height)
-            uncropped_size: Center frame's resized (width, height) before window cropping
-        Returns:
-            dict with:
-                - depth: (H, W) float32 depth map for center frame
-                - conf: (H, W) float32 confidence map for center frame
-                - valid: (H, W) bool validity mask
-                - calibration: Original-image intrinsics
-        """
-        depths, confidences, intrinsics = self.model.infer(
-            images,
+    def forward_windows(self, windows, *, batch_size):
+        outputs = self.model.infer_windows(
+            [window["images"] for window in windows],
+            batch_size=batch_size,
             ref_view_strategy=self.conf.ref_view_strategy,
         )
+        return [self._prediction(*output, window) for output, window in zip(outputs, windows)]
 
+    def _prediction(self, depths, confidences, intrinsics, window):
+        center_idx = window["center_index"]
         depth = depths[center_idx]
-        conf = confidences[center_idx] if confidences is not None else np.ones_like(depth)
+        conf = confidences[center_idx]
         valid = (depth > 0) & np.isfinite(depth)
         depth[np.isinf(depth)] = 2.0
 
         # Map intrinsics from the center crop back to original-image coordinates.
         height, width = depth.shape
-        uw, uh = uncropped_size
+        uw, uh = window["uncropped_size"]
         left = int(round((uw - width) / 2))
         top = int(round((uh - height) / 2))
 
-        ow, oh = original_size
+        ow, oh = window["original_size"]
         scale = np.diag(np.asarray([ow / uw, oh / uh, 1.0], dtype=np.float32))
         K = np.asarray(intrinsics[center_idx], dtype=np.float32).copy()
         K[0, 2] += left
         K[1, 2] += top
         K = scale @ K
-        calibration = {"K": K, "image_size": tuple(int(n) for n in original_size)}
+        calibration = {"K": K, "image_size": tuple(int(n) for n in window["original_size"])}
 
         return {
             "depth": depth,
