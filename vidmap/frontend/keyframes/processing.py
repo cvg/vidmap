@@ -180,22 +180,21 @@ class KeyframeProcessor:
                 bootstrap_intrinsics,
             )
 
-            first_batch = True
-            with tqdm(
-                total=total_pairs,
-                desc="Streaming keyframe detection",
-                disable=not progress_bars_enabled(),
-            ) as progress:
-                for batch in loader:
-                    matches, certainties = keyframe_matching.match_lowres_batch(
-                        tracker_model,
-                        batch,
-                        original_width,
-                        original_height,
-                        first_batch,
-                        batch_size=self.lowres_options.batch_size,
-                    )
-                    first_batch = False
+            with (
+                keyframe_matching.pipelined_matches(
+                    tracker_model,
+                    loader,
+                    original_width,
+                    original_height,
+                    batch_size=self.lowres_options.batch_size,
+                ) as batches,
+                tqdm(
+                    total=total_pairs,
+                    desc="Streaming keyframe detection",
+                    disable=not progress_bars_enabled(),
+                ) as progress,
+            ):
+                for matches, certainties in batches:
                     for pair_match_lr, pair_cert_lr in zip(matches, certainties):
                         selector.process_pair(pair_match_lr, pair_cert_lr)
                         progress.update(1)

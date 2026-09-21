@@ -28,7 +28,7 @@ class PreprocessingOptions:
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class LowresMatchOptions:
     batch_size: int = 8
-    num_workers: int = 16
+    num_workers: int = 4
     resize_to_shape: Tuple[int, int] = (560, 560)
     interpolation: str = "torch_bicubic"
 
