@@ -42,19 +42,19 @@ class DenseMatchField:
     target_size: tuple[int, int]
 
 
-@dataclass
+@dataclass(frozen=True)
 class DenseHopBuffers:
-    matches: np.ndarray
-    certainty: np.ndarray
-    covariance: np.ndarray
+    matches: dict[int, np.ndarray]
+    certainty: dict[int, np.ndarray]
+    covariance: dict[int, np.ndarray]
 
     @classmethod
-    def create(cls, max_hop, current_size):
-        width, height = current_size
+    def from_fields(cls, records, fields):
+        """Borrow CPU tensor storage only for this target's scheduled hops."""
         return cls(
-            matches=np.full((max_hop, height, width, 2), -1, dtype=np.float32),
-            certainty=np.full((max_hop, height, width), -1, dtype=np.float32),
-            covariance=np.full((max_hop, height, width, 2, 2), -1, dtype=np.float32),
+            matches={r.slot: f.matches.numpy().astype(np.float32, copy=False) for r, f in zip(records, fields)},
+            certainty={r.slot: f.certainty.numpy().astype(np.float32, copy=False) for r, f in zip(records, fields)},
+            covariance={r.slot: f.covariance.numpy().astype(np.float32, copy=False) for r, f in zip(records, fields)},
         )
 
 
@@ -285,7 +285,6 @@ class StreamingTrackPropagator:
             "highres_dataset",
             "lowres_dataset",
             "state",
-            "dense_hops",
         ):
             if attribute in vars(self):
                 delattr(self, attribute)
@@ -397,15 +396,10 @@ class StreamingTrackPropagator:
                     current_size=direct.source_size,
                     scheduled_hops=self.conf.multiflow_hops,
                 )
-                self.dense_hops = DenseHopBuffers.create(max(self.conf.multiflow_hops), direct.source_size)
             state = self.state
-            dense_hops = self.dense_hops
             if any(field.source_size != state.current_size for field in fields):
                 raise RuntimeError("Dense multiflow fields changed processing-grid size within one run")
-            for record, field in zip(records, fields):
-                dense_hops.matches[record.slot] = field.matches
-                dense_hops.certainty[record.slot] = field.certainty
-                dense_hops.covariance[record.slot] = field.covariance
+            dense_hops = DenseHopBuffers.from_fields(records, fields)
 
             certainty = direct.certainty.clone()
             matches = direct.matches

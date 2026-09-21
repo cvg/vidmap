@@ -76,24 +76,20 @@ def select_lc_matches_from_dense(
     valid = certainty_sampled > lc_match_thresh
     mkp_ids1[~valid] = -1
 
+    matches0 = np.full(len(kpts0_np), -1, dtype=np.int32)
+    matching_scores0 = np.zeros(len(kpts0_np), dtype=np.float32)
     valid_mask = mkp_ids1 >= 0
     if valid_mask.any():
         ref_indices = mkp_ids1[valid_mask]
         query_indices = np.where(valid_mask)[0]
         certainties = certainty_sampled[valid_mask]
 
-        matches0 = np.full(len(kpts0_np), -1, dtype=np.int32)
-        matching_scores0 = np.zeros(len(kpts0_np), dtype=np.float32)
-        for ref_idx in np.unique(ref_indices):
-            mask = ref_indices == ref_idx
-            query_candidates = query_indices[mask]
-            certainty_candidates = certainties[mask]
-            best_idx = query_candidates[np.argmax(certainty_candidates)]
-            matches0[best_idx] = ref_idx
-            matching_scores0[best_idx] = certainty_sampled[best_idx]
-    else:
-        matches0 = np.full(len(kpts0_np), -1, dtype=np.int32)
-        matching_scores0 = np.zeros(len(kpts0_np), dtype=np.float32)
+        # Preserve first-source tie breaking within each target keypoint.
+        order = np.lexsort((query_indices, -certainties, ref_indices))
+        first = np.r_[True, ref_indices[order][1:] != ref_indices[order][:-1]]
+        best = query_indices[order[first]]
+        matches0[best] = ref_indices[order[first]]
+        matching_scores0[best] = certainty_sampled[best]
 
     return {
         "matches0": matches0,
