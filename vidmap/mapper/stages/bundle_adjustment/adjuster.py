@@ -706,5 +706,4 @@ class BundleAdjuster:
                 count += 1
                 break
         logger.debug("Lifted %d points", count)
-        self.solve_state.import_scene()
         return output
