@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import os
+import pickle
 import platform
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,6 +34,9 @@ def runtime_identity():
     from torch._inductor import config
 
     device = torch.cuda.current_device()
+    compiler_config = pickle.loads(config.save_config())
+    # CUDA graphs do not depend on the XPU path, which defaults to the launch directory.
+    compiler_config.pop("xpu.cutlass_dir", None)
     return {
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
@@ -41,7 +45,7 @@ def runtime_identity():
         "gpu": torch.cuda.get_device_name(device),
         "capability": list(torch.cuda.get_device_capability(device)),
         "device": device,
-        "inductor": hashlib.sha256(config.save_config()).hexdigest(),
+        "inductor": hashlib.sha256(pickle.dumps(compiler_config, protocol=2)).hexdigest(),
         "cudnn": torch.backends.cudnn.version(),
         "cudnn_tf32": torch.backends.cudnn.allow_tf32,
         "cudnn_benchmark": torch.backends.cudnn.benchmark,
