@@ -12,7 +12,9 @@
 
 <p align="center">
   <a href="https://arxiv.org/abs/2607.27194">Paper</a> |
-  <a href="https://youtu.be/gy4szd3q5Oo">Video</a>
+  <a href="https://youtu.be/gy4szd3q5Oo">Video</a> |
+  <a href="https://github.com/Zador-Pataki/VidMap-assets/releases/download/eccv-2026/vidmap_eccv_poster.pdf">Poster</a> |
+  <a href="https://github.com/Zador-Pataki/VidMap-assets/releases/download/eccv-2026/vidmap_slides.pdf">Slides</a>
 </p>
 
 
