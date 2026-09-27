@@ -59,6 +59,7 @@ class BASolvePolicy:
     regularize_scale: bool
     fix_all_poses: bool = False
     fix_intrinsics: bool = False
+    refine_principal_point: bool = False
 
 
 @dataclass(kw_only=True)
@@ -94,6 +95,13 @@ class BundleAdjuster:
         }
 
     def adjust(self) -> None:
+        pp_solves = self.options.intrinsics.principal_point_last_n_solves
+        available_solves = self.options.normal.iterations + self.options.annealing.iterations + 1
+        if self.optimize_intrinsics and pp_solves > available_solves:
+            logger.warning(
+                f"Requested PP refinement for {pp_solves} joint BA rounds, but only {available_solves} are configured; "
+                f"using all {available_solves} without adding rounds. Early stopping still applies."
+            )
         self.prepare_workspace()
         ba_start_time = sync_time()
         self.replay.write_ba_start_summary(self.reconstruction, self.solve_state)
@@ -173,6 +181,10 @@ class BundleAdjuster:
             }
         )
 
+    def _refine_principal_point(self, remaining_solves: int) -> bool:
+        # Count configured joint solves, excluding warm-up and point-only refinement.
+        return self.optimize_intrinsics and remaining_solves < self.options.intrinsics.principal_point_last_n_solves
+
     def run_normal(self) -> None:
         logger.info("Bundle adjustment start")
         iteration = 0
@@ -207,6 +219,9 @@ class BundleAdjuster:
                     gross_outliers=False,
                     fix_rotations=False,
                     regularize_scale=True,
+                    refine_principal_point=self._refine_principal_point(
+                        self.options.normal.iterations - iteration + self.options.annealing.iterations
+                    ),
                 ),
                 param_multiplier=self.options.depth.param_multiplier,
             )
@@ -245,7 +260,7 @@ class BundleAdjuster:
     def run_annealed(self) -> None:
         logger.info("Annealed bundle adjustment start")
         refinement = self.options.annealing
-        for iteration in range(self.options.annealing.iterations):
+        for iteration in range(refinement.iterations):
             self.shift_scale = self.estimate_depth_scales()
             logger.debug(
                 "[Annealed BA iter %s] Computed shift/scale for %s images",
@@ -268,6 +283,7 @@ class BundleAdjuster:
                     gross_outliers=False,
                     fix_rotations=refinement.fix_rotations,
                     regularize_scale=False,
+                    refine_principal_point=self._refine_principal_point(refinement.iterations - iteration),
                 ),
                 param_multiplier=adapted_multiplier,
             )
@@ -305,6 +321,7 @@ class BundleAdjuster:
                 gross_outliers=True,
                 fix_rotations=refinement.fix_rotations,
                 regularize_scale=False,
+                refine_principal_point=self._refine_principal_point(0),
             ),
             param_multiplier=refinement.final_depth_param_multiplier * self.truncation_multiplier,
         )
@@ -457,7 +474,7 @@ class BundleAdjuster:
             camera_ids=camera_ids,
             variable_point3D_ids=variable_point3D_ids,
             optimize_intrinsics=self.optimize_intrinsics and not policy.fix_intrinsics,
-            refine_principal_point=self.options.intrinsics.refine_principal_point,
+            refine_principal_point=policy.refine_principal_point and not policy.fix_intrinsics,
             fix_rotations=policy.fix_rotations,
             fix_all_poses=policy.fix_all_poses,
             reprojection_loss=reprojection_loss,

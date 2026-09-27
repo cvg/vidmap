@@ -453,19 +453,21 @@ python -m vidmap.run_for_benchmark \
 <details>
 <summary>[Results - click to expand]</summary>
 
-Expected WATE-AUC (%, higher is better):
+WATE-AUC with late principal point refinement, at 5% error thresholds (%, higher
+is better). Errors are pooled within each location, then eligible locations are
+averaged equally:
 
 | Dataset | 10 m @ 0.5 m | 25 m @ 1.25 m | 50 m @ 2.5 m | 100 m @ 5 m | Full @ 5% |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| LaMAR | 92.16 | 92.62 | 91.29 | 90.67 | 90.20 |
-| CroCoDL | 94.90 | 96.18 | 96.44 | 94.21 | 96.60 |
+| LaMAR (sample-300, 50 sequences) | 92.26 | 92.66 | 91.16 | 90.77 | 90.23 |
+| CroCoDL (64 sequences) | 95.10 | 96.55 | 97.22 | 97.56 | 97.18 |
 
-Expected pose AUC (%, higher is better):
+Pose AUC, averaged equally across sequences (%, higher is better):
 
 | Dataset | 5 cm | 10 cm | 50 cm | 1 m | 10 m |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| EuRoC | 11.96 | 32.05 | 81.67 | 90.84 | 99.08 |
-| ETH3D-SLAM | 50.15 | 66.99 | 88.32 | 92.76 | 98.83 |
+| EuRoC (11 sequences) | 28.86 | 60.02 | 91.96 | 95.98 | 99.60 |
+| ETH3D-SLAM (55 sequences) | 63.96 | 74.59 | 89.19 | 93.25 | 98.91 |
 
 </details>
 
