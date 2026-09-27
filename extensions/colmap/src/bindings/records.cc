@@ -1,3 +1,5 @@
+#include "colmap/scene/point3d.h"
+
 #include "bindings.h"
 #include "vidmap_native/types.h"
 #include <pybind11/eigen.h>
@@ -71,6 +73,19 @@ void BindRecords(py::module_& m) {
 
   py::class_<TrackRecord>(m, "TrackRecord")
       .def(py::init<>())
+      .def(py::init([](Point3DId point3D_id, const colmap::Point3D& point) {
+        TrackRecord record;
+        record.point3D_id = point3D_id;
+        record.xyz = point.xyz;
+        record.color = point.color;
+        record.error = point.error;
+        record.observations.resize(point.track.Length(), 2);
+        for (std::size_t i = 0; i < point.track.Length(); ++i) {
+          record.observations(i, 0) = point.track.Element(i).image_id;
+          record.observations(i, 1) = point.track.Element(i).point2D_idx;
+        }
+        return record;
+      }))
       .def_readwrite("point3D_id", &TrackRecord::point3D_id)
       .def_readwrite("xyz", &TrackRecord::xyz)
       .def_readwrite("color", &TrackRecord::color)

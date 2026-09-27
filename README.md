@@ -35,7 +35,7 @@ clone VidMap and its pinned model dependencies:
 git clone --recursive https://github.com/cvg/vidmap.git && cd vidmap
 ```
 
-Build and install [COLMAP](https://github.com/colmap/colmap) 4.1 and its
+Build and install [COLMAP](https://github.com/colmap/colmap) 4.2 and its
 PyCOLMAP bindings
 [from source](https://colmap.github.io/install.html#build-from-source).
 For GPU mapper acceleration, build them against
@@ -50,7 +50,7 @@ pip install -e .
 ```
 
 VidMap was last tested on Linux x86-64 with Python 3.10, COLMAP and PyCOLMAP
-4.1, PyTorch 2.14.0, TorchVision 0.29.0 and xFormers 0.0.35 on NVIDIA GPUs.
+4.2, PyTorch 2.14.0, TorchVision 0.29.0 and xFormers 0.0.35 on NVIDIA GPUs.
 Fast loading of cached compiled models requires PyTorch 2.10+.
 
 The first frontend run automatically downloads approximately 9 GB of model
