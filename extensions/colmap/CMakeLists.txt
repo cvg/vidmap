@@ -19,10 +19,10 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 3.0.2 CONFIG REQUIRED)
 
-set(VIDMAP_COLMAP_VERSION "4.1.0")
+set(VIDMAP_COLMAP_VERSION "4.2.0")
 set(
   VIDMAP_COLMAP_REVISION
-  "fa8e3b3ff591552855f8ad2806723c80f963f69c"
+  "be5e29168d4aff238409d60424812df66aac919f"
   CACHE STRING
   "Official COLMAP release revision used by vidmap_native"
 )
