@@ -66,7 +66,8 @@ class BAAnnealingOptions:
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class BAIntrinsicsOptions:
-    refine_principal_point: bool = False
+    # Refine PP in the last N configured joint solves; keep solve limits and early stopping unchanged.
+    principal_point_last_n_solves: Annotated[int, Field(ge=0)] = 3
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
