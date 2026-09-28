@@ -323,6 +323,7 @@ class SparseTrackState:
             self.conf.min_conf,
             self.conf.max_kps,
             bilinear=False,
+            density_std=self.conf.effective_sampling_density_std,
         )
         certainty_01 = selected.certainty.cpu()
         covariance_01 = selected.covariance.cpu()

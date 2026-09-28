@@ -1,9 +1,11 @@
-"""Defaults for run selection, storage, and evaluation outside pipeline configs."""
+"""Shared reference defaults and options for run selection, storage, and evaluation."""
 
 from dataclasses import dataclass, field
 from typing import Optional
 
 from vidmap.mapper.options import ReplayCacheOptions
+
+CANONICAL_POINT_BUDGET = 1500
 
 DEFAULT_WATE_WINDOWS_M = (10, 25, 50, 100)
 DEFAULT_WATE_AUC_PERCENT = 5.0

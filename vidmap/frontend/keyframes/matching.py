@@ -74,7 +74,7 @@ def build_pair_loader(scene_parser, sequence, lowres_options):
 
 
 @contextmanager
-def pipelined_matches(tracker_model, loader, original_width, original_height, *, batch_size):
+def pipelined_matches(tracker_model, loader, original_width, original_height, *, batch_size, coarse_only=False):
     """Overlap one ordered inference batch with CPU selection, draining on exit."""
     from vidmap.utils.profiling import record_timing, sync_time
 
@@ -94,6 +94,7 @@ def pipelined_matches(tracker_model, loader, original_width, original_height, *,
                 names_b=batch["names_B"],
                 output_size=(original_width, original_height),
                 batch_size=batch_size,
+                coarse_only=coarse_only,
             )
             if first_batch:
                 record_timing("keyframing_first_batch", sync_time() - batch_start, first=True)

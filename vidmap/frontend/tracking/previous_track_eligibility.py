@@ -97,7 +97,7 @@ def select_previous_track_mask(
 
         density = kde_blind(
             torch.tensor(warped_norm),
-            std=options.density_thin_std,
+            std=options.effective_density_thin_std,
             blind_radius=0.0,
         ).numpy()
         d_ext = density - 1.0  # remove self-contribution

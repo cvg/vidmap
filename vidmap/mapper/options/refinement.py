@@ -73,6 +73,7 @@ class BAIntrinsicsOptions:
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class BAFocalPriorOptions:
     enabled: bool = True
+    # Reference multiplier at 1500 frontend points; BA scales it by the active budget.
     weight_multiplier: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
     robust_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
     normal_loss: Literal["huber", "cauchy"] = "huber"

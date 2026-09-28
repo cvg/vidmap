@@ -67,7 +67,7 @@ class ExtendedMatchResult:
 
 
 def retrieval_pairs_cache_metadata(
-    extended_options, sequence, sequential_pairs, tcorr, retrieval_features_fingerprint
+    extended_options, sequence, sequential_pairs, tcorr, retrieval_features_fingerprint, *, tcorr_min_matches
 ):
     conf = extended_options
     return cache_metadata(
@@ -77,7 +77,7 @@ def retrieval_pairs_cache_metadata(
             "selection_policy_version": RETRIEVAL_PAIR_SELECTION_POLICY_VERSION,
             "nquery": conf.nquery,
             "retrieval_min_score": conf.retrieval_min_score,
-            "tcorr_min_matches": conf.tcorr_min_matches,
+            "tcorr_min_matches": tcorr_min_matches,
             "lc_pair_nms": conf.lc_pair_nms,
             "lc_pair_nms_radius": conf.lc_pair_nms_radius,
         },
@@ -108,6 +108,7 @@ class ExtendedMatchBuilder:
         highres_options: RoMaImageOptions,
         lowres_match_resolution: int,
         extended_options: ExtendedMatchOptions,
+        point_budget: int,
         image_content_fingerprint: str,
     ):
         self.scene_parser = scene_parser
@@ -120,6 +121,7 @@ class ExtendedMatchBuilder:
         self.highres_options = highres_options
         self.lowres_match_resolution = lowres_match_resolution
         self.extended_options = extended_options
+        self.point_budget = point_budget
         self.image_content_fingerprint = image_content_fingerprint
 
     def _build_retrieval_pairs(self):
@@ -132,6 +134,7 @@ class ExtendedMatchBuilder:
 
         retrieval_pairs = []
         ext_conf = self.extended_options
+        tcorr_min_matches = ext_conf.effective_tcorr_min_matches(self.point_budget)
         retrieval_features_metadata = retrieval_cache_identity(
             sequence,
             self.image_content_fingerprint,
@@ -153,6 +156,7 @@ class ExtendedMatchBuilder:
                 sequential_pairs,
                 tcorr,
                 retrieval_features_fingerprint,
+                tcorr_min_matches=tcorr_min_matches,
             )
 
         if (
@@ -181,13 +185,14 @@ class ExtendedMatchBuilder:
                 sequential_pairs,
                 tcorr,
                 retrieval_features_fingerprint,
+                tcorr_min_matches=tcorr_min_matches,
             )
             retrieval_pairs = generate_retrieval_pairs(
                 sequence=sequence,
                 tcorr=tcorr,
                 sequential_pairs=sequential_pairs,
                 retrieval_path=paths.retrieval_features_path,
-                tcorr_min_matches=ext_conf.tcorr_min_matches,
+                tcorr_min_matches=tcorr_min_matches,
                 retrieval_min_score=ext_conf.retrieval_min_score,
                 nquery=ext_conf.nquery,
                 lc_pair_nms=ext_conf.lc_pair_nms,

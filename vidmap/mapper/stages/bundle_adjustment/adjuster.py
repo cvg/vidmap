@@ -73,6 +73,7 @@ class BundleAdjuster:
     output_dir: Path
     replay: ReplayCache
     focal_prior: dict[int, tuple[tuple[float, float], ...]] | None = None
+    point_budget_scale: float = 1.0
     persist_intermediate_reconstructions: bool = False
     playback_trace: PlaybackTraceRecorder | None = None
     observation_graph: pycolmap.CorrespondenceGraph = field(init=False)
@@ -494,7 +495,7 @@ class BundleAdjuster:
                 camera_ids=camera_ids,
                 loss=prior_options.annealing_loss if policy.refinement else prior_options.normal_loss,
                 scale=prior_options.robust_scale,
-                weight=prior_options.weight_multiplier,
+                weight=prior_options.weight_multiplier * self.point_budget_scale,
             )
 
         depth_constraints = []

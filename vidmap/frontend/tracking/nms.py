@@ -82,6 +82,7 @@ def prop_tracker_nms(
     prev_keypoints=None,
     scales=None,
     num_corresp=2000,
+    density_std=0.1,
 ):
     """
     Probabilistic NMS with blind density sampling (RoMAv2 style).
@@ -96,6 +97,7 @@ def prop_tracker_nms(
         prev_keypoints: (1, N, 2) previous keypoints to preserve
         scales: Scale factors if prev_keypoints need rescaling
         num_corresp: Target number of keypoints to return
+        density_std: Density bandwidth in normalized image coordinates
     Returns:
         (N, 2) tensor of selected keypoint coordinates
     """
@@ -166,10 +168,10 @@ def prop_tracker_nms(
         sampled_confidence = torch.empty((0,), device=device, dtype=torch.float32)
 
     norm_blind_radius = nms_radius * (2.0 / max(H_A, W_A))
-    density = kde_blind(sampled_matches, blind_radius=norm_blind_radius)
+    density = kde_blind(sampled_matches, std=density_std, blind_radius=norm_blind_radius)
 
     if priors is not None:
-        density += kde_blind(sampled_matches, neighbors=priors, blind_radius=0.0)
+        density += kde_blind(sampled_matches, neighbors=priors, std=density_std, blind_radius=0.0)
 
     # Balanced resampling
     p = 1 / (density + 1)
