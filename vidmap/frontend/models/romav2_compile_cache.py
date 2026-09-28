@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import torch
+from torch.utils._pytree import tree_leaves
 
 from vidmap.frontend.models.compiled_graph import CachedGraph
 
@@ -28,18 +29,23 @@ class CachedRoMaGraph(CachedGraph):
             factory=factory, namespace="romav2", component=component, model_identity=model_identity, sources=sources
         )
 
-    def forward(self, *inputs: torch.Tensor) -> dict:
+    def forward(self, *inputs: torch.Tensor | tuple[torch.Tensor, ...], **options) -> dict:
+        if options.keys() - {"refine", "coarse_only"} or any(
+            not isinstance(value, bool) for value in options.values()
+        ):
+            raise ValueError("RoMa graph options only support boolean refine and coarse_only flags")
         if torch.is_autocast_enabled("cuda"):
             raise ValueError("Saved RoMa graphs require outer autocast to be disabled")
-        if not inputs or any(
+        tensors = tree_leaves(inputs)
+        if not tensors or any(
             value.device != torch.device("cuda", self.runtime["device"])
             or value.dtype not in (torch.float32, torch.bfloat16)
             or not value.is_contiguous()
             or not value.is_inference()
-            for value in inputs
+            for value in tensors
         ):
             raise ValueError("RoMa components require contiguous float32 or bfloat16 CUDA inference tensors")
-        return super().forward(*inputs)
+        return super().forward(*inputs, **options)
 
     def load_module(self, path):
         descriptor_source = (

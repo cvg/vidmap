@@ -112,12 +112,15 @@ class RoMaV2Model(torch.nn.Module):
         self._source_model = None
         return super()._apply(fn, recurse=recurse)
 
-    def _extract_features(self, low, high=None):
+    def _extract_features(self, low, high=None, *, coarse_only=False):
         images = (low,) if high is None else (low, high)
         # Own contiguous inference tensors, even when inputs are already on the GPU.
         result = self._feature_extractor(
-            *(image.cuda(non_blocking=True).clone(memory_format=torch.contiguous_format) for image in images)
+            *(image.cuda(non_blocking=True).clone(memory_format=torch.contiguous_format) for image in images),
+            coarse_only=coarse_only,
         )
+        if coarse_only:
+            return result["descriptor_11"], result["descriptor_17"]
         names = FEATURE_NAMES[:5] if high is None else FEATURE_NAMES
         projected = self._feature_projector(*(result[name] for name in names[2:]))
         return (*(result[name] for name in names[:2]), *(projected[name] for name in names[2:]))
@@ -126,7 +129,9 @@ class RoMaV2Model(torch.nn.Module):
         raise NotImplementedError("Use the explicit RoMaV2 inference operations")
 
     @torch.inference_mode()
-    def match_lowres_batch(self, image_a, image_b, *, names_a, names_b, output_size, batch_size) -> RoMaMatch:
+    def match_lowres_batch(
+        self, image_a, image_b, *, names_a, names_b, output_size, batch_size, coarse_only=False
+    ) -> RoMaMatch:
         """Pad to a fixed inference batch, returning only the real ordered pairs."""
         assert image_a.shape[0] == image_b.shape[0] == len(names_a) == len(names_b)
         count = image_a.shape[0]
@@ -138,17 +143,19 @@ class RoMaV2Model(torch.nn.Module):
         assert list(names_a[1:]) == list(names_b[:-1]), "Feature reuse requires consecutive frame pairs"
         if self._carried_features is None:
             seed = torch.cat((image_a[:1], image_a.new_zeros((batch_size - 1, *image_a.shape[1:]))))
-            initial = self._extract_features(seed)
+            initial = self._extract_features(seed, coarse_only=coarse_only)
             self._carried_features = tuple(value[:1].clone() for value in initial)
             self._carried_name = names_a[0]
         assert self._carried_name == names_a[0], "Keyframe batches must preserve frame continuity"
-        features_b = self._extract_features(image_b)
+        features_b = self._extract_features(image_b, coarse_only=coarse_only)
+        if len(self._carried_features) != len(features_b):
+            raise ValueError("Keyframe matching mode must stay fixed within a frame sequence")
         # A uses the preceding frame's features; keep padded rows in place.
         features_a = tuple(
             torch.cat((previous, new[: count - 1], new[count:]))
             for previous, new in zip(self._carried_features, features_b)
         )
-        raw = self._feature_matcher(*features_a, *features_b)
+        raw = self._feature_matcher(features_a, features_b, refine=not coarse_only)
         self._carried_features = tuple(value[count - 1 : count].clone() for value in features_b)
         self._carried_name = names_b[-1]
         output = self._pixel_match(raw, output_size=output_size, return_covariance=False)
@@ -181,7 +188,7 @@ class RoMaV2Model(torch.nn.Module):
             if name not in self._feature_buffer:
                 self._feature_buffer[name] = self._extract_features(low, high)
         features_a, features_b = (self._feature_buffer[name] for name in names)
-        raw = self._feature_matcher(*features_a, *features_b)
+        raw = self._feature_matcher(features_a, features_b, refine=True)
         return self._pixel_match(
             raw,
             output_size=tuple(image_a_highres.shape[-2:][::-1]),
@@ -190,16 +197,19 @@ class RoMaV2Model(torch.nn.Module):
 
     def _pixel_match(self, raw, *, output_size, return_covariance) -> RoMaMatch:
         from romav2.geometry import to_pixel
-        from romav2.romav2 import _map_confidence
 
         if not isinstance(raw, dict):
             raise TypeError(f"RoMaV2 forward output must be a dictionary, got {type(raw).__name__}")
-        overlap, precision = _map_confidence(confidence=raw["confidence_AB"], threshold=None)
         covariance = None
         if return_covariance:
+            from romav2.romav2 import _map_confidence
+
             from vidmap.utils.small_matrix import fast_inverse_2x2
 
+            overlap, precision = _map_confidence(confidence=raw["confidence_AB"], threshold=None)
             covariance = fast_inverse_2x2(precision)
+        else:
+            overlap = raw["confidence_AB"][..., :1].sigmoid()
         width, height = output_size
         matches = to_pixel(raw["warp_AB"], H=height, W=width)
         return RoMaMatch(matches, overlap[..., 0], covariance)

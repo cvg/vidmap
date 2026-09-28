@@ -187,6 +187,7 @@ class KeyframeProcessor:
                     original_width,
                     original_height,
                     batch_size=self.lowres_options.batch_size,
+                    coarse_only=self.lowres_options.coarse_only,
                 ) as batches,
                 tqdm(
                     total=total_pairs,

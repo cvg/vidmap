@@ -156,6 +156,7 @@ class TrackingPipeline:
                 highres_options=options.tracks.images,
                 lowres_match_resolution=options.keyframes.matching.resolution,
                 extended_options=options.loop_closure,
+                point_budget=options.tracks.propagation.max_kps,
                 image_content_fingerprint=image_content,
             )
             extended = extended_match_builder.build()

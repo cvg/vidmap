@@ -11,13 +11,16 @@ class RoMaImageFeatures(torch.nn.Module):
         self.descriptor = net.f
         self.fine = net.refiner_features
 
-    def forward(self, low, high=None):
-        descriptor = tuple(self.descriptor(low))
-        fine = self.fine(low)
-        output = (*descriptor, *(fine[k] for k in (1, 2, 4)))
-        if high is not None:
-            fine_high = self.fine(high)
-            output = (*output, *(fine_high[k] for k in (1, 2, 4)))
+    def forward(self, low, high=None, *, coarse_only=False):
+        assert isinstance(coarse_only, bool)
+        assert not coarse_only or high is None
+        output = tuple(self.descriptor(low))
+        if not coarse_only:
+            fine = self.fine(low)
+            output = (*output, *(fine[k] for k in (1, 2, 4)))
+            if high is not None:
+                fine_high = self.fine(high)
+                output = (*output, *(fine_high[k] for k in (1, 2, 4)))
         return {name: value.contiguous() for name, value in zip(FEATURE_NAMES, output)}
 
 
@@ -48,7 +51,7 @@ class RoMaFeatureProjection(torch.nn.Module):
 
 
 class RoMaFeatureMatcher(torch.nn.Module):
-    """Run upstream matching/refinement on already-projected per-view features."""
+    """Match supplied features, with refinement controlled explicitly by the caller."""
 
     bidirectional = False
     return_intermediates = False
@@ -60,11 +63,14 @@ class RoMaFeatureMatcher(torch.nn.Module):
         self.anchor_width = net.anchor_width
         self.anchor_height = net.anchor_height
 
-    def forward(self, *features):
+    def forward(self, features_a, features_b, *, refine=True):
         from romav2.romav2 import RoMaV2
 
-        assert len(features) in (10, 16)
-        count = len(features) // 2
-        return RoMaV2.forward(
-            self, None, None, features_A=features[:count], features_B=features[count:], projected=True
-        )
+        assert isinstance(refine, bool)
+        assert len(features_a) == len(features_b)
+        assert len(features_a) in ((5, 8) if refine else (2, 5, 8))
+        if not refine:
+            return self.matcher(
+                list(features_a[:2]), list(features_b[:2]), img_A=None, img_B=None, bidirectional=False
+            )
+        return RoMaV2.forward(self, None, None, features_A=features_a, features_B=features_b, projected=True)

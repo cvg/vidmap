@@ -1,8 +1,10 @@
 """Mapper entry point and complete mapping-stage sequence."""
 
 from collections.abc import Callable
+from numbers import Integral
 from pathlib import Path
 
+from vidmap.configuration.defaults import CANONICAL_POINT_BUDGET
 from vidmap.mapper.focal_prior import load_focal_prior
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.inputs.snapshot import calibration_artifact_name
@@ -33,6 +35,7 @@ class Mapper:
         conf: MapperOptions,
         mapper_inputs: MapperInputs,
         sfm_outputs_dir: Path,
+        point_budget: int,
         persist_intermediate_reconstructions: bool = False,
     ) -> None:
         if not isinstance(conf, MapperOptions):
@@ -48,6 +51,9 @@ class Mapper:
         if mapper_inputs.directory == sfm_outputs_dir or mapper_inputs.directory in sfm_outputs_dir.parents:
             raise ValueError("Mapper outputs must not be inside the mapper-input directory")
         self.conf = conf
+        if isinstance(point_budget, bool) or not isinstance(point_budget, Integral) or point_budget <= 0:
+            raise ValueError("Point budget must be a positive integer")
+        self.point_budget_scale = point_budget / CANONICAL_POINT_BUDGET
         self.mapper_inputs = mapper_inputs
         self.sfm_outputs_dir = sfm_outputs_dir
         self.persist_intermediate_reconstructions = persist_intermediate_reconstructions
@@ -238,6 +244,7 @@ class Mapper:
         bundle_adjuster = BundleAdjuster(
             solve_state=solve_state,
             options=self.conf.ba,
+            point_budget_scale=self.point_budget_scale,
             depth_stddev_multiplier=self.conf.mdrp.depth_stddev_multiplier,
             optimize_intrinsics=calibration.optimize_intrinsics,
             focal_prior=prior,

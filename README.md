@@ -26,6 +26,15 @@ VidMap is an offline Structure-from-Motion system for video. It combines
 temporal tracks, loop closures, metric depth, and global optimization to
 estimate camera poses, camera intrinsics, and a sparse 3D map.
 
+## Quick Start
+
+- 🔧 [Setup](#setup) — Install dependencies and prepare the environment.
+- 🚀 [Run VidMap](#execution) — Reconstruct a video or image sequence.
+- 👀 [Visualization](#visualization) — Explore your reconstruction in the browser or Rerun.
+- 🛠️ [Pipeline Configurations](#configuration) — Customize the frontend and mapping settings.
+- ⚡ [Speed up VidMap](#speed-up-vidmap) — Find settings to make extraction and mapping faster.
+- 📈 [Benchmarks](#benchmarks) — Prepare datasets and evaluate reconstruction accuracy.
+
 ## Setup
 
 We provide the Python package [`vidmap`](vidmap). From a clean Python environment,
@@ -283,6 +292,37 @@ python -m vidmap.run \
   Experimental pipeline. Adds keyframe-coordinate trajectory smoothing to the
   default pipeline for improved robustness on long sequences, as explored on
   external datasets.
+
+### Speed up VidMap
+
+Reducing the number of tracked points, using coarse-only keyframing, and using
+fewer propagation hops can speed up VidMap. Running global positioning on
+[CUDA](#gpu-acceleration) reduced total mapping time by about **13%** on a tested
+LaMAR HGE sequence. The benefit of GPU acceleration for bundle adjustment is
+less clear.
+
+```bash
+python -m vidmap.run \
+  --input_data "$INPUT_DATA" \
+  --output "$OUTPUT_DIR" \
+  frontend.tracks.propagation.max_kps=1000 \
+  frontend.keyframes.matching.coarse_only=true \
+  'frontend.tracks.propagation.multiflow_hops=[1,2,4,8]' \
+  mapping.mapper.gp.solver_backend.use_cuda=true \
+  mapping.mapper.ba.solver_backend.use_cuda=true
+```
+
+The table below provides insight into the accuracy–runtime tradeoffs.
+Extraction savings approximately exclude startup by subtracting the recorded first calls.
+
+| Setting | Stage measured | Time saved | Mean accuracy drop |
+| --- | --- | ---: | ---: |
+| Hops `[1,2,4,8]` | Extraction | ~9.9% | ~0% |
+| Hops `[1,2,4]` | Extraction | ~15.3% | 0.385% |
+| Hops `[1,2]` | Extraction | ~21.3% | 1.563% |
+| Coarse keyframing | Extraction | ~9.0% | 0.053% |
+| 1,000 points, balanced | Mapping | ~40% | 0.632% |
+| 500 points, balanced | Mapping | ~66% | 2.067% |
 
 ## Benchmarks
 

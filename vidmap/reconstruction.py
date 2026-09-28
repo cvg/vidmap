@@ -468,6 +468,7 @@ def run_mapping(
     logger.info("Starting mapping for %s from %s", scene_name, mapper_inputs.directory)
     reconstruction = Mapper(
         conf=mapping_conf.pipeline.mapper,
+        point_budget=frontend_conf.pipeline.tracks.propagation.max_kps,
         mapper_inputs=mapper_inputs,
         sfm_outputs_dir=output_dir,
         persist_intermediate_reconstructions=mapping_conf.run.persist_intermediate_reconstructions,

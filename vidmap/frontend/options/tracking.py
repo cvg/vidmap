@@ -5,8 +5,9 @@ from dataclasses import field as dc_field
 from numbers import Integral
 from typing import Iterable, Optional
 
-from pydantic import ConfigDict, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from vidmap.configuration.defaults import CANONICAL_POINT_BUDGET
 from vidmap.configuration.validators import dataclass
 from vidmap.frontend.options.matching import RoMaImageOptions
 
@@ -36,11 +37,13 @@ class SparseTrackOptions:
 
     num_workers: int = 4
     nms_radius: int = 3
-    max_kps: int = 1500
+    max_kps: int = Field(default=CANONICAL_POINT_BUDGET, gt=0, strict=True)
     min_conf: float = 0.05
     max_sequential_track_sigma_roma_px: Optional[float] = 8.0
     density_thin_k: float = 0.05
-    density_thin_std: float = 0.013
+    # Bandwidths below are reference values at CANONICAL_POINT_BUDGET.
+    density_thin_std: float = Field(default=0.013, gt=0, allow_inf_nan=False)
+    sampling_density_std: float = Field(default=0.1, gt=0, allow_inf_nan=False)
     tvg_max_epipolar_error: float = 4.0
     tvg_max_iterations: int = 50000
     tvg_min_iterations: Optional[int] = 50
@@ -51,6 +54,14 @@ class SparseTrackOptions:
     salient_density_power: float = 1.0
     lt_cov_scale: float = 4.0
     multiflow_hops: tuple[int, ...] = (8, 6, 4, 2, 1)
+
+    @property
+    def effective_density_thin_std(self) -> float:
+        return self.density_thin_std * math.sqrt(CANONICAL_POINT_BUDGET / self.max_kps)
+
+    @property
+    def effective_sampling_density_std(self) -> float:
+        return self.sampling_density_std * math.sqrt(CANONICAL_POINT_BUDGET / self.max_kps)
 
     @field_validator("multiflow_hops", mode="before")
     @classmethod

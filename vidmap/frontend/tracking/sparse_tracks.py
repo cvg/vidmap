@@ -128,6 +128,7 @@ def track_output_cache_metadata(
             ordered_inputs=ordered_inputs,
             upstream=upstream,
             payload_format="per-image-local-features",
+            payload_version=2,
             nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
         ),
         sparse_matches=cache_metadata(
@@ -136,6 +137,7 @@ def track_output_cache_metadata(
             ordered_inputs=ordered_inputs,
             upstream=upstream,
             payload_format="per-pair-indexed-matches",
+            payload_version=2,
             nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
         ),
     )

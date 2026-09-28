@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 from pydantic import ConfigDict, Field, model_validator
 
+from vidmap.configuration.defaults import CANONICAL_POINT_BUDGET
 from vidmap.configuration.validators import dataclass
 
 
@@ -27,6 +28,7 @@ class PreprocessingOptions:
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class LowresMatchOptions:
+    coarse_only: bool = False
     batch_size: int = 8
     num_workers: int = 4
     resize_to_shape: Tuple[int, int] = (560, 560)
@@ -60,7 +62,11 @@ class RoMaImageOptions:
 class ExtendedMatchOptions:
     retrieval_min_score: float = 0.1
     nquery: int = 10
-    tcorr_min_matches: int = 200
+    # Match count at CANONICAL_POINT_BUDGET; resolved for the active budget.
+    tcorr_min_matches: int = Field(default=200, ge=0, strict=True)
     lc_pair_nms: bool = True
     lc_pair_nms_radius: int = 2
     lc_match_thresh: float = 0.05
+
+    def effective_tcorr_min_matches(self, point_budget: int) -> int:
+        return self.tcorr_min_matches * point_budget // CANONICAL_POINT_BUDGET

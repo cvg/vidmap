@@ -105,6 +105,7 @@ def select_keypoints_from_certainty(
     sample_thresh,
     max_kps,
     bilinear=False,
+    density_std=0.1,
 ):
     """
     Select keypoints from certainty map using probabilistic density sampling.
@@ -119,6 +120,7 @@ def select_keypoints_from_certainty(
         nms_radius: Suppression radius in pixels for density estimation
         sample_thresh: Minimum certainty threshold for new keypoints
         max_kps: Maximum number of keypoints to select
+        density_std: Density bandwidth in normalized image coordinates
     Returns:
         ref_kps_nms: Selected keypoint coordinates
         certainty_nms: Certainty scores for selected keypoints
@@ -137,6 +139,7 @@ def select_keypoints_from_certainty(
         nms_radius,
         queries[None] if queries is not None else None,
         num_corresp=max_kps,
+        density_std=density_std,
     ).cpu()
 
     if prev_keypoints is not None:

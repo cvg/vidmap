@@ -9,7 +9,7 @@ from vidmap.configuration.dump import config_to_dict
 from vidmap.configuration.names import config_name_to_output_slug
 from vidmap.frontend.cache import fingerprint
 
-FRONTEND_IDENTITY_SCHEMA_VERSION = 3
+FRONTEND_IDENTITY_SCHEMA_VERSION = 4
 
 
 def semantic_frontend_config(conf) -> dict[str, object]:
