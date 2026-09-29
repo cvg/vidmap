@@ -82,6 +82,7 @@ def main(argv=None):
                 force_frontend=args.force_frontend,
                 cache_depth_maps=args.cache_depth_maps,
                 mapper_inputs_path=args.mapper_inputs,
+                device=run_options.device,
             )
             profile.record_timing("wall_total", time.time() - started)
         logger.setLevel(logging.INFO)

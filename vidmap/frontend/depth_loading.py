@@ -124,6 +124,7 @@ def create_da3_window_loader(
     window_size: int,
     process_res: int,
     num_workers: int,
+    pin_memory: bool = True,
 ) -> DataLoader:
     """Create the ordered worker pool that prepares DA3 input windows."""
     image_dataset = _Da3ImageDataset(rgb_dir, image_names, process_res)
@@ -135,5 +136,5 @@ def create_da3_window_loader(
         num_workers=num_workers,
         prefetch_factor=None,
         collate_fn=_collate_window,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )

@@ -1,16 +1,23 @@
 """Frontend-only execution over selected benchmark targets."""
 
+from __future__ import annotations
+
 import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vidmap import depth_artifacts
 from vidmap.benchmark.results import FrontendResultStore
 from vidmap.frontend.identity import FrontendIdentity
 from vidmap.frontend.pipeline import Frontend
 from vidmap.mapper.inputs import MapperInputs
+from vidmap.utils.device import resolve_device
 from vidmap.utils.logging import log_context
+
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +57,13 @@ def run_local_frontend(
     force_frontend: bool = False,
     cache_depth_maps: bool = False,
     mapper_inputs_path: str | Path | None = None,
+    device: str | torch.device | None = None,
 ) -> FrontendTargetResult:
     """Process one concrete image directory or MP4 into a finalized boundary."""
     from vidmap.datasets.local import LocalImageParser
     from vidmap.reconstruction import prepare_reconstruction_images, write_local_input_provenance
 
+    device = resolve_device(device)
     workspace = Path(workspace).expanduser()
     image_dir = prepare_reconstruction_images(input_path, workspace)
     scene_parser = LocalImageParser(
@@ -108,6 +117,7 @@ def run_local_frontend(
                 sampled_depth_path=mapper_inputs.depth_maps_path,
                 output_path=full_depth_maps_path,
                 options=conf.pipeline.depth,
+                device=device,
             )
             depth_artifacts.write_reference_paths(
                 workspace,
@@ -134,6 +144,7 @@ def run_local_frontend(
         frontend_tag=identity.tag,
         namespace_cache_by_config=False,
         mapper_inputs_dir=mapper_inputs_dir,
+        device=device,
     )
     mapper_inputs = frontend.run(frontend_identity=identity.as_dict())
     mapper_inputs.validate()
@@ -216,6 +227,7 @@ class FrontendRunner:
                         frontend_tag=identity.tag,
                         namespace_cache_by_config=True,
                         mapper_inputs_dir=results.resolved_mapper_inputs_dir(),
+                        device=getattr(self.run_options, "device", None),
                     )
                     if self.conf.run.pre_geom_db_stop:
                         frontend.run_pre_geom()

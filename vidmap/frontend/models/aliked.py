@@ -79,10 +79,11 @@ class _VariableLengthALIKED(lightglue.aliked.ALIKED):
 
 
 class ALIKED(torch.nn.Module):
-    def __init__(self, conf: ALIKEDOptions):
+    def __init__(self, conf: ALIKEDOptions, device: torch.device | None = None):
         super().__init__()
         assert isinstance(conf, ALIKEDOptions), f"Expected ALIKEDOptions, got {type(conf).__name__}"
         self.conf = conf
+        self.device = device
         self.sub_pixel = conf.sub_pixel
         kwargs = asdict(conf)
         kwargs.pop("sub_pixel")
@@ -94,8 +95,8 @@ class ALIKED(torch.nn.Module):
 
     def forward(self, data):
         assert "image" in data, "Missing key image in data"
-        if not data["image"].is_cuda:
-            data["image"] = data["image"].cuda()
+        if self.device is not None and data["image"].device != self.device:
+            data["image"] = data["image"].to(self.device)
         data["sub_pixel"] = self.sub_pixel
         features = self.model(data)
 

@@ -54,7 +54,7 @@ class Da3Video(torch.nn.Module):
     original and uncropped sizes. Windows in one batch share the image shape.
     """
 
-    def __init__(self, conf: Da3VideoOptions):
+    def __init__(self, conf: Da3VideoOptions, device: torch.device):
         super().__init__()
         assert isinstance(conf, Da3VideoOptions), f"Expected Da3VideoOptions, got {type(conf).__name__}"
         self.conf = conf
@@ -63,10 +63,11 @@ class Da3Video(torch.nn.Module):
             _configure_da3_logging()
             verify_da3_model_snapshot()
             self.model = Da3Inference.from_pretrained(DA3_MODEL_ID, revision=DA3_MODEL_REVISION)
-        self.model = self.model.cuda().eval()
+        self.device = device
+        self.model = self.model.to(device).eval()
         for parameter in self.parameters():
             parameter.requires_grad = False
-        self.model.configure_runtime(compile=conf.compile)
+        self.model.configure_runtime(compile=conf.compile, device=self.device)
 
     def forward_windows(self, windows, *, batch_size):
         outputs = self.model.infer_windows(

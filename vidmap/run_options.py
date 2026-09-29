@@ -16,6 +16,7 @@ class RunOptions:
     playback_trace_stride: int = 3
     playback_trace_point_cap: int | None = None
     profile: bool = False
+    device: str = "auto"
 
     def __post_init__(self) -> None:
         if self.verbosity < 0:
@@ -45,6 +46,7 @@ class RunOptions:
             playback_trace_stride=args.playback_trace_stride,
             playback_trace_point_cap=args.playback_trace_point_cap,
             profile=args.profile,
+            device=getattr(args, "device", "auto"),
         )
 
 
@@ -59,11 +61,19 @@ def add_run_arguments(parser, *, mapping: bool, profiling: bool = False) -> None
         help="Runtime output level: 0 warnings/errors, 1 lifecycle/stages, 2 debug.",
     )
     parser.add_argument("-t", "--terminate", action="store_true", help="Raise on the first failed case.")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "gpu", "cuda", "mps"],
+        help="Compute device for neural networks (default: auto; choices: auto, cpu, gpu, cuda, mps).",
+    )
     parser.set_defaults(
         save_playback_trace=False,
         playback_trace_stride=3,
         playback_trace_point_cap=None,
         profile=False,
+        device="auto",
     )
     if mapping:
         parser.add_argument(

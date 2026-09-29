@@ -20,9 +20,12 @@ from vidmap.frontend.preparation.tcorr_filtering import CorrespondenceFilter
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.options import ReplayCacheOptions
 from vidmap.mapper.replay.cache import ReplayCache
+from vidmap.utils.device import resolve_device
 from vidmap.utils.loop_closure_masks import write_loop_closure_masks
 
 if TYPE_CHECKING:
+    import torch
+
     from vidmap.configuration.config import FrontendConfig
 
 __all__ = [
@@ -109,6 +112,7 @@ class Frontend:
         frontend_tag: str,
         namespace_cache_by_config: bool = True,
         mapper_inputs_dir: Path | None = None,
+        device: str | torch.device | None = None,
     ):
         from vidmap.configuration.config import FrontendConfig
 
@@ -116,6 +120,7 @@ class Frontend:
             raise TypeError(f"Expected FrontendConfig, got {type(conf).__name__}")
         if not sample_name:
             raise ValueError("sample_name is required for frontend")
+        self.device = resolve_device(device)
         self.options = conf
         self.preparation = conf.preparation
         self.estimate_intrinsics = conf.camera_priors.initialization == "predicted"
@@ -225,5 +230,6 @@ class Frontend:
             cache_full_depth_maps=self.cache_full_depth_maps,
             deterministic=self.deterministic,
             repro_dir=self.repro_dir,
+            device=self.device,
         )
         return tracking_pipeline.run()

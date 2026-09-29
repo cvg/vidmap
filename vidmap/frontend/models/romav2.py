@@ -18,6 +18,7 @@ from vidmap.frontend.models.romav2_features import (
 )
 from vidmap.frontend.options.matching import RoMaV2Options
 from vidmap.model_sources import import_model_package, model_package_root
+from vidmap.utils.device import empty_device_cache
 
 ROMAV2_SOURCE_REVISION = "f23bab45a53ffb3f3c3cdda0566d0de5365e7339"
 ROMAV2_PACKAGE_ROOT = model_package_root(
@@ -59,12 +60,17 @@ class RoMaMatch:
 class RoMaV2Model(torch.nn.Module):
     """Own the RoMaV2 model used directly by streaming stages."""
 
-    def __init__(self, conf: RoMaV2Options):
+    def __init__(self, conf: RoMaV2Options, device: torch.device):
         super().__init__()
         assert isinstance(conf, RoMaV2Options), f"Expected RoMaV2Options, got {type(conf).__name__}"
+
+        self.device = device
         self.conf = conf
-        # Register the operator before loading an executable graph in a fresh process.
-        from vidmap.frontend.models.romav2_correlation import local_correlation
+        if device.type == "cuda":
+            # Register the operator before loading an executable graph in a fresh process.
+            from vidmap.frontend.models.romav2_correlation import local_correlation
+        else:
+            local_correlation = None
 
         module = import_model_package("romav2", ROMAV2_PACKAGE_ROOT)
         _configure_romav2_logging()
@@ -73,7 +79,7 @@ class RoMaV2Model(torch.nn.Module):
         self._feature_buffer = {}
         self._carried_features = None
         self._carried_name = None
-        compiled_cuda = conf.compile and torch.cuda.is_available()
+        compiled_cuda = conf.compile and device.type == "cuda"
 
         def create_net():
             if self._source_model is not None:
@@ -81,9 +87,10 @@ class RoMaV2Model(torch.nn.Module):
             # RoMaV2 downloads its release checkpoint on first construction.
             net = module.RoMaV2(module.RoMaV2.Cfg(setting="precise", compile=False))
             _verify_romav2_checkpoint()
-            for refiner in net.refiners.values():
-                assert refiner.cfg.grid_sample_mode == "bilinear"
-                refiner.correlation = local_correlation
+            if local_correlation is not None:
+                for refiner in net.refiners.values():
+                    assert refiner.cfg.grid_sample_mode == "bilinear"
+                    refiner.correlation = local_correlation
             self._source_model = net.eval().requires_grad_(False)
             return self._source_model
 
@@ -101,7 +108,7 @@ class RoMaV2Model(torch.nn.Module):
                 ).eval()
             else:
                 graph = adapter(create_net()).eval()
-                if conf.compile:
+                if conf.compile and device.type == "cuda":
                     graph = torch.compile(graph)
             setattr(self, name, graph)
 
@@ -114,9 +121,13 @@ class RoMaV2Model(torch.nn.Module):
 
     def _extract_features(self, low, high=None, *, coarse_only=False):
         images = (low,) if high is None else (low, high)
+        device = self.device
         # Own contiguous inference tensors, even when inputs are already on the GPU.
         result = self._feature_extractor(
-            *(image.cuda(non_blocking=True).clone(memory_format=torch.contiguous_format) for image in images),
+            *(
+                image.to(device, non_blocking=device.type == "cuda").clone(memory_format=torch.contiguous_format)
+                for image in images
+            ),
             coarse_only=coarse_only,
         )
         if coarse_only:
@@ -215,21 +226,16 @@ class RoMaV2Model(torch.nn.Module):
         return RoMaMatch(matches, overlap[..., 0], covariance)
 
 
-def load_romav2_model(conf: RoMaV2Options) -> RoMaV2Model:
+def load_romav2_model(conf: RoMaV2Options, device: torch.device) -> RoMaV2Model:
     """Construct the sole supported frontend tracker from its typed config."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = RoMaV2Model(conf).eval().to(device)
-    logger.info("Loaded RoMaV2 model")
+    model = RoMaV2Model(conf, device=device).eval().to(device)
+    logger.info("Loaded RoMaV2 model on %s", device)
     return model
 
 
 def _release_romav2_model(tracker_model, *, suppress_errors):
-    def clear_cuda_cache():
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
     errors = []
-    for action in (tracker_model.cpu, clear_cuda_cache, gc.collect):
+    for action in (tracker_model.cpu, empty_device_cache, gc.collect):
         try:
             action()
         except BaseException as error:
@@ -246,16 +252,24 @@ def _release_romav2_model(tracker_model, *, suppress_errors):
 class LazyRoMaV2Tracker:
     """Own at most one lazily loaded RoMaV2 model for one frontend run."""
 
-    def __init__(self, tracker_conf):
+    def __init__(self, tracker_conf, device: torch.device):
         self._tracker_conf = tracker_conf
+        self._device = device
         self._model = None
         self._closed = False
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
+
+    def parameters(self):
+        return self.get().parameters()
 
     def get(self):
         if self._closed:
             raise RuntimeError("RoMaV2 owner is closed")
         if self._model is None:
-            self._model = load_romav2_model(self._tracker_conf)
+            self._model = load_romav2_model(self._tracker_conf, device=self._device)
         return self._model
 
     def __enter__(self):
@@ -273,9 +287,9 @@ class LazyRoMaV2Tracker:
         return False
 
 
-def create_lazy_romav2_tracker(tracker_conf):
+def create_lazy_romav2_tracker(tracker_conf, device: torch.device):
     """Return the single lazy tracker owner for one frontend run."""
-    return LazyRoMaV2Tracker(tracker_conf)
+    return LazyRoMaV2Tracker(tracker_conf, device=device)
 
 
 def romav2_cache_identity(conf: RoMaV2Options):

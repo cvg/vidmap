@@ -62,10 +62,10 @@ class SparseTrackState:
     - State: previous frame's keypoints, confidences, covariances, track lengths
     """
 
-    def __init__(self, conf, *, original_size, current_size, scheduled_hops):
+    def __init__(self, conf, *, original_size, current_size, scheduled_hops, device: torch.device):
         """Initialize numerical propagation state from explicit image geometry."""
         self.conf = conf
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.original_size = original_size
         self.current_size = current_size
         self.scale_ratio = np.array(original_size) / np.array(current_size)

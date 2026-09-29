@@ -68,7 +68,7 @@ def ground_truth_intrinsics_plan(scene_parser, sequence):
     ]
 
 
-def create_aliked_model(salient_options):
+def create_aliked_model(salient_options, device: torch.device):
     from vidmap.frontend.models.aliked import ALIKEDOptions
 
     return (
@@ -77,9 +77,10 @@ def create_aliked_model(salient_options):
                 nms_radius=salient_options.nms_radius,
                 max_num_keypoints=salient_options.max_num_keypoints,
                 sub_pixel=salient_options.sub_pixel,
-            )
+            ),
+            device=device,
         )
-        .cuda()
+        .to(device)
         .eval()
     )
 

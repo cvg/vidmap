@@ -6,7 +6,10 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass as result_dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 import numpy as np
 
@@ -110,7 +113,9 @@ class ExtendedMatchBuilder:
         extended_options: ExtendedMatchOptions,
         point_budget: int,
         image_content_fingerprint: str,
+        device: torch.device,
     ):
+        self.device = device
         self.scene_parser = scene_parser
         self.paths = paths
         self.force_recompute = force_recompute
@@ -175,6 +180,7 @@ class ExtendedMatchBuilder:
                 image_list=sequence,
                 overwrite=self.force_recompute,
                 cache_identity=retrieval_features_metadata,
+                device=self.device,
             )
             record_timing("retrieval", sync_time() - started)
             log_memory("retrieval")
@@ -197,6 +203,7 @@ class ExtendedMatchBuilder:
                 nquery=ext_conf.nquery,
                 lc_pair_nms=ext_conf.lc_pair_nms,
                 lc_pair_nms_radius=ext_conf.lc_pair_nms_radius,
+                device=self.device,
             )
             validate_pair_name_plan((*sequential_pairs, *retrieval_pairs))
             write_pair_artifact(paths.retrieval_pairs_path, retrieval_pairs, retrieval_pairs_metadata)
@@ -218,6 +225,7 @@ class ExtendedMatchBuilder:
             image_options=self.highres_options,
             lowres_match_resolution=self.lowres_match_resolution,
             match_threshold=ext_conf.lc_match_thresh,
+            device=self.device,
         )
         if missing_count:
             record_timing("lc_streaming", sync_time() - started)

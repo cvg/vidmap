@@ -74,51 +74,68 @@ def build_pair_loader(scene_parser, sequence, lowres_options):
 
 
 @contextmanager
-def pipelined_matches(tracker_model, loader, original_width, original_height, *, batch_size, coarse_only=False):
+def pipelined_matches(
+    tracker_model, loader, original_width, original_height, *, batch_size, device: torch.device, coarse_only=False
+):
     """Overlap one ordered inference batch with CPU selection, draining on exit."""
     from vidmap.utils.profiling import record_timing, sync_time
 
     source = iter(loader)
-    stream = torch.cuda.Stream()
-    stream.wait_stream(torch.cuda.current_stream())
     first_batch = True
 
-    def launch(batch):
+    def compute_batch(batch):
         nonlocal first_batch
-        with torch.cuda.stream(stream):
-            batch_start = sync_time()
-            output = tracker_model.match_lowres_batch(
-                batch["im_A_batch"],
-                batch["im_B_batch"],
-                names_a=batch["names_A"],
-                names_b=batch["names_B"],
-                output_size=(original_width, original_height),
-                batch_size=batch_size,
-                coarse_only=coarse_only,
-            )
-            if first_batch:
-                record_timing("keyframing_first_batch", sync_time() - batch_start, first=True)
-            ready = torch.cuda.Event()
-            ready.record()
-        first_batch = False
-        return (output.matches, output.certainty), ready
+        batch_start = sync_time()
+        output = tracker_model.match_lowres_batch(
+            batch["im_A_batch"],
+            batch["im_B_batch"],
+            names_a=batch["names_A"],
+            names_b=batch["names_B"],
+            output_size=(original_width, original_height),
+            batch_size=batch_size,
+            coarse_only=coarse_only,
+        )
+        if first_batch:
+            record_timing("keyframing_first_batch", sync_time() - batch_start, first=True)
+            first_batch = False
+        return output.matches, output.certainty
 
-    def iterate():
-        first = next(source, None)
-        pending = None if first is None else launch(first)
-        while pending is not None:
-            (matches, certainties), ready = pending
-            consumer = torch.cuda.current_stream()
-            consumer.wait_event(ready)
-            matches.record_stream(consumer)
-            certainties.record_stream(consumer)
-            following = next(source, None)
-            pending = None if following is None else launch(following)
-            yield matches, certainties
+    if device.type != "cuda":
 
-    batches = iterate()
+        def iterate_sync():
+            for batch in source:
+                yield compute_batch(batch)
+
+        batches = iterate_sync()
+    else:
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+
+        def launch(batch):
+            with torch.cuda.stream(stream):
+                result = compute_batch(batch)
+                ready = torch.cuda.Event()
+                ready.record()
+            return result, ready
+
+        def iterate():
+            first = next(source, None)
+            pending = None if first is None else launch(first)
+            while pending is not None:
+                (matches, certainties), ready = pending
+                consumer = torch.cuda.current_stream()
+                consumer.wait_event(ready)
+                matches.record_stream(consumer)
+                certainties.record_stream(consumer)
+                following = next(source, None)
+                pending = None if following is None else launch(following)
+                yield matches, certainties
+
+        batches = iterate()
+
     try:
         yield batches
     finally:
-        stream.synchronize()
+        if device.type == "cuda":
+            stream.synchronize()
         batches.close()

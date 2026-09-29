@@ -29,6 +29,7 @@ from vidmap.frontend.cache import (
 )
 from vidmap.frontend.h5_write_queue import H5WriteQueue
 from vidmap.frontend.options.preparation import CameraPriorEstimationOptions
+from vidmap.utils.device import empty_device_cache
 from vidmap.utils.logging import progress_bars_enabled
 
 _RUNTIME_CONFIG_FIELDS = frozenset({"num_workers"})
@@ -57,14 +58,14 @@ def geocalib_cache_identity() -> dict[str, str]:
     }
 
 
-def _load_geocalib_model():
+def _load_geocalib_model(device: torch.device):
     from geocalib import GeoCalib
 
     # GeoCalib downloads its release checkpoint on first construction.
     model = GeoCalib()
     _verify_geocalib_checkpoint()
     try:
-        return model.to("cuda")
+        return model.to(device)
     except Exception:
         _release_geocalib_model(model)
         raise
@@ -80,8 +81,7 @@ def _release_geocalib_model(model) -> None:
         except Exception as error:
             cleanup_error = error
     try:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_device_cache()
     except Exception as error:
         cleanup_error = cleanup_error or error
     if cleanup_error is not None and not active_error:
@@ -204,7 +204,7 @@ def _calibration_result(
     return {"K": calibration[0].astype(np.float32), "image_size": image_size, "focal_std_px": std.astype(np.float32)}
 
 
-def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: str = "cuda") -> dict:
+def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: torch.device) -> dict:
     """Load one same-sized raw-image stack and run one shared GeoCalib forward pass."""
     if not image_paths:
         raise ValueError("GeoCalib shared calibration requires at least one image")
@@ -236,19 +236,21 @@ def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: s
     return _calibration_result(result, len(images), image_size=(width, height))
 
 
-def calibrate_image(model, image_path: Path, *, device: str = "cuda") -> dict:
+def calibrate_image(model, image_path: Path, *, device: torch.device) -> dict:
     image = model.load_image(image_path).to(device)
     result = model.calibrate(image, shared_intrinsics=False)
     return _calibration_result(result, 1, image_size=(int(image.shape[-1]), int(image.shape[-2])))
 
 
 @torch.no_grad()
-def estimate_keyframe_bootstrap_intrinsics(rgb_dir: Path, sequence: Sequence[str]) -> np.ndarray:
+def estimate_keyframe_bootstrap_intrinsics(
+    rgb_dir: Path, sequence: Sequence[str], *, device: torch.device
+) -> np.ndarray:
     """Estimate the local K used only by normalized keyframe motion scoring."""
     indices, images = keyframe_bootstrap_sample_plan(sequence)
-    model = _load_geocalib_model()
+    model = _load_geocalib_model(device)
     try:
-        result = calibrate_shared_intrinsics(model, [Path(rgb_dir) / name for name in images])
+        result = calibrate_shared_intrinsics(model, [Path(rgb_dir) / name for name in images], device=device)
         calibration = result["K"].astype(np.float64, copy=True)
     finally:
         _release_geocalib_model(model)
@@ -295,7 +297,9 @@ class CameraPriorEstimator:
         keyframe_names: Sequence[str],
         options: CameraPriorEstimationOptions,
         image_content_fingerprint: str,
+        device: torch.device,
     ):
+        self.device = device
         self.rgb_dir = Path(rgb_dir)
         self.per_image_path = per_image_path
         self.batch_path = batch_path
@@ -317,7 +321,7 @@ class CameraPriorEstimator:
         logger.info("Computing focal uncertainty for %d images", len(pending_names))
         model = None
         try:
-            model = _load_geocalib_model()
+            model = _load_geocalib_model(device=self.device)
             with (
                 H5WriteQueue(partial(write_image_geocalib_cache, geocalib_per_image_path=path)) as writer,
                 tqdm(
@@ -327,7 +331,7 @@ class CameraPriorEstimator:
                 ) as progress,
             ):
                 for image_name in pending_names:
-                    result = calibrate_image(model, self.rgb_dir / image_name)
+                    result = calibrate_image(model, self.rgb_dir / image_name, device=self.device)
                     writer.put((image_name, result))
                     progress.update(1)
         finally:
@@ -355,10 +359,11 @@ class CameraPriorEstimator:
 
         model = None
         try:
-            model = _load_geocalib_model()
+            model = _load_geocalib_model(device=self.device)
             calibration = calibrate_shared_intrinsics(
                 model,
                 [self.rgb_dir / name for name in selected],
+                device=self.device,
             )
             with h5py.File(str(batch_path), "a", libver="latest") as hfile:
                 if "batch_calibration" in hfile:

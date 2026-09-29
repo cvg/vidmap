@@ -1,11 +1,16 @@
 """Orchestrate streaming keyframe selection and its certified output plan."""
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass as result_dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import torch
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    import torch
 
 from vidmap.datasets.base import DatasetParser
 from vidmap.frontend.cache import (
@@ -28,6 +33,7 @@ from vidmap.frontend.options.keyframes import DetectKeyframesOptions, SalientFea
 from vidmap.frontend.options.matching import LowresMatchOptions
 from vidmap.frontend.paths import FrontendPaths
 from vidmap.repro.frontend import write_pair_order_artifact, write_sequence_artifact
+from vidmap.utils.device import empty_device_cache
 from vidmap.utils.logging import progress_bars_enabled
 
 logger = logging.getLogger(__name__)
@@ -79,7 +85,9 @@ class KeyframeProcessor:
         lowres_options: LowresMatchOptions,
         keyframe_options: DetectKeyframesOptions,
         salient_options: SalientFeatureOptions,
+        device: torch.device,
     ):
+        self.device = device
         self.scene_parser = scene_parser
         self.frames = frames
         self.paths = paths
@@ -149,6 +157,7 @@ class KeyframeProcessor:
             bootstrap_intrinsics = estimate_keyframe_bootstrap_intrinsics(
                 scene_parser.rgb_dir,
                 sequence,
+                device=self.device,
             )
         tracker_model = self.tracker.get()
         logger.info("Starting streaming keyframe detection and salient-feature extraction")
@@ -167,7 +176,7 @@ class KeyframeProcessor:
         aliked_model = None
         selector = None
         try:
-            aliked_model = keyframe_selector.create_aliked_model(self.salient_options)
+            aliked_model = keyframe_selector.create_aliked_model(self.salient_options, device=self.device)
             selector = keyframe_selector.KeyframeSelector(
                 scene_parser,
                 self.paths.salient_features_path,
@@ -187,6 +196,7 @@ class KeyframeProcessor:
                     original_width,
                     original_height,
                     batch_size=self.lowres_options.batch_size,
+                    device=self.device,
                     coarse_only=self.lowres_options.coarse_only,
                 ) as batches,
                 tqdm(
@@ -215,8 +225,7 @@ class KeyframeProcessor:
         finally:
             del selector
             del aliked_model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_device_cache()
 
     def commit_keyframes(self, admitted_ids, forced_ids, track_pairs_metadata) -> KeyframePlan:
         """Publish the candidates retained by lookahead admission."""
