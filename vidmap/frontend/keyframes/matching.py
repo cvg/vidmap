@@ -41,14 +41,6 @@ def collate_image_pairs(batch):
     }
 
 
-def _worker_init(_worker_id):
-    import ctypes
-
-    libc = ctypes.CDLL("libc.so.6")
-    libc.mallopt(ctypes.c_int(-1), ctypes.c_int(0))
-    libc.mallopt(ctypes.c_int(-3), ctypes.c_int(65536))
-
-
 def build_pair_loader(scene_parser, sequence, lowres_options):
     image_dataset = RomaVideoImageDataset(
         scene_parser.rgb_dir,
@@ -67,7 +59,6 @@ def build_pair_loader(scene_parser, sequence, lowres_options):
         num_workers=lowres_options.num_workers,
         shuffle=False,
         collate_fn=collate_image_pairs,
-        worker_init_fn=_worker_init,
         pin_memory=False,
     )
     return loader, len(pair_indices), original_width, original_height
