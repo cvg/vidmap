@@ -7,6 +7,7 @@ third_party/*
 coll/*
 tmp/*
 *.mp4
+*.mov
 !assets/example_video.mp4
 *.html
 !vidmap/visualization/vidmap-viewer.html

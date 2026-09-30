@@ -22,7 +22,7 @@ from vidmap.run_options import RunOptions
 
 logger = logging.getLogger(__name__)
 
-_VIDEO_SUFFIXES = frozenset({".mp4"})
+_VIDEO_SUFFIXES = frozenset({".mp4", ".mov"})
 _FRAME_PATTERN = "%06d.jpg"
 _TIMESTAMP_FRAME_PATTERN = "timestamp-seconds.jpg"
 _TIMESTAMP_FILENAME_WIDTH = 20
@@ -103,14 +103,17 @@ def resolve_mapper_inputs(frontend_conf, mapper_inputs: str | Path | MapperInput
 
 
 def prepare_reconstruction_images(input_path: str | Path, workspace: str | Path) -> Path:
-    """Return an image directory, decoding an MP4 into the workspace when needed."""
+    """Return an image directory, decoding a video into the workspace when needed."""
     source = Path(input_path).expanduser().resolve()
     if source.is_dir():
         return source
     if not source.is_file():
         raise FileNotFoundError(f"Reconstruction input does not exist: {source}")
     if source.suffix.lower() not in _VIDEO_SUFFIXES:
-        raise ValueError(f"Reconstruction input must be an image directory or an MP4 file, got {source}")
+        raise ValueError(
+            f"Reconstruction input must be an image directory or a video ({', '.join(sorted(_VIDEO_SUFFIXES))}), "
+            f"got {source}"
+        )
     return decode_video_frames(source, Path(workspace).expanduser())
 
 
@@ -205,16 +208,16 @@ def _read_local_input_provenance(path: Path) -> Path:
 
 
 def decode_video_frames(video_path: str | Path, workspace: str | Path) -> Path:
-    """Decode an MP4 to a persistent, content-addressed image directory."""
+    """Decode a video to a persistent, content-addressed image directory."""
     video_path = Path(video_path).expanduser().resolve()
     if not video_path.is_file():
         raise FileNotFoundError(f"Video does not exist: {video_path}")
     if video_path.suffix.lower() not in _VIDEO_SUFFIXES:
-        raise ValueError(f"Expected an MP4 video, got {video_path}")
+        raise ValueError(f"Expected a video file ({', '.join(sorted(_VIDEO_SUFFIXES))}), got {video_path}")
 
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        raise FileNotFoundError("FFmpeg is required to reconstruct an MP4 video")
+        raise FileNotFoundError("FFmpeg is required to reconstruct a video file")
 
     digest = _file_digest(video_path)
     frames_root = Path(workspace).expanduser() / "video_frames"
