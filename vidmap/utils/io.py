@@ -1,6 +1,5 @@
 """I/O functions for reading and writing data, inspired by Hierarchical-Localization."""
 
-import os
 from collections import OrderedDict
 from pathlib import Path
 
@@ -11,12 +10,6 @@ import numpy as np
 from vidmap.utils.parsers import names_to_pair
 
 
-def drop_page_cache(path):
-    fd = os.open(str(path), os.O_RDONLY)
-    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-    os.close(fd)
-
-
 def read_image(path, grayscale=False):
     mode = cv2.IMREAD_GRAYSCALE if grayscale else cv2.IMREAD_COLOR
     image = cv2.imread(str(path), mode)
@@ -24,7 +17,6 @@ def read_image(path, grayscale=False):
         raise ValueError(f"Cannot read image {path}.")
     if not grayscale and len(image.shape) == 3:
         image = image[:, :, ::-1]  # BGR to RGB
-    drop_page_cache(path)
     return image
 
 
@@ -69,8 +61,6 @@ class H5KeypointReader:
                 self._hfile.close()
         finally:
             self._hfile = None
-            if self.path.exists():
-                drop_page_cache(self.path)
         return False
 
     def get(self, name: str):
