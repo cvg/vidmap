@@ -189,7 +189,7 @@ def compute_aliked_features_for_frame(scene_parser, output_path, image_name, ali
         image = resize_image(image, size_new, preprocessing_conf.interpolation)
 
     image = image[None] if preprocessing_conf.grayscale else image.transpose((2, 0, 1))
-    image_tensor = torch.from_numpy(image / 255.0).unsqueeze(0).cuda()
+    image_tensor = torch.from_numpy(image / 255.0).unsqueeze(0).to(aliked_model.device)
     with torch.no_grad():
         keypoints = aliked_model({"image": image_tensor})["keypoints"][0].cpu().numpy()
 

@@ -139,6 +139,7 @@ class StreamingTrackPropagator:
         paths: FrontendPaths,
         keyframe_sequence,
         lowres_match_resolution,
+        device: torch.device,
         tracker_model=None,
         conf_highres=None,
         extended_matches_path=None,
@@ -149,6 +150,7 @@ class StreamingTrackPropagator:
         keyframe_options=None,
     ):
         """Store dependencies; resource acquisition starts in :meth:`run`."""
+        self.device = device
         self.conf = conf
         self.tracker_model = tracker_model
         self.conf_highres = conf_highres
@@ -311,7 +313,7 @@ class StreamingTrackPropagator:
                 batch_size=None,
                 num_workers=self.conf.num_workers,
                 prefetch_factor=None,
-                pin_memory=True,
+                pin_memory=(self.device.type == "cuda"),
             )
         )
         loaded_position = -1
@@ -397,6 +399,7 @@ class StreamingTrackPropagator:
                     original_size=get_image_size(self.scene_parser, anchor),
                     current_size=direct.source_size,
                     scheduled_hops=self.conf.multiflow_hops,
+                    device=self.device,
                 )
             state = self.state
             if any(field.source_size != state.current_size for field in fields):

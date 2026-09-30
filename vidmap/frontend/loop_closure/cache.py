@@ -1,8 +1,14 @@
 """Lifecycle owner for the one extended-match H5 artifact."""
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 import h5py
+
+if TYPE_CHECKING:
+    import torch
 
 from vidmap.frontend.cache import (
     CacheMetadataMismatch,
@@ -55,6 +61,7 @@ class ExtendedMatchCache:
         image_options,
         lowres_match_resolution,
         match_threshold,
+        device: torch.device,
     ):
         return repair_extended_match_pairs(
             pairs,
@@ -66,6 +73,7 @@ class ExtendedMatchCache:
             conf_highres=image_options,
             lowres_match_resolution=lowres_match_resolution,
             lc_match_thresh=match_threshold,
+            device=device,
         )
 
     def collect(self, pairs, *, match_threshold):

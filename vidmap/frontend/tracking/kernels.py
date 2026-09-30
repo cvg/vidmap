@@ -132,7 +132,7 @@ def select_keypoints_from_certainty(
     queries = None
     if prev_keypoints is not None and prev_keypoints.shape[1] > 0:
         prev_keypoints = prev_keypoints[:max_kps]
-        queries = torch.from_numpy(prev_keypoints).cuda()
+        queries = torch.from_numpy(prev_keypoints).to(certainty.device)
 
     ref_kps_nms = prop_tracker_nms(
         check_certainties[None],

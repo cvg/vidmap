@@ -96,6 +96,8 @@ def _match_loop_closures_streaming(
     retrieval_pairs,
     conf_highres,
     lowres_match_resolution,
+    *,
+    device: torch.device,
     lc_match_thresh=0.5,
     lc_writer_queue=None,
 ):
@@ -111,7 +113,10 @@ def _match_loop_closures_streaming(
         tracker_model: Tracker model instance
         retrieval_pairs: List of (name0, name1) pairs from retrieval
         conf_highres: High-res frontend config
+        lowres_match_resolution: Processing resolution for lowres matches
+        device: Execution device
         lc_match_thresh: Certainty threshold for LC matches
+        lc_writer_queue: Optional H5WriteQueue instance
     """
     if not retrieval_pairs:
         return
@@ -157,7 +162,7 @@ def _match_loop_closures_streaming(
         num_workers=4,
         prefetch_factor=2,
         collate_fn=collate_retrieval_pair,
-        pin_memory=True,
+        pin_memory=(device.type == "cuda"),
     )
 
     from vidmap.frontend.loop_closure.feature_plan import retained_feature_names
@@ -264,6 +269,8 @@ def match_loop_closures_streaming(
     retrieval_pairs,
     conf_highres,
     lowres_match_resolution,
+    *,
+    device: torch.device,
     lc_match_thresh=0.5,
 ):
     """Run LC frontend with deterministic writer teardown on every exit."""
@@ -277,8 +284,9 @@ def match_loop_closures_streaming(
             retrieval_pairs,
             conf_highres,
             lowres_match_resolution,
-            lc_match_thresh,
-            writer_queue,
+            device=device,
+            lc_match_thresh=lc_match_thresh,
+            lc_writer_queue=writer_queue,
         )
 
 
@@ -293,6 +301,7 @@ def repair_extended_match_pairs(
     conf_highres,
     lowres_match_resolution,
     lc_match_thresh,
+    device: torch.device,
 ):
     """Repair and verify one planned set of extended-match pairs."""
     expected_names = canonical_pair_names(pairs)
@@ -314,6 +323,7 @@ def repair_extended_match_pairs(
             retrieval_pairs=missing_pairs,
             conf_highres=conf_highres,
             lowres_match_resolution=lowres_match_resolution,
+            device=device,
             lc_match_thresh=lc_match_thresh,
         )
         _, still_missing = inspect_incremental_items(
@@ -324,7 +334,7 @@ def repair_extended_match_pairs(
         )
         if still_missing:
             raise CacheMetadataMismatch(
-                f"{paths.extended_matches_path}: {label} LC repair omitted " f"{len(still_missing)} planned pairs"
+                f"{paths.extended_matches_path}: {label} LC repair omitted {len(still_missing)} planned pairs"
             )
     elif pairs:
         logger.info("Skipping %s LC frontend; all %d pairs exist", label, len(pairs))

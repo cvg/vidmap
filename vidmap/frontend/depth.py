@@ -36,6 +36,7 @@ from vidmap.frontend.models.depth.da3_video import (
 )
 from vidmap.frontend.options.depth import Da3VideoOptions, DepthEstimationOptions
 from vidmap.frontend.paths import FrontendPaths
+from vidmap.utils.device import empty_device_cache
 from vidmap.utils.image_sampling import sample_at_keypoints
 from vidmap.utils.logging import progress_bars_enabled
 
@@ -55,8 +56,7 @@ def _release_depth_model(model) -> None:
         except Exception as error:
             cleanup_error = error
     try:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_device_cache()
     except Exception as error:
         cleanup_error = cleanup_error or error
     if cleanup_error is not None and not active_error:
@@ -232,6 +232,7 @@ def _run_da3_depth(
     num_workers,
     calibration_enabled=False,
     batch_size=1,
+    device: torch.device,
 ):
     """Run the ordered DA3 sliding-window inference owned by the depth stage."""
     from vidmap.frontend.models.depth.da3_video import DA3_MODEL_ID, Da3Video
@@ -252,11 +253,12 @@ def _run_da3_depth(
         window_size=window_size,
         process_res=backend.process_res,
         num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
     )
     windows = iter(loader)
     model = None
     try:
-        model = Da3Video(backend)
+        model = Da3Video(backend, device=device)
         with (
             H5WriteQueue(
                 partial(
@@ -347,7 +349,9 @@ class DepthEstimator:
         options: DepthEstimationOptions,
         image_content_fingerprint: str,
         calibration_enabled: bool = False,
+        device: torch.device,
     ):
+        self.device = device
         self.scene_parser = scene_parser
         self.paths = paths
         self.force_recompute = force_recompute
@@ -427,6 +431,7 @@ class DepthEstimator:
                 num_workers=self.options.num_workers,
                 calibration_enabled=self.calibration_enabled,
                 batch_size=self.options.batch_size,
+                device=self.device,
             )
         else:
             logger.info("No depth maps to estimate; all already exist")
@@ -452,6 +457,7 @@ def cache_full_depth_maps_posthoc(
     output_path: Path,
     options: DepthEstimationOptions,
     force_recompute: bool = False,
+    device: torch.device,
 ) -> IncrementalArtifactContract:
     """Infer only full prediction-grid depths for an existing frontend."""
     from vidmap.frontend.cache import ordered_files_fingerprint
@@ -481,6 +487,7 @@ def cache_full_depth_maps_posthoc(
             frozenset(missing),
             num_workers=options.num_workers,
             batch_size=options.batch_size,
+            device=device,
         )
     else:
         logger.info(

@@ -38,6 +38,8 @@ _RUNTIME_CONFIG_FIELDS = frozenset({"num_workers"})
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    import torch
+
     from vidmap.frontend.options.matching import ExtendedMatchOptions
 
 
@@ -193,7 +195,9 @@ class SparseTrackBuilder:
         highres_options: RoMaImageOptions,
         lowres_match_resolution: int,
         extended_options: ExtendedMatchOptions,
+        device: torch.device,
     ):
+        self.device = device
         self.scene_parser = scene_parser
         self.paths = paths
         self.force_recompute = force_recompute
@@ -324,6 +328,7 @@ class SparseTrackBuilder:
                 lowres_match_resolution=self.lowres_match_resolution,
                 extended_matches_path=staging_path,
                 lc_match_thresh=self.extended_options.lc_match_thresh,
+                device=self.device,
             ).run()
             record_timing("track_propagation", sync_time() - started)
             log_memory("track_propagation")
@@ -344,6 +349,7 @@ class SparseTrackBuilder:
             image_options=self.highres_options,
             lowres_match_resolution=self.lowres_match_resolution,
             match_threshold=self.extended_options.lc_match_thresh,
+            device=self.device,
         )
         if loaded:
             logger.info("Loaded %d cached track-overlap pairs", present_count)

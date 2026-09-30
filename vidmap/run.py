@@ -87,6 +87,7 @@ def main(argv=None):
         intrinsics_path=args.intrinsics,
         force_frontend=args.force_frontend,
         cache_depth_maps=args.cache_depth_maps,
+        device=run_options.device,
     )
     logger.info("Mapper inputs ready: tag=%s path=%s", frontend.tag, frontend.path)
 

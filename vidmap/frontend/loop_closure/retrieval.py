@@ -19,6 +19,7 @@ from vidmap.frontend.cache import (
 )
 from vidmap.frontend.image_dataset import ImageDataset, ImageDatasetOptions
 from vidmap.frontend.models.megaloc import MegaLocDescriptorModel, megaloc_cache_identity
+from vidmap.utils.device import empty_device_cache
 from vidmap.utils.logging import progress_bars_enabled
 
 RETRIEVAL_PAIR_SELECTION_POLICY_VERSION = 1
@@ -59,6 +60,8 @@ def compute_retrieval_features(
     image_list,
     cache_identity,
     overwrite,
+    *,
+    device: torch.device,
 ):
     """
     Compute retrieval features for image matching.
@@ -67,6 +70,9 @@ def compute_retrieval_features(
         scene_parser: Scene parser with rgb_dir
         retrieval_features_path: Retrieval descriptor artifact
         image_list: List of image names to process
+        cache_identity: Cache fingerprint
+        overwrite: Overwrite existing cache
+        device: Target execution device
 
     """
     retrieval_conf = _retrieval_config()
@@ -97,13 +103,12 @@ def compute_retrieval_features(
     if len(dataset.names) == 0:
         logger.info("Skipping retrieval frontend because every item is cached")
         mark_incremental_cache_complete(retrieval_features_path, identity, expected_names)
-        torch.cuda.empty_cache()
+        empty_device_cache(device)
         logger.info("Retrieval features available at %s", retrieval_features_path)
         return
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MegaLocDescriptorModel().eval().to(device)
-    loader = torch.utils.data.DataLoader(dataset, num_workers=1, shuffle=False, pin_memory=True)
+    loader = torch.utils.data.DataLoader(dataset, num_workers=1, shuffle=False, pin_memory=(device.type == "cuda"))
     for idx, data in enumerate(tqdm(loader, disable=not progress_bars_enabled())):
         name = dataset.names[idx]
         pred = model({"image": data["image"].to(device, non_blocking=True)})
@@ -132,7 +137,7 @@ def compute_retrieval_features(
     mark_incremental_cache_complete(retrieval_features_path, identity, expected_names)
     del model
 
-    torch.cuda.empty_cache()
+    empty_device_cache(device)
 
     logger.info("Retrieval features saved to %s", retrieval_features_path)
 
@@ -159,8 +164,7 @@ def _pairs_from_score_matrix(scores, invalid, num_select, min_score, return_scor
     return pairs
 
 
-def _retrieve_pairs(path, reference_query_dict, num_matched, min_score, return_scores):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def _retrieve_pairs(path, reference_query_dict, num_matched, min_score, return_scores, *, device: torch.device):
     with h5py.File(str(path), "r", libver="latest") as hfile:
 
         def has_descriptor(name):
@@ -216,6 +220,8 @@ def generate_retrieval_pairs(
     nquery,
     lc_pair_nms=False,
     lc_pair_nms_radius=2,
+    *,
+    device: torch.device,
 ):
     """Generate retrieval pairs excluding sequential and sufficiently tracked pairs."""
     if not retrieval_path.exists():
@@ -242,6 +248,7 @@ def generate_retrieval_pairs(
         nquery,
         retrieval_min_score,
         lc_pair_nms,
+        device=device,
     )
     if lc_pair_nms:
         raw_count = len(retrieval_pairs)

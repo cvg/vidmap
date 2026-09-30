@@ -11,6 +11,8 @@ from accelerate import init_empty_weights
 from huggingface_hub import PyTorchModelHubMixin
 from safetensors.torch import load_file
 
+from vidmap.utils.device import get_autocast_context
+
 
 class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
     """DA3 model construction, checkpoint loading, and inference used by VidMap."""
@@ -59,10 +61,16 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
         assert not any(value.is_meta for value in (*model.parameters(), *model.buffers()))
         return model
 
-    def configure_runtime(self, *, compile: bool) -> None:
+    def configure_runtime(self, *, compile: bool, device: torch.device) -> None:
+        self.device = device
         assert self.encoders is None
         self.encoders = []
-        if compile:
+        for name, branch in (("anyview", self.model.da3), ("metric", self.model.da3_metric)):
+            encoder = branch.backbone.pretrained
+            if encoder.rope is not None:
+                self.encoders.append(encoder)
+
+        if compile and device.type == "cuda":
             from types import MethodType
 
             from depth_anything_3.model.dinov2.layers.swiglu_ffn import SwiGLUFFN, SwiGLUFFNFused
@@ -85,8 +93,6 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
                 for module in encoder.modules():
                     if type(module) is SwiGLUFFNFused:
                         module.forward = MethodType(SwiGLUFFN.forward, module)
-                if encoder.rope is not None:
-                    self.encoders.append(encoder)
                 branch.backbone = CachedDa3Graph(
                     branch.backbone,
                     component=f"{name}.backbone",
@@ -101,7 +107,7 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
     def infer_windows(self, windows, *, batch_size: int, ref_view_strategy: str):
         assert self.encoders is not None and 0 < len(windows) <= batch_size
         assert all(image.shape == windows[0].shape for image in windows)
-        device = next(self.parameters()).device
+        device = self.device
         batch = torch.stack(windows).to(device, non_blocking=True).float()
         if len(windows) < batch_size:
             batch = torch.cat((batch, batch.new_zeros((batch_size - len(windows), *batch.shape[1:]))))
@@ -117,12 +123,13 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
 
     def _infer_batch(self, images, *, count, ref_view_strategy):
         assert images.ndim == 5 and images.shape[2] == 3 and 0 < count <= images.shape[0]
-        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+        autocast_ctx, dtype = get_autocast_context(images.device)
         # Several independent shapes/branches share upstream Python code objects.
         # Keep specialization explicit instead of hitting Dynamo's default eager fallback.
         with (
             torch._dynamo.config.patch(recompile_limit=64, fail_on_recompile_limit_hit=True),
-            torch.autocast("cuda", dtype=dtype),
+            autocast_ctx,
         ):
             # The upstream outer product is autocast-sensitive, even when the
             # requested rotary table dtype is float32. Preserve its context.

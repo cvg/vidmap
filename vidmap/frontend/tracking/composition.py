@@ -1,8 +1,14 @@
 """Concrete composition of frontend's tracking-owned stages."""
 
+from __future__ import annotations
+
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 from vidmap.frontend.cache import fingerprint, ordered_files_fingerprint
 from vidmap.frontend.depth import DepthEstimator
@@ -34,7 +40,9 @@ class TrackingPipeline:
         deterministic,
         repro_dir,
         cache_full_depth_maps=False,
+        device: torch.device,
     ):
+        self.device = device
         self.options = options
         self.sample_name = sample_name
         self.cache_dir = Path(cache_dir)
@@ -77,7 +85,7 @@ class TrackingPipeline:
         frames = FrameSequence.from_scene(self.scene_parser)
 
         verification = None
-        with create_lazy_romav2_tracker(tracker_options) as tracker:
+        with create_lazy_romav2_tracker(tracker_options, device=self.device) as tracker:
             keyframe_processor = KeyframeProcessor(
                 scene_parser=self.scene_parser,
                 frames=frames,
@@ -88,6 +96,7 @@ class TrackingPipeline:
                 lowres_options=options.keyframes.matching,
                 keyframe_options=options.keyframes.selection,
                 salient_options=options.keyframes.features,
+                device=self.device,
             )
             track_pairs_metadata = keyframe_cache.admitted_track_pairs_cache_metadata(
                 scene_parser=self.scene_parser,
@@ -112,6 +121,7 @@ class TrackingPipeline:
                 highres_options=options.tracks.images,
                 lowres_match_resolution=options.keyframes.matching.resolution,
                 extended_options=options.loop_closure,
+                device=self.device,
             )
             tracks = sparse_track_builder.load_complete()
             if tracks is None:
@@ -158,6 +168,7 @@ class TrackingPipeline:
                 extended_options=options.loop_closure,
                 point_budget=options.tracks.propagation.max_kps,
                 image_content_fingerprint=image_content,
+                device=self.device,
             )
             extended = extended_match_builder.build()
 
@@ -171,6 +182,7 @@ class TrackingPipeline:
             options=options.depth,
             calibration_enabled=options.camera_priors.estimator == "da3",
             image_content_fingerprint=image_content,
+            device=self.device,
         )
         depth = (
             depth_estimator.estimate(cache_full_depth_maps=True)
@@ -212,4 +224,5 @@ class TrackingPipeline:
             keyframe_names=keyframe_names,
             options=self.options.camera_priors,
             image_content_fingerprint=image_content,
+            device=self.device,
         ).estimate()
