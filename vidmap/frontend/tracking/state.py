@@ -68,7 +68,7 @@ class SparseTrackState:
         self.device = device
         self.original_size = original_size
         self.current_size = current_size
-        self.scale_ratio = np.array(original_size) / np.array(current_size)
+        self.scale_ratio = np.divide(original_size, current_size, dtype=np.float32)
         self.prev_keypoints = None
         self.prev_conf = None
         self.prev_covar = None
