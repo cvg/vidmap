@@ -146,7 +146,6 @@ def configure_second_global_positioning_options(
         native_options.sequential_support_warmup_rounds = 0
         native_options.sequential_support_observations_per_track = 0
         native_options.sequential_support_image_timeline = []
-    native_options.filter_depth_outliers = False
     native_options.initial_depth_map_scales = first_result.depth_map_scales
     native_options.initial_frame_centers = dict(initial_frame_centers)
     return apply_global_positioning_policy(native_options, options)
