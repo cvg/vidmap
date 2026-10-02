@@ -239,7 +239,6 @@ class GlobalPositioner {
     frame_centers_.reserve(mapping_problem_->NumImages());
     dmap_scales_.clear();
     dmap_scale_observation_counts_.clear();
-    depth_outliers_.clear();
     per_image_scale_prior_losses_.clear();
     temporal_acceleration_losses_.clear();
     has_sequential_support_candidate_ = false;
@@ -297,7 +296,6 @@ class GlobalPositioner {
       sequential_support_calibrated_switch_.reset();
       sequential_support_uncalibrated_switch_.reset();
     }
-    loss_soft_outlier_fallback_.reset();
 
     solver_options_.num_threads = options_.num_threads;
     solver_options_.max_num_iterations = options_.max_num_iterations;
@@ -399,10 +397,6 @@ class GlobalPositioner {
                                      : linear_scale;
         dmap_scale_observation_counts_[image_id] = 0;
       }
-    }
-    if (options_.use_metric_depth_constraint &&
-        options_.filter_depth_outliers) {
-      FindDepthOutliers();
     }
 
     for (const Point3DId point3D_id : mapping_problem_->Point3DIds()) {
@@ -868,20 +862,8 @@ class GlobalPositioner {
                                  options_.log_linear_threshold);
     if (cost == nullptr) return;
 
-    const std::pair<ImageId, std::uint32_t> observation_key{
-        observation.image_id, observation.point2D_idx};
     ceres::LossFunction* depth_loss = nullptr;
-    if (depth_outliers_.count(observation_key) != 0) {
-      if (is_loop_closure) {
-        delete cost;
-        return;
-      }
-      if (!loss_soft_outlier_fallback_) {
-        loss_soft_outlier_fallback_ =
-            SharedLoss(options_.loss_soft_outlier_fallback);
-      }
-      depth_loss = loss_soft_outlier_fallback_.get();
-    } else if (is_loop_closure) {
+    if (is_loop_closure) {
       depth_loss = loss_lc_depth_.get();
     } else if (MaskValue(image.is_track_anchor, observation.point2D_idx)) {
       depth_loss = loss_normal_depth_track_anchor_.get();
@@ -1065,55 +1047,6 @@ class GlobalPositioner {
     sequential_support_uncalibrated_switch_->SetWarmup(enabled);
   }
 
-  void FindDepthOutliers() {
-    for (const Point3DId point3D_id : mapping_problem_->Point3DIds()) {
-      const TrackRecord& track = mapping_problem_->Track(point3D_id);
-      FindDepthOutliers(track.observations, track.xyz);
-      if (options_.use_lc_observations) {
-        FindDepthOutliers(track.loop_closure_observations, track.xyz);
-      }
-    }
-  }
-
-  void FindDepthOutliers(const MatrixX2u& observations,
-                         const Eigen::Vector3d& xyz) {
-    for (Eigen::Index row = 0; row < observations.rows(); ++row) {
-      const ImageId image_id = observations(row, 0);
-      const std::uint32_t point2D_idx = observations(row, 1);
-      if (image_ids_.count(image_id) == 0) continue;
-      const ImageRecord& image = mapping_problem_->Image(image_id);
-      if (!image.pose.has_pose ||
-          !MaskValue(image.depth_validity, point2D_idx) ||
-          point2D_idx >=
-              static_cast<std::uint32_t>(image.depth_values.size()) ||
-          point2D_idx >=
-              static_cast<std::uint32_t>(image.depth_stddevs.size())) {
-        continue;
-      }
-      const double prior = image.depth_values[point2D_idx];
-      const double stddev = image.depth_stddevs[point2D_idx];
-      if (prior <= 1e-6 || stddev <= 1e-9) continue;
-      double scaled_prior = prior;
-      const auto scale_it = dmap_scales_.find(image_id);
-      if (scale_it != dmap_scales_.end()) {
-        scaled_prior *= options_.use_log_scale_for_depth_map_scales
-                            ? std::exp(scale_it->second)
-                            : scale_it->second;
-      }
-      const Eigen::Vector3d point_camera =
-          ImageRotation(image) * xyz + image.pose.translation;
-      if (point_camera[2] <= 1e-6) continue;
-      const double log_difference =
-          std::abs(std::log(std::max(point_camera[2], 1e-6)) -
-                   std::log(std::max(scaled_prior, 1e-6)));
-      const double threshold = options_.filter_depth_outlier_sigma *
-                               std::log(1.0 + std::max(stddev, 1e-6));
-      if (log_difference >= threshold) {
-        depth_outliers_.emplace(image_id, point2D_idx);
-      }
-    }
-  }
-
   void PopulateResult(const ceres::Solver::Summary& summary) {
     result_.success = summary.IsSolutionUsable();
     result_.depth_map_scales = dmap_scales_;
@@ -1171,7 +1104,6 @@ class GlobalPositioner {
   std::map<std::string, std::size_t> scale_indices_;
   std::map<ImageId, double> dmap_scales_;
   std::unordered_map<ImageId, int> dmap_scale_observation_counts_;
-  std::set<std::pair<ImageId, std::uint32_t>> depth_outliers_;
   std::vector<PlaybackObservation> playback_observations_;
   std::vector<ImageId> playback_image_ids_;
   std::vector<Point3DId> playback_point3D_ids_;
@@ -1195,7 +1127,6 @@ class GlobalPositioner {
   std::shared_ptr<ceres::LossFunction> sequential_support_uncalibrated_loss_;
   std::unique_ptr<WarmupLoss> sequential_support_calibrated_switch_;
   std::unique_ptr<WarmupLoss> sequential_support_uncalibrated_switch_;
-  std::shared_ptr<ceres::LossFunction> loss_soft_outlier_fallback_;
   std::vector<std::unique_ptr<ceres::LossFunction>>
       per_image_scale_prior_losses_;
   std::vector<std::unique_ptr<ceres::LossFunction>>
@@ -1227,9 +1158,7 @@ void GlobalPositionerOptions::Validate() const {
       !std::isfinite(temporal_acceleration_prior_loss_dead_zone) ||
       temporal_acceleration_prior_loss_dead_zone < 0.0 ||
       !std::isfinite(temporal_acceleration_prior_loss_huber_width) ||
-      temporal_acceleration_prior_loss_huber_width <= 0.0 ||
-      !std::isfinite(filter_depth_outlier_sigma) ||
-      filter_depth_outlier_sigma <= 0.0 || num_threads == 0 ||
+      temporal_acceleration_prior_loss_huber_width <= 0.0 || num_threads == 0 ||
       max_num_iterations <= 0 || !std::isfinite(function_tolerance) ||
       function_tolerance < 0.0 || !std::isfinite(gradient_tolerance) ||
       gradient_tolerance < 0.0 || !std::isfinite(parameter_tolerance) ||
@@ -1270,7 +1199,6 @@ void GlobalPositionerOptions::Validate() const {
   }
   loss.Validate();
   sequential_support_loss.Validate();
-  loss_soft_outlier_fallback.Validate();
   loss_normal_geometry.Validate();
   loss_normal_depth.Validate();
   loss_lc_geometry.Validate();

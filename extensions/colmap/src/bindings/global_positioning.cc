@@ -123,8 +123,6 @@ void BindGlobalPositioning(py::module_& m) {
                      &GlobalPositionerOptions::log_linear_threshold)
       .def_readwrite("scale_prior_stddev",
                      &GlobalPositionerOptions::scale_prior_stddev)
-      .def_readwrite("filter_depth_outliers",
-                     &GlobalPositionerOptions::filter_depth_outliers)
       .def_readwrite("initial_depth_map_scales",
                      &GlobalPositionerOptions::initial_dmap_scales)
       .def_readwrite("initial_frame_centers",

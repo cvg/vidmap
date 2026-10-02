@@ -74,8 +74,6 @@ struct GlobalPositionerOptions {
   bool zero_residual_behind = false;
   double log_linear_threshold = 0.1;
   double scale_prior_stddev = 1.0;
-  bool filter_depth_outliers = false;
-  double filter_depth_outlier_sigma = 3.0;
   std::map<ImageId, double> initial_dmap_scales;
   std::map<FrameId, Eigen::Vector3d> initial_frame_centers;
 
@@ -86,7 +84,6 @@ struct GlobalPositionerOptions {
   double temporal_acceleration_prior_loss_dead_zone = 0.0;
   double temporal_acceleration_prior_loss_huber_width = 1.0;
 
-  LossConfig loss_soft_outlier_fallback = {LossFunctionType::kHuber, 1.0, 1.0};
   LossConfig loss_normal_geometry;
   LossConfig loss_normal_depth;
   LossConfig loss_lc_geometry;
