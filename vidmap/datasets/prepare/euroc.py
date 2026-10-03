@@ -8,8 +8,10 @@ import json
 import shutil
 import struct
 import zipfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -65,6 +67,38 @@ class ImagePose:
     image_id: int
     name: str
     camera_from_world: np.ndarray
+
+
+@dataclass(frozen=True)
+class EurocGroundTruth:
+    timestamps: np.ndarray  # (N,) int64 nanoseconds
+    positions: np.ndarray  # (N, 3) p_RS_R in meters
+    quaternions: np.ndarray  # (N, 4) q_RS in wxyz
+    velocities: np.ndarray  # (N, 3) v_RS_R in m/s
+    gyro_biases: np.ndarray  # (N, 3) b_w_RS_S in rad/s
+    accel_biases: np.ndarray  # (N, 3) b_a_RS_S in m/s^2
+
+    def __iter__(self):
+        return iter(
+            (
+                self.timestamps,
+                self.positions,
+                self.quaternions,
+                self.velocities,
+                self.gyro_biases,
+                self.accel_biases,
+            )
+        )
+
+    def __getitem__(self, idx):
+        return (
+            self.timestamps,
+            self.positions,
+            self.quaternions,
+            self.velocities,
+            self.gyro_biases,
+            self.accel_biases,
+        )[idx]
 
 
 def source_inventory() -> tuple[dict[str, SourceArchive], dict[str, SequenceSource]]:
@@ -149,18 +183,29 @@ def parse_image_index(text: str) -> tuple[tuple[int, str], ...]:
     return tuple(images)
 
 
-def parse_ground_truth(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Parse the established EuRoC body-pose CSV representation."""
+def parse_ground_truth(text: str) -> EurocGroundTruth:
+    """Parse all 17 columns of EuRoC state_groundtruth_estimate0/data.csv."""
     values = np.loadtxt(io.StringIO(text), delimiter=",", skiprows=1, ndmin=2)
-    if values.shape[1] < 8 or len(values) < 2 or not np.isfinite(values[:, :8]).all():
-        raise ValueError("EuRoC ground-truth CSV does not contain valid pose rows")
-    timestamps = values[:, 0]
+    if values.shape[1] < 17 or len(values) < 2 or not np.isfinite(values[:, :17]).all():
+        raise ValueError("EuRoC ground-truth CSV does not contain 17 valid columns")
+    timestamps = values[:, 0].astype(np.int64)
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("EuRoC ground-truth timestamps must be strictly increasing")
-    quaternions = values[:, 4:8]
+    positions = values[:, 1:4]
+    quaternions = values[:, 4:8]  # w, x, y, z
     if np.any(np.linalg.norm(quaternions, axis=1) <= np.finfo(np.float64).eps):
         raise ValueError("EuRoC ground-truth CSV contains a zero quaternion")
-    return timestamps, values[:, 1:4], quaternions
+    velocities = values[:, 8:11]
+    gyro_biases = values[:, 11:14]
+    accel_biases = values[:, 14:17]
+    return EurocGroundTruth(
+        timestamps=timestamps,
+        positions=positions,
+        quaternions=quaternions,
+        velocities=velocities,
+        gyro_biases=gyro_biases,
+        accel_biases=accel_biases,
+    )
 
 
 def interpolate_world_from_body(
@@ -193,10 +238,10 @@ def camera_from_world(world_from_body: np.ndarray, body_to_camera: np.ndarray) -
 
 def _canonical_poses(
     image_index: tuple[tuple[int, str], ...],
-    ground_truth: tuple[np.ndarray, np.ndarray, np.ndarray],
+    ground_truth: EurocGroundTruth | Sequence[Any],
     body_to_camera: np.ndarray,
 ) -> tuple[ImagePose, ...]:
-    timestamps, positions, quaternions = ground_truth
+    timestamps, positions, quaternions = ground_truth[:3]
     result = []
     for timestamp, name in image_index:
         world_from_body = interpolate_world_from_body(timestamps, positions, quaternions, timestamp)
@@ -396,6 +441,91 @@ def _write_preparation_record(scene_dir: Path, sequence: SequenceSource, aggrega
     )
 
 
+def parse_euroc_imu(text: str) -> pycolmap.ImuMeasurements:
+    """Parse EuRoC mav0/imu0/data.csv into pycolmap.ImuMeasurements."""
+    values = np.loadtxt(io.StringIO(text), delimiter=",", skiprows=1, ndmin=2)
+    measurements = pycolmap.ImuMeasurements()
+    prev_ts = None
+    for row in values:
+        ts = int(round(row[0]))
+        if prev_ts is not None and ts <= prev_ts:
+            ts = prev_ts + 1
+        prev_ts = ts
+        gyro = row[1:4]
+        accel = row[4:7]
+        measurements.insert(pycolmap.ImuMeasurement(ts, gyro, accel))
+    return measurements
+
+
+def parse_euroc_imu_calibration(text: str) -> pycolmap.ImuCalibration:
+    """Parse EuRoC mav0/imu0/sensor.yaml into pycolmap.ImuCalibration."""
+    payload = yaml.safe_load(text)
+    calib = pycolmap.ImuCalibration()
+    if "rate_hz" in payload:
+        calib.imu_rate = float(payload["rate_hz"])
+    if "gyroscope_noise_density" in payload:
+        calib.gyro_noise_density = float(payload["gyroscope_noise_density"])
+    if "gyroscope_random_walk" in payload:
+        calib.bias_gyro_random_walk_sigma = float(payload["gyroscope_random_walk"])
+    if "accelerometer_noise_density" in payload:
+        calib.accel_noise_density = float(payload["accelerometer_noise_density"])
+    if "accelerometer_random_walk" in payload:
+        calib.bias_accel_random_walk_sigma = float(payload["accelerometer_random_walk"])
+    return calib
+
+
+def load_euroc_imu_and_gt(
+    scene_dir: Path | str,
+) -> tuple[pycolmap.ImuMeasurements, pycolmap.ImuCalibration, EurocGroundTruth]:
+    """Load IMU measurements, calibration, and ground-truth trajectory from a EuRoC scene directory."""
+    path = Path(scene_dir)
+    imu_file = None
+    for candidate in (
+        path / "mav0" / "imu0" / "data.csv",
+        path / "imu" / "data.csv",
+        path / "imu0" / "data.csv",
+        path / "imu_data.csv",
+    ):
+        if candidate.is_file():
+            imu_file = candidate
+            break
+    if imu_file is None:
+        raise FileNotFoundError(f"Could not find EuRoC IMU data.csv in {path}")
+
+    sensor_file = None
+    for candidate in (
+        path / "mav0" / "imu0" / "sensor.yaml",
+        path / "imu" / "sensor.yaml",
+        path / "imu0" / "sensor.yaml",
+        path / "sensor.yaml",
+    ):
+        if candidate.is_file():
+            sensor_file = candidate
+            break
+
+    gt_file = None
+    for candidate in (
+        path / "mav0" / "state_groundtruth_estimate0" / "data.csv",
+        path / "state_groundtruth_estimate0" / "data.csv",
+        path / "imu" / "state_groundtruth_estimate0.csv",
+        path / "groundtruth.csv",
+    ):
+        if candidate.is_file():
+            gt_file = candidate
+            break
+    if gt_file is None:
+        raise FileNotFoundError(f"Could not find EuRoC groundtruth data.csv in {path}")
+
+    measurements = parse_euroc_imu(imu_file.read_text(encoding="utf-8"))
+    calib = (
+        parse_euroc_imu_calibration(sensor_file.read_text(encoding="utf-8"))
+        if sensor_file is not None
+        else pycolmap.ImuCalibration()
+    )
+    gt = parse_ground_truth(gt_file.read_text(encoding="utf-8"))
+    return measurements, calib, gt
+
+
 def prepare_scene(scene: str, download_dir: Path) -> None:
     """Prepare one official EuRoC sequence without replacing existing output."""
     archives, sequences = source_inventory()
@@ -437,6 +567,17 @@ def prepare_scene(scene: str, download_dir: Path) -> None:
                 staging_scene / "images" / image.name,
                 _rectify_png(contents, map1, map2, (calibration.width, calibration.height)),
             )
+
+        imu_csv = _read_member(bundle, "mav0/imu0/data.csv")
+        imu_sensor = _read_member(bundle, "mav0/imu0/sensor.yaml")
+        gt_csv = _read_member(bundle, "mav0/state_groundtruth_estimate0/data.csv")
+
+        _write_exact(staging_scene / "mav0" / "imu0" / "data.csv", imu_csv)
+        _write_exact(staging_scene / "mav0" / "imu0" / "sensor.yaml", imu_sensor)
+        _write_exact(staging_scene / "mav0" / "state_groundtruth_estimate0" / "data.csv", gt_csv)
+        _write_exact(staging_scene / "imu" / "data.csv", imu_csv)
+        _write_exact(staging_scene / "imu" / "sensor.yaml", imu_sensor)
+        _write_exact(staging_scene / "state_groundtruth_estimate0" / "data.csv", gt_csv)
 
     _write_exact(staging_scene / "rec" / "cameras.bin", _camera_bytes(calibration, rectified))
     _write_exact(staging_scene / "rec" / "images.bin", _images_bytes(poses))
