@@ -39,9 +39,7 @@ def _embed_image_previews(
         normalized_name = name.replace("\\", "/")
         if normalized_name.startswith("/") or ".." in normalized_name.split("/"):
             raise ValueError(f"Reconstruction image name is not a safe relative path: {name}")
-        image_path = (resolved_images_dir / normalized_name).resolve()
-        if not image_path.is_relative_to(resolved_images_dir):
-            raise ValueError(f"Reconstruction image name escapes the image directory: {name}")
+        image_path = resolved_images_dir / normalized_name
         if not image_path.is_file():
             raise FileNotFoundError(f"Timeline image does not exist: {image_path}")
         with Image.open(image_path) as source:
