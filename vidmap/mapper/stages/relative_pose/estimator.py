@@ -20,6 +20,7 @@ from vidmap.mapper.replay.evidence.canonical import snapshot_images
 from vidmap.mapper.replay.evidence.stages import capture_relative_pose_state, relative_pose_summary
 from vidmap.utils.logging import progress_bars_enabled
 
+from .cycle_filter import filter_pairs_by_cycle_consistency
 from .mdrp import MDRPResult, ValidMDRPResult, estimate_mdrp_pose_for_pair
 from .native_options import build_inlier_threshold_options
 
@@ -173,6 +174,23 @@ class RelativePoseEstimator:
             if newly_filtered:
                 logger.warning(
                     "%d consecutive pairs were filtered out, continuing...",
+                    newly_filtered,
+                )
+            filtered_consecutive_pairs = current
+
+        if self.options.filter_cycle_inconsistent_pairs:
+            filter_pairs_by_cycle_consistency(
+                state,
+                min_triangles=self.options.min_triangles_for_cycle_check,
+                max_median_cycle_error_deg=self.options.max_median_cycle_error_deg,
+                max_inconsistent_ratio=self.options.max_inconsistent_cycle_ratio,
+                triangle_error_threshold_deg=self.options.triangle_error_threshold_deg,
+            )
+            current = {pair_id for pair_id in consecutive_pair_ids if not state.pose_graph.is_valid(pair_id)}
+            newly_filtered = len(current - filtered_consecutive_pairs)
+            if newly_filtered:
+                logger.warning(
+                    "%d consecutive pairs were filtered out by cycle consistency, continuing...",
                     newly_filtered,
                 )
             filtered_consecutive_pairs = current

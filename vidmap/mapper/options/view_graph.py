@@ -55,6 +55,11 @@ class MDRPOptions:
     ransac_max_iterations: Annotated[int, Field(gt=0)] = 50000
     ransac_max_epipolar_error: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 4.0
     depth_stddev_multiplier: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    filter_cycle_inconsistent_pairs: bool = True
+    min_triangles_for_cycle_check: int = 3
+    max_median_cycle_error_deg: float = 20.0
+    max_inconsistent_cycle_ratio: float = 0.6
+    triangle_error_threshold_deg: float = 15.0
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
