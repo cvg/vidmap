@@ -1396,8 +1396,8 @@ void ImuEdgeRecord::Validate() const {
   }
   if (!std::isfinite(data.delta_t) || data.delta_t <= 0.0 ||
       !data.delta_p.allFinite() || !data.delta_v.allFinite() ||
-      !data.biases.allFinite() || !data.sqrt_information.allFinite() ||
-      data.sqrt_information.isZero()) {
+      !data.biases.allFinite() || !data.sqrt_info.allFinite() ||
+      data.sqrt_info.isZero()) {
     throw std::invalid_argument("invalid PreintegratedImuData in BA IMU edge");
   }
   if (!q_iori_1_xyzw.coeffs().allFinite() || q_iori_1_xyzw.norm() <= 1e-12 ||
