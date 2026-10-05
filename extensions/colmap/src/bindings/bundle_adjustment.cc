@@ -36,55 +36,6 @@ void BindBundleAdjustment(py::module_& m) {
       .def_readwrite("loss", &LogFocalPriorRecord::loss)
       .def("validate", &LogFocalPriorRecord::Validate);
 
-  py::class_<ImuStateRecord>(m, "ImuStateRecord")
-      .def(py::init<>())
-      .def_readwrite("image_id", &ImuStateRecord::image_id)
-      .def_readwrite("velocity", &ImuStateRecord::velocity)
-      .def_readwrite("metric_velocity", &ImuStateRecord::metric_velocity)
-      .def_readwrite("bias_gyro", &ImuStateRecord::bias_gyro)
-      .def_readwrite("bias_accel", &ImuStateRecord::bias_accel)
-      .def("to_vector", &ImuStateRecord::ToVector)
-      .def_static("from_vector",
-                  &ImuStateRecord::FromVector,
-                  py::arg("image_id"),
-                  py::arg("vec"),
-                  py::arg("scale") = 1.0)
-      .def("validate", &ImuStateRecord::Validate);
-
-  py::class_<ImuEdgeRecord>(m, "ImuEdgeRecord")
-      .def(py::init<>())
-      .def_readwrite("image_id1", &ImuEdgeRecord::image_id1)
-      .def_readwrite("image_id2", &ImuEdgeRecord::image_id2)
-      .def_readwrite("data", &ImuEdgeRecord::data)
-      .def(
-          "set_integrator",
-          [](ImuEdgeRecord& self, colmap::ImuPreintegrator* integrator) {
-            self.integrator = integrator;
-          },
-          py::arg("integrator"),
-          py::keep_alive<1, 2>())
-      .def_property_readonly(
-          "has_integrator",
-          [](const ImuEdgeRecord& self) { return self.integrator != nullptr; })
-      .def_property(
-          "q_iori_1_xyzw",
-          [](const ImuEdgeRecord& self) -> Eigen::Vector4d {
-            return self.q_iori_1_xyzw.coeffs();
-          },
-          [](ImuEdgeRecord& self, const Eigen::Vector4d& xyzw) {
-            self.q_iori_1_xyzw.coeffs() = xyzw;
-          })
-      .def_property(
-          "q_iori_2_xyzw",
-          [](const ImuEdgeRecord& self) -> Eigen::Vector4d {
-            return self.q_iori_2_xyzw.coeffs();
-          },
-          [](ImuEdgeRecord& self, const Eigen::Vector4d& xyzw) {
-            self.q_iori_2_xyzw.coeffs() = xyzw;
-          })
-      .def_readwrite("loss", &ImuEdgeRecord::loss)
-      .def("validate", &ImuEdgeRecord::Validate);
-
   py::class_<BundleAdjustmentOptions>(m, "BundleAdjustmentOptions")
       .def(py::init<>())
       .def_readwrite("image_order", &BundleAdjustmentOptions::image_order)
