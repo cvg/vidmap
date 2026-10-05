@@ -3,7 +3,12 @@
 #include "vidmap_native/bundle_adjustment.h"
 
 #include "colmap/estimators/cost_functions/manifold.h"
+#include "colmap/estimators/cost_functions/pose_prior.h"
 #include "colmap/estimators/cost_functions/reprojection_error.h"
+#include "colmap/estimators/cost_functions/utils.h"
+#include "colmap/estimators/imu_preintegration.h"
+#include "colmap/estimators/imu_preintegration_cost.h"
+#include "colmap/math/math.h"
 #include "colmap/sensor/models.h"
 #include "colmap/util/threading.h"
 
@@ -21,6 +26,7 @@
 #include "intrinsics_prior.h"
 #include "solver_playback.h"
 #include "vidmap_native/conversion.h"
+#include <Eigen/Dense>
 #include <ceres/ceres.h>
 
 namespace vidmap {
@@ -71,11 +77,15 @@ class DefaultBundleAdjuster {
       const std::vector<DepthConstraintRecord>& depth_constraints,
       const std::vector<DepthScaleRecord>& depth_scales,
       const std::vector<LogFocalPriorRecord>& intrinsics_priors,
+      const std::vector<ImuEdgeRecord>& imu_edges,
+      const std::vector<ImuStateRecord>& imu_states,
       MappingProblem* mapping_problem)
       : options_(options),
         depth_constraints_(depth_constraints),
         depth_scale_records_(depth_scales),
         intrinsics_priors_(intrinsics_priors),
+        imu_edges_(imu_edges),
+        imu_states_(imu_states),
         mapping_problem_(mapping_problem) {}
 
   BundleAdjustmentResult Solve() {
@@ -83,48 +93,51 @@ class DefaultBundleAdjuster {
     mapping_problem_->Validate();
     ValidateInputs();
     SetupProblem();
-    // AddPointToProblem assumes that AddImageToProblem is called first. Do not
-    // change the order of these instructions.
-    const std::unordered_set<ImageId> image_ids(image_order_.begin(),
-                                                image_order_.end());
-    for (const ImageId image_id : image_ids) {
-      AddImageToProblem(image_id);
-    }
-    for (const Point3DId point3D_id : options_.variable_point3D_ids) {
-      AddPointToProblem(point3D_id, image_ids);
-    }
-    for (const Point3DId point3D_id : options_.constant_point3D_ids) {
-      AddPointToProblem(point3D_id, image_ids);
-    }
-    ParameterizeCameras();
-    ParameterizePoses();
-    ParameterizePoints();
-    AddIntrinsicsPriors();
-    AddDepthConstraints();
 
-    ceres::Solver::Options solver_options;
-    options_.solver_backend.Apply(&solver_options);
-    solver_options.minimizer_progress_to_stdout = false;
-    solver_options.num_threads =
-        colmap::GetEffectiveNumThreads(options_.num_threads);
-    solver_options.max_num_iterations = options_.max_num_iterations;
-    solver_options.function_tolerance = options_.function_tolerance;
-    solver_options.gradient_tolerance = options_.gradient_tolerance;
-    solver_options.parameter_tolerance = options_.parameter_tolerance;
+    // Record input camera orientations, centers, and variable 3D points so we
+    // can project out any global Sim(3) gauge drift between the free SfM poses
+    // and (log_scale_, gravity_direction_) when no metric depth priors anchor
+    // the SfM coordinate frame.
+    std::map<ImageId, Eigen::Matrix3d> initial_rotations_wc;
+    std::map<ImageId, Eigen::Vector3d> initial_centers;
+    std::map<Point3DId, Eigen::Vector3d> initial_points;
+    if (has_imu_ && !options_.fix_all_poses) {
+      for (const ImageId image_id : imu_image_ids_) {
+        initial_rotations_wc.emplace(image_id,
+                                     pose_params_.at(image_id)
+                                         .rotation()
+                                         .conjugate()
+                                         .toRotationMatrix());
+        initial_centers.emplace(image_id, GetCameraCenter(image_id));
+      }
+      for (const Point3DId point3D_id : options_.variable_point3D_ids) {
+        auto it = point_xyz_.find(point3D_id);
+        if (it != point_xyz_.end()) {
+          initial_points.emplace(point3D_id, it->second);
+        }
+      }
+    }
+
+    const bool wants_extrinsics_refinement =
+        has_imu_ && (options_.refine_imu_from_cam_rotation ||
+                     options_.refine_imu_from_cam_translation);
+    const bool project_free_pose_scale_gauge =
+        has_imu_ && !options_.fix_all_poses && options_.refine_imu_scale &&
+        depth_constraints_.empty();
+
     ceres::Solver::Summary summary;
     try {
-      SolveWithPlayback(
-          options_.playback,
-          solver_options,
-          problem_.get(),
-          [this](const char* phase, const int iteration) {
-            WritePlaybackCapture(phase, iteration);
-          },
-          &summary);
+      summary = BuildAndSolveMainProblem(
+          /*allow_extrinsics_refinement=*/wants_extrinsics_refinement);
+      if (project_free_pose_scale_gauge && summary.IsSolutionUsable()) {
+        ProjectFreePoseScaleGaugeToLogScale(
+            initial_rotations_wc, initial_centers, initial_points);
+      }
     } catch (...) {
       WriteBackSolution();
       throw;
     }
+
     PopulateResult(summary);
     WriteBackSolution();
     return result_;
@@ -132,6 +145,10 @@ class DefaultBundleAdjuster {
 
  private:
   using PointAssociation = std::optional<Point3DId>;
+
+  Eigen::Vector3d GetCameraCenter(const ImageId image_id) const {
+    return pose_params_.at(image_id).TgtOriginInSrc();
+  }
 
   void ValidateInputs() {
     image_order_ = options_.image_order.empty() ? mapping_problem_->ImageIds()
@@ -191,14 +208,27 @@ class DefaultBundleAdjuster {
     for (const Point3DId point3D_id : constant_point3D_ids) {
       mapping_problem_->Track(point3D_id);
     }
+    if (options_.use_imu) {
+      for (const ImuEdgeRecord& edge : imu_edges_) {
+        edge.Validate();
+        const ImageRecord& img1 = mapping_problem_->Image(edge.image_id1);
+        const ImageRecord& img2 = mapping_problem_->Image(edge.image_id2);
+        if (!img1.pose.has_pose || !img2.pose.has_pose) {
+          throw std::invalid_argument("IMU edge references an unposed image");
+        }
+      }
+      std::unordered_set<ImageId> seen_imu_states;
+      for (const ImuStateRecord& state : imu_states_) {
+        state.Validate();
+        mapping_problem_->Image(state.image_id);
+        if (!seen_imu_states.insert(state.image_id).second) {
+          throw std::invalid_argument("duplicate BA IMU state record");
+        }
+      }
+    }
   }
 
   void SetupProblem() {
-    ceres::Problem::Options problem_options;
-    problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
-    problem_ = std::make_unique<ceres::Problem>(problem_options);
-    loss_function_ = options_.reprojection_loss.Create();
-
     camera_params_.clear();
     for (const CameraId camera_id : mapping_problem_->CameraIds()) {
       camera_params_.emplace(camera_id,
@@ -208,9 +238,8 @@ class DefaultBundleAdjuster {
     associations_.clear();
     for (const ImageId image_id : mapping_problem_->ImageIds()) {
       const ImageRecord& image = mapping_problem_->Image(image_id);
-      Eigen::Matrix<double, 7, 1> pose;
-      pose.head<4>() = image.pose.rotation_xyzw;
-      pose.tail<3>() = image.pose.translation;
+      colmap::Rigid3d pose = ToColmapPose(image.pose);
+      pose.rotation().normalize();
       pose_params_.emplace(image_id, pose);
       associations_.emplace(
           image_id,
@@ -250,12 +279,666 @@ class DefaultBundleAdjuster {
       depth_constraints_by_image_[constraint.image_id].push_back(&constraint);
     }
 
+    has_imu_ = options_.use_imu && !imu_edges_.empty();
+    mutable_imu_edges_ = imu_edges_;
+    imu_image_ids_.clear();
+    imu_state_params_.clear();
+    InitializeImuParameters();
+
+    result_ = BundleAdjustmentResult();
+  }
+
+  ceres::Solver::Options CreateImuInitSolverOptions(
+      const int max_iterations) const {
+    ceres::Solver::Options solver_options;
+    options_.solver_backend.Apply(&solver_options);
+    solver_options.minimizer_progress_to_stdout = false;
+    solver_options.max_num_iterations = max_iterations;
+    solver_options.num_threads =
+        colmap::GetEffectiveNumThreads(options_.num_threads);
+    return solver_options;
+  }
+
+  void CollectImuImageIdsAndInitStates(const Eigen::Vector3d& bg_init,
+                                       const Eigen::Vector3d& ba_init) {
+    std::unordered_set<ImageId> edge_image_set;
+    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
+      edge_image_set.insert(edge.image_id1);
+      edge_image_set.insert(edge.image_id2);
+    }
+    for (const ImageId image_id : image_order_) {
+      if (edge_image_set.count(image_id) != 0) {
+        imu_image_ids_.push_back(image_id);
+        edge_image_set.erase(image_id);
+      }
+    }
+    std::vector<ImageId> remaining(edge_image_set.begin(),
+                                   edge_image_set.end());
+    std::sort(remaining.begin(), remaining.end());
+    imu_image_ids_.insert(
+        imu_image_ids_.end(), remaining.begin(), remaining.end());
+
+    for (const ImuStateRecord& state : imu_states_) {
+      imu_state_params_.emplace(state.image_id, state.ToVector());
+    }
+    for (const ImageId image_id : imu_image_ids_) {
+      if (imu_state_params_.count(image_id) == 0) {
+        Eigen::Matrix<double, 9, 1> state = Eigen::Matrix<double, 9, 1>::Zero();
+        state.segment<3>(3) = bg_init;
+        state.segment<3>(6) = ba_init;
+        imu_state_params_.emplace(image_id, state);
+      }
+    }
+  }
+
+  void ApplyUniformBiasesAndReintegrate(const Eigen::Vector3d& bg,
+                                        const Eigen::Vector3d& ba) {
+    for (const ImageId image_id : imu_image_ids_) {
+      Eigen::Matrix<double, 9, 1>& state = imu_state_params_.at(image_id);
+      state.segment<3>(3) = bg;
+      state.segment<3>(6) = ba;
+    }
+    Eigen::Vector6d biases;
+    biases.head<3>() = bg;
+    biases.tail<3>() = ba;
+    for (ImuEdgeRecord& edge : mutable_imu_edges_) {
+      if (edge.integrator != nullptr) {
+        edge.integrator->Reintegrate(biases);
+        edge.integrator->Update(&edge.data);
+      }
+    }
+  }
+
+  void InitializeImuParameters() {
+    log_scale_ = options_.initial_log_scale;
+    gravity_direction_ = options_.initial_gravity_direction.normalized();
+    if (options_.imu_from_cam.has_pose) {
+      imu_from_cam_metric_ = ToColmapPose(options_.imu_from_cam);
+      imu_from_cam_metric_.rotation().normalize();
+    } else {
+      imu_from_cam_metric_ = colmap::Rigid3d();
+    }
+    imu_from_cam_params_ = imu_from_cam_metric_;
+
+    if (!has_imu_) {
+      return;
+    }
+
+    gravity_magnitude_ = mutable_imu_edges_.front().data.gravity_magnitude;
+    if (!std::isfinite(gravity_magnitude_) || gravity_magnitude_ <= 0.0) {
+      gravity_magnitude_ = 9.81;
+    }
+
+    Eigen::Vector3d bg_init = Eigen::Vector3d::Zero();
+    Eigen::Vector3d ba_init = Eigen::Vector3d::Zero();
+    CollectImuImageIdsAndInitStates(bg_init, ba_init);
+
+    // Stage 1: Estimate initial gyroscope bias via InertialRotationCostFunctor.
+    if (options_.auto_initialize_imu_states && imu_states_.empty() &&
+        options_.refine_gyro_bias) {
+      InitializeGyroBiasWithCeres(&bg_init, ba_init);
+    }
+
+    // Stage 2: Estimate gravity direction, metric scale, per-frame velocities,
+    // and accelerometer bias via InertialGlobalPositioningCostFunctor.
+    const bool init_gravity =
+        options_.auto_initialize_gravity && options_.refine_gravity;
+    const bool init_states =
+        options_.auto_initialize_imu_states && imu_states_.empty();
+    if (init_gravity || init_states) {
+      InitializeScaleGravityAndStatesWithCeres(
+          init_gravity, init_states, bg_init, &ba_init);
+    }
+  }
+
+  void InitializeGyroBiasWithCeres(Eigen::Vector3d* bg_init,
+                                   const Eigen::Vector3d& ba_init) {
+    const Eigen::Quaterniond q_IC = imu_from_cam_metric_.rotation();
+    std::unordered_map<ImageId, Eigen::Vector3d> aa_cw;
+    aa_cw.reserve(imu_image_ids_.size());
+    for (const ImageId image_id : imu_image_ids_) {
+      const Eigen::AngleAxisd aa(
+          pose_params_.at(image_id).rotation().normalized());
+      aa_cw.emplace(image_id, aa.angle() * aa.axis());
+    }
+
+    ceres::Problem problem;
+    const double visual_rot_var = options_.fix_all_poses ? 0.0 : (5e-3 * 5e-3);
+    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
+      Eigen::Matrix<double, 6, 6> cov_6x6 =
+          colmap::ExtractRotationGyroBiasCovariance(edge.data.covariance);
+      if (visual_rot_var > 0.0) {
+        cov_6x6.topLeftCorner<3, 3>().diagonal().array() += visual_rot_var;
+      }
+      const Eigen::Matrix<double, 6, 6> sqrt_info_6x6 =
+          colmap::ComputeSubBlockSqrtInformation<6>(cov_6x6);
+      ceres::CostFunction* cost =
+          colmap::InertialRotationCostFunctor::Create(&edge.data,
+                                                      q_IC,
+                                                      sqrt_info_6x6,
+                                                      edge.q_iori_1_xyzw,
+                                                      edge.q_iori_2_xyzw);
+      problem.AddResidualBlock(cost,
+                               nullptr,
+                               aa_cw.at(edge.image_id1).data(),
+                               imu_state_params_.at(edge.image_id1).data(),
+                               aa_cw.at(edge.image_id2).data(),
+                               imu_state_params_.at(edge.image_id2).data());
+    }
+    for (auto& [image_id, aa] : aa_cw) {
+      problem.SetParameterBlockConstant(aa.data());
+    }
+    for (const ImageId image_id : imu_image_ids_) {
+      double* state_ptr = imu_state_params_.at(image_id).data();
+      if (!problem.HasParameterBlock(state_ptr)) continue;
+      colmap::SetManifold(&problem,
+                          state_ptr,
+                          std::make_unique<DelegatingManifold>(
+                              colmap::CreateImuStateGyroOnlyManifold()));
+    }
+
+    ceres::Solver::Summary summary;
+    ceres::Solve(CreateImuInitSolverOptions(25), &problem, &summary);
+
+    Eigen::Vector3d bg_mean = Eigen::Vector3d::Zero();
+    for (const ImageId image_id : imu_image_ids_) {
+      bg_mean += imu_state_params_.at(image_id).segment<3>(3);
+    }
+    bg_mean /= static_cast<double>(imu_image_ids_.size());
+
+    if (summary.IsSolutionUsable() && bg_mean.allFinite() &&
+        bg_mean.norm() < 1.0) {
+      *bg_init = bg_mean;
+      ApplyUniformBiasesAndReintegrate(*bg_init, ba_init);
+    }
+  }
+
+  void SeedGravityDirectionAndVelocities(const bool init_gravity,
+                                         const bool init_states,
+                                         const Eigen::Vector3d& bg_init,
+                                         const Eigen::Vector3d& ba_init) {
+    const Eigen::Quaterniond q_CI = imu_from_cam_metric_.rotation().conjugate();
+    Eigen::Vector3d dv_telescoping = Eigen::Vector3d::Zero();
+    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
+      const Eigen::Quaterniond q_wb_1 =
+          pose_params_.at(edge.image_id1).rotation().conjugate() *
+          edge.q_iori_1_xyzw * q_CI;
+      const Eigen::Vector3d dbg = bg_init - edge.data.biases.head<3>();
+      const Eigen::Vector3d dba = ba_init - edge.data.biases.tail<3>();
+      const Eigen::Vector3d dv_corr =
+          edge.data.delta_v + edge.data.dv_dbg * dbg + edge.data.dv_dba * dba;
+      dv_telescoping += q_wb_1 * dv_corr;
+
+      if (init_states && options_.refine_imu_velocities) {
+        const double dt = std::max(edge.data.delta_t, 1e-3);
+        const Eigen::Vector3d v_fd = (GetCameraCenter(edge.image_id2) -
+                                      GetCameraCenter(edge.image_id1)) /
+                                     dt;
+        imu_state_params_.at(edge.image_id1).head<3>() = v_fd;
+        imu_state_params_.at(edge.image_id2).head<3>() = v_fd;
+      }
+    }
+    if (init_gravity && dv_telescoping.norm() > 1e-6) {
+      gravity_direction_ = (-dv_telescoping).normalized();
+    }
+  }
+
+  bool SolveInertialPositioningStep(
+      const bool init_gravity,
+      const bool init_states,
+      const bool optimize_accel_bias,
+      const int max_iterations,
+      std::unordered_map<ImageId, Eigen::Vector3d>* centers) {
+    ceres::Problem problem;
+    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
+      const Eigen::Quaterniond q_cw_phys_1 =
+          (edge.q_iori_1_xyzw.conjugate() *
+           pose_params_.at(edge.image_id1).rotation())
+              .normalized();
+      const Eigen::Quaterniond q_cw_phys_2 =
+          (edge.q_iori_2_xyzw.conjugate() *
+           pose_params_.at(edge.image_id2).rotation())
+              .normalized();
+      const Eigen::Matrix<double, 9, 9> cov_9x9 =
+          colmap::ExtractPositionVelocityAccelBiasCovariance(
+              edge.data.covariance);
+      const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
+          colmap::ComputeSubBlockSqrtInformation<9>(cov_9x9);
+      ceres::CostFunction* cost =
+          colmap::InertialGlobalPositioningCostFunctor::Create(
+              &edge.data,
+              imu_from_cam_metric_,
+              q_cw_phys_1,
+              q_cw_phys_2,
+              sqrt_info_9x9,
+              /*metric_imu_from_cam=*/true);
+      problem.AddResidualBlock(cost,
+                               nullptr,
+                               &log_scale_,
+                               gravity_direction_.data(),
+                               centers->at(edge.image_id1).data(),
+                               imu_state_params_.at(edge.image_id1).data(),
+                               centers->at(edge.image_id2).data(),
+                               imu_state_params_.at(edge.image_id2).data());
+    }
+
+    if (!init_states || !options_.refine_imu_scale || optimize_accel_bias) {
+      problem.SetParameterBlockConstant(&log_scale_);
+    }
+    gravity_direction_.normalize();
+    if (!init_gravity) {
+      problem.SetParameterBlockConstant(gravity_direction_.data());
+    } else {
+      colmap::SetManifold(&problem,
+                          gravity_direction_.data(),
+                          colmap::CreateSphereManifold<3>());
+    }
+
+    for (const ImageId image_id : imu_image_ids_) {
+      double* c_ptr = centers->at(image_id).data();
+      if (problem.HasParameterBlock(c_ptr)) {
+        problem.SetParameterBlockConstant(c_ptr);
+      }
+    }
+
+    std::vector<int> constant_state_indices = {3, 4, 5};
+    if (!init_states || !options_.refine_imu_velocities) {
+      constant_state_indices.insert(constant_state_indices.end(), {0, 1, 2});
+    }
+    if (!init_states || !optimize_accel_bias || !options_.refine_accel_bias) {
+      constant_state_indices.insert(constant_state_indices.end(), {6, 7, 8});
+    }
+
+    for (const ImageId image_id : imu_image_ids_) {
+      double* state_ptr = imu_state_params_.at(image_id).data();
+      if (!problem.HasParameterBlock(state_ptr)) continue;
+      if (constant_state_indices.size() == 9) {
+        problem.SetParameterBlockConstant(state_ptr);
+      } else {
+        colmap::SetManifold(
+            &problem, state_ptr, WrapSubsetManifold(9, constant_state_indices));
+      }
+    }
+
+    ceres::Solver::Summary summary;
+    ceres::Solve(
+        CreateImuInitSolverOptions(max_iterations), &problem, &summary);
+    gravity_direction_.normalize();
+    return summary.IsSolutionUsable();
+  }
+
+  void InitializeScaleGravityAndStatesWithCeres(const bool init_gravity,
+                                                const bool init_states,
+                                                const Eigen::Vector3d& bg_init,
+                                                Eigen::Vector3d* ba_init) {
+    SeedGravityDirectionAndVelocities(
+        init_gravity, init_states, bg_init, *ba_init);
+
+    std::unordered_map<ImageId, Eigen::Vector3d> centers;
+    centers.reserve(imu_image_ids_.size());
+    for (const ImageId image_id : imu_image_ids_) {
+      centers.emplace(image_id, GetCameraCenter(image_id));
+    }
+
+    // Sub-pass 2a: Optimize scale, gravity direction, and velocities with
+    // accelerometer bias held constant to avoid gravity/bias collinearity.
+    SolveInertialPositioningStep(init_gravity,
+                                 init_states,
+                                 /*optimize_accel_bias=*/false,
+                                 /*max_iterations=*/25,
+                                 &centers);
+
+    // Sub-pass 2b: Refine accelerometer bias, gravity direction, and velocities
+    // with scale held at the Sub-pass 2a estimate.
+    if (init_states && options_.refine_accel_bias &&
+        SolveInertialPositioningStep(init_gravity,
+                                     init_states,
+                                     /*optimize_accel_bias=*/true,
+                                     /*max_iterations=*/25,
+                                     &centers)) {
+      Eigen::Vector3d ba_mean = Eigen::Vector3d::Zero();
+      for (const ImageId image_id : imu_image_ids_) {
+        ba_mean += imu_state_params_.at(image_id).tail<3>();
+      }
+      ba_mean /= static_cast<double>(imu_image_ids_.size());
+      if (ba_mean.allFinite() && ba_mean.norm() < 2.0) {
+        *ba_init = ba_mean;
+        ApplyUniformBiasesAndReintegrate(bg_init, *ba_init);
+      }
+    }
+  }
+
+  // In free-pose VI-BA without metric depth priors, visual reprojection
+  // residuals are invariant to a global Sim(3) transformation of the SfM world
+  // frame, while IMU residuals constrain only the product (scale * c_sfm) and
+  // (R_world * gravity_direction_). During joint optimization, part of the
+  // scale or rotation update can move into the free SfM camera centers and 3D
+  // points rather than staying purely in log_scale_ and gravity_direction_.
+  // This helper aligns the optimized SfM trajectory back to the input SfM
+  // gauge and transfers that Sim(3) delta into log_scale_ and
+  // gravity_direction_.
+  void ProjectFreePoseScaleGaugeToLogScale(
+      const std::map<ImageId, Eigen::Matrix3d>& initial_rotations_wc,
+      const std::map<ImageId, Eigen::Vector3d>& initial_centers,
+      const std::map<Point3DId, Eigen::Vector3d>& initial_points) {
+    if (imu_image_ids_.size() < 2) return;
+
+    Eigen::Vector3d ref_in = Eigen::Vector3d::Zero();
+    Eigen::Vector3d ref_out = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d M_rot = Eigen::Matrix3d::Zero();
+    for (const ImageId image_id : imu_image_ids_) {
+      ref_in += initial_centers.at(image_id);
+      ref_out += GetCameraCenter(image_id);
+      const Eigen::Matrix3d R_wc_out =
+          pose_params_.at(image_id).rotation().conjugate().toRotationMatrix();
+      M_rot.noalias() +=
+          initial_rotations_wc.at(image_id) * R_wc_out.transpose();
+    }
+    const double inv_n = 1.0 / static_cast<double>(imu_image_ids_.size());
+    ref_in *= inv_n;
+    ref_out *= inv_n;
+
+    Eigen::Matrix3d M_pos = Eigen::Matrix3d::Zero();
+    for (const ImageId image_id : imu_image_ids_) {
+      const Eigen::Vector3d c_in = initial_centers.at(image_id) - ref_in;
+      const Eigen::Vector3d c_out = GetCameraCenter(image_id) - ref_out;
+      M_pos.noalias() += c_in * c_out.transpose();
+    }
+    if (imu_image_ids_.size() < 50) {
+      for (const auto& [point3D_id, xyz_in] : initial_points) {
+        const Eigen::Vector3d p_in = xyz_in - ref_in;
+        const Eigen::Vector3d p_out = point_xyz_.at(point3D_id) - ref_out;
+        M_pos.noalias() += p_in * p_out.transpose();
+      }
+    }
+
+    Eigen::Matrix3d dR = Eigen::Matrix3d::Identity();
+    const Eigen::Matrix3d M_comb =
+        (imu_image_ids_.size() >= 50)
+            ? M_rot
+            : (M_pos + std::max(1e-6, 1e-2 * M_pos.norm() * inv_n) * M_rot);
+    const Eigen::JacobiSVD<Eigen::Matrix3d> svd(
+        M_comb, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    const Eigen::Matrix3d U = svd.matrixU();
+    const Eigen::Matrix3d V = svd.matrixV();
+    Eigen::Matrix3d S_sign = Eigen::Matrix3d::Identity();
+    if ((U * V.transpose()).determinant() < 0.0) {
+      S_sign(2, 2) = -1.0;
+    }
+    const Eigen::Matrix3d dR_cand = U * S_sign * V.transpose();
+    if (dR_cand.allFinite()) {
+      dR = dR_cand;
+    }
+    const Eigen::Quaterniond q_dR(dR);
+
+    const int chord_len =
+        std::clamp<int>(static_cast<int>(imu_image_ids_.size()) / 2, 1, 15);
+    double dot_in_in = 0.0;
+    double dot_out_in = 0.0;
+    std::vector<double> chord_ratios;
+    for (std::size_t idx = 0;
+         idx + static_cast<std::size_t>(chord_len) < imu_image_ids_.size();
+         ++idx) {
+      const ImageId id1 = imu_image_ids_[idx];
+      const ImageId id2 =
+          imu_image_ids_[idx + static_cast<std::size_t>(chord_len)];
+      const Eigen::Vector3d d_in =
+          initial_centers.at(id2) - initial_centers.at(id1);
+      const Eigen::Vector3d d_out = GetCameraCenter(id2) - GetCameraCenter(id1);
+      const double in_sq = d_in.squaredNorm();
+      const double out_dot_in = (dR * d_out).dot(d_in);
+      dot_in_in += in_sq;
+      dot_out_in += out_dot_in;
+      if (in_sq > 1e-4 && out_dot_in > 0.0) {
+        chord_ratios.push_back(out_dot_in / in_sq);
+      }
+    }
+    if (imu_image_ids_.size() < 50) {
+      for (const auto& [point3D_id, xyz_in] : initial_points) {
+        const Eigen::Vector3d p_in = xyz_in - ref_in;
+        const Eigen::Vector3d p_out = point_xyz_.at(point3D_id) - ref_out;
+        dot_in_in += p_in.squaredNorm();
+        dot_out_in += (dR * p_out).dot(p_in);
+      }
+    }
+    if (dot_out_in <= 1e-12 || dot_in_in <= 1e-12) return;
+
+    double delta_s = dot_out_in / dot_in_in;
+    if (imu_image_ids_.size() >= 50 && !chord_ratios.empty()) {
+      const std::size_t mid = chord_ratios.size() / 2;
+      std::nth_element(
+          chord_ratios.begin(), chord_ratios.begin() + mid, chord_ratios.end());
+      delta_s = chord_ratios[mid];
+    }
+    if (!std::isfinite(delta_s) || delta_s <= 0.1 || delta_s >= 10.0) return;
+
+    for (auto& [image_id, pose] : pose_params_) {
+      const Eigen::Vector3d c_out = pose.TgtOriginInSrc();
+      const Eigen::Quaterniond q_cw_new =
+          (pose.rotation() * q_dR.conjugate()).normalized();
+      const Eigen::Vector3d c_new = ref_in + (dR * (c_out - ref_out)) / delta_s;
+      pose.rotation() = q_cw_new;
+      pose.translation() = -(q_cw_new * c_new);
+    }
+    for (auto& [point3D_id, xyz] : point_xyz_) {
+      xyz = ref_in + (dR * (xyz - ref_out)) / delta_s;
+    }
+    for (auto& [image_id, state] : imu_state_params_) {
+      state.head<3>() = (dR * state.head<3>()) / delta_s;
+    }
+    gravity_direction_ = (dR * gravity_direction_).normalized();
+    log_scale_ += std::log(delta_s);
+  }
+
+  ceres::Solver::Summary BuildAndSolveMainProblem(
+      const bool allow_extrinsics_refinement) {
+    ceres::Problem::Options problem_options;
+    problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
+    problem_ = std::make_unique<ceres::Problem>(problem_options);
+    loss_function_ = options_.reprojection_loss.Create();
+
     parameterized_camera_ids_.clear();
     automatically_constant_camera_ids_.clear();
     parameterized_image_ids_.clear();
     point3D_num_observations_.clear();
     owned_losses_.clear();
-    result_ = BundleAdjustmentResult();
+    result_.diagnostics = BundleAdjustmentDiagnostics();
+
+    // AddPointToProblem assumes that AddImageToProblem is called first. Do not
+    // change the order of these instructions.
+    const std::unordered_set<ImageId> image_ids(image_order_.begin(),
+                                                image_order_.end());
+    for (const ImageId image_id : image_ids) {
+      AddImageToProblem(image_id);
+    }
+    for (const Point3DId point3D_id : options_.variable_point3D_ids) {
+      AddPointToProblem(point3D_id, image_ids);
+    }
+    for (const Point3DId point3D_id : options_.constant_point3D_ids) {
+      AddPointToProblem(point3D_id, image_ids);
+    }
+
+    colmap::ImuReintegrationOptions reint_options;
+    reint_options.reintegrate_angle_norm_thres =
+        options_.reintegrate_angle_norm_thres;
+    reint_options.reintegrate_vel_norm_thres =
+        options_.reintegrate_vel_norm_thres;
+    colmap::ImuReintegrationCallback reint_callback(reint_options);
+    bool has_reint = false;
+    if (has_imu_) {
+      AddImuConstraints(&reint_callback, &has_reint);
+    }
+
+    ParameterizeCameras();
+    ParameterizePoses();
+    ParameterizePoints();
+    if (has_imu_) {
+      ParameterizeImuBlocks(problem_.get(),
+                            allow_extrinsics_refinement,
+                            /*count_diagnostics=*/true);
+    }
+    AddIntrinsicsPriors();
+    AddDepthConstraints();
+
+    ceres::Solver::Options solver_options;
+    options_.solver_backend.Apply(&solver_options);
+    solver_options.minimizer_progress_to_stdout = false;
+    solver_options.num_threads =
+        colmap::GetEffectiveNumThreads(options_.num_threads);
+    solver_options.max_num_iterations = options_.max_num_iterations;
+    solver_options.function_tolerance = options_.function_tolerance;
+    solver_options.gradient_tolerance = options_.gradient_tolerance;
+    solver_options.parameter_tolerance = options_.parameter_tolerance;
+    if (has_reint) {
+      solver_options.callbacks.push_back(&reint_callback);
+      solver_options.update_state_every_iteration = true;
+    }
+
+    ceres::Solver::Summary summary;
+    SolveWithPlayback(
+        options_.playback,
+        solver_options,
+        problem_.get(),
+        [this](const char* phase, const int iteration) {
+          WritePlaybackCapture(phase, iteration);
+        },
+        &summary);
+    if (has_imu_) {
+      gravity_direction_.normalize();
+    }
+    return summary;
+  }
+
+  void AddImuConstraints(colmap::ImuReintegrationCallback* reint_callback,
+                         bool* has_reint) {
+    for (ImuEdgeRecord& edge : mutable_imu_edges_) {
+      ceres::CostFunction* cost =
+          options_.use_analytical_imu_cost
+              ? static_cast<ceres::CostFunction*>(
+                    new colmap::
+                        AnalyticalVisualCentricImuPreintegrationCostFunction(
+                            &edge.data,
+                            edge.q_iori_1_xyzw,
+                            edge.q_iori_2_xyzw,
+                            /*metric_imu_from_cam=*/true))
+              : colmap::VisualCentricImuPreintegrationCostFunctor::Create(
+                    &edge.data,
+                    edge.q_iori_1_xyzw,
+                    edge.q_iori_2_xyzw,
+                    /*metric_imu_from_cam=*/true);
+      owned_losses_.push_back(edge.loss.Create());
+      problem_->AddResidualBlock(cost,
+                                 owned_losses_.back().get(),
+                                 &log_scale_,
+                                 gravity_direction_.data(),
+                                 imu_from_cam_params_.params.data(),
+                                 pose_params_.at(edge.image_id1).params.data(),
+                                 imu_state_params_.at(edge.image_id1).data(),
+                                 pose_params_.at(edge.image_id2).params.data(),
+                                 imu_state_params_.at(edge.image_id2).data());
+      parameterized_image_ids_.insert(edge.image_id1);
+      parameterized_image_ids_.insert(edge.image_id2);
+      ++result_.diagnostics.num_imu_residuals;
+      if (edge.integrator != nullptr) {
+        reint_callback->AddEdge(edge.integrator,
+                                &edge.data,
+                                imu_state_params_.at(edge.image_id1).data());
+        *has_reint = true;
+      }
+    }
+  }
+
+  void ParameterizeImuBlocks(ceres::Problem* problem,
+                             const bool allow_extrinsics_refinement,
+                             const bool count_diagnostics) {
+    // 1. Scale parameter block.
+    if (!options_.refine_imu_scale) {
+      problem->SetParameterBlockConstant(&log_scale_);
+    }
+
+    // 2. Gravity direction on S^2.
+    gravity_direction_.normalize();
+    if (!options_.refine_gravity) {
+      problem->SetParameterBlockConstant(gravity_direction_.data());
+    } else {
+      colmap::SetManifold(problem,
+                          gravity_direction_.data(),
+                          colmap::CreateSphereManifold<3>());
+    }
+
+    // 3. IMU-from-camera extrinsics [qx, qy, qz, qw, tx, ty, tz] in metric
+    // units.
+    imu_from_cam_params_.rotation().normalize();
+    const bool opt_rot =
+        allow_extrinsics_refinement && options_.refine_imu_from_cam_rotation;
+    const bool opt_trans =
+        allow_extrinsics_refinement && options_.refine_imu_from_cam_translation;
+    if (!opt_rot && !opt_trans) {
+      problem->SetParameterBlockConstant(imu_from_cam_params_.params.data());
+    } else {
+      if (opt_rot && opt_trans) {
+        colmap::SetManifold(problem,
+                            imu_from_cam_params_.params.data(),
+                            colmap::CreateProductManifold(
+                                colmap::CreateEigenQuaternionManifold(),
+                                colmap::CreateEuclideanManifold<3>()));
+      } else if (opt_rot) {
+        colmap::SetManifold(problem,
+                            imu_from_cam_params_.params.data(),
+                            colmap::CreateProductManifold(
+                                colmap::CreateEigenQuaternionManifold(),
+                                colmap::CreateSubsetManifold(3, {0, 1, 2})));
+      } else {
+        colmap::SetManifold(problem,
+                            imu_from_cam_params_.params.data(),
+                            WrapSubsetManifold(7, {0, 1, 2, 3}));
+      }
+
+      if (options_.use_imu_from_cam_prior) {
+        const double rot_std_rad = std::max(
+            colmap::DegToRad(options_.imu_from_cam_rotation_prior_stddev_deg),
+            1e-6);
+        const double trans_std_m =
+            std::max(options_.imu_from_cam_translation_prior_stddev, 1e-6);
+        Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Zero();
+        cov.diagonal().head<3>().setConstant(rot_std_rad * rot_std_rad);
+        cov.diagonal().tail<3>().setConstant(trans_std_m * trans_std_m);
+
+        ceres::CostFunction* prior_cost = colmap::CovarianceWeightedCostFunctor<
+            colmap::AbsolutePosePriorCostFunctor>::Create(cov,
+                                                          imu_from_cam_metric_);
+        problem->AddResidualBlock(
+            prior_cost, nullptr, imu_from_cam_params_.params.data());
+        if (count_diagnostics) {
+          ++result_.diagnostics.num_imu_extrinsics_prior_residuals;
+        }
+      }
+    }
+
+    // 4. Per-frame 9D IMU states [v(3), bg(3), ba(3)].
+    std::vector<int> constant_state_indices;
+    if (!options_.refine_imu_velocities) {
+      constant_state_indices.insert(constant_state_indices.end(), {0, 1, 2});
+    }
+    if (!options_.refine_gyro_bias) {
+      constant_state_indices.insert(constant_state_indices.end(), {3, 4, 5});
+    }
+    if (!options_.refine_accel_bias) {
+      constant_state_indices.insert(constant_state_indices.end(), {6, 7, 8});
+    }
+
+    for (const ImageId image_id : imu_image_ids_) {
+      Eigen::Matrix<double, 9, 1>& state = imu_state_params_.at(image_id);
+      if (!problem->HasParameterBlock(state.data())) continue;
+
+      if (constant_state_indices.size() == 9) {
+        problem->SetParameterBlockConstant(state.data());
+      } else if (!constant_state_indices.empty()) {
+        colmap::SetManifold(problem,
+                            state.data(),
+                            WrapSubsetManifold(9, constant_state_indices));
+      }
+    }
   }
 
   void AddImageToProblem(const ImageId image_id) {
@@ -282,7 +965,7 @@ class DefaultBundleAdjuster {
       problem_->AddResidualBlock(cost,
                                  loss_function_.get(),
                                  point_xyz_.at(point3D_id).data(),
-                                 pose_params_.at(image_id).data(),
+                                 pose_params_.at(image_id).params.data(),
                                  camera_params_.at(image.camera_id).data());
       ++point3D_num_observations_[point3D_id];
       ++num_observations;
@@ -379,13 +1062,13 @@ class DefaultBundleAdjuster {
 
   void ParameterizePoses() {
     for (const ImageId image_id : parameterized_image_ids_) {
-      Eigen::Matrix<double, 7, 1>& pose = pose_params_.at(image_id);
-      Eigen::Map<Eigen::Quaterniond>(pose.data()).normalize();
+      colmap::Rigid3d& pose = pose_params_.at(image_id);
+      pose.rotation().normalize();
       if (options_.fix_all_poses) {
-        problem_->SetParameterBlockConstant(pose.data());
+        problem_->SetParameterBlockConstant(pose.params.data());
       } else {
         colmap::SetManifold(problem_.get(),
-                            pose.data(),
+                            pose.params.data(),
                             colmap::CreateProductManifold(
                                 colmap::CreateEigenQuaternionManifold(),
                                 colmap::CreateEuclideanManifold<3>()));
@@ -424,9 +1107,10 @@ class DefaultBundleAdjuster {
       }
       const auto model_id = static_cast<colmap::CameraModelId>(
           mapping_problem_->Camera(prior.camera_id).model_id);
-      const auto focal_index_span = colmap::CameraModelFocalLengthIdxs(model_id);
+      const auto focal_index_span =
+          colmap::CameraModelFocalLengthIdxs(model_id);
       const std::vector<std::size_t> focal_indices(focal_index_span.begin(),
-                                                  focal_index_span.end());
+                                                   focal_index_span.end());
       for (const std::size_t index : focal_indices) {
         problem_->SetParameterLowerBound(
             params.data(), static_cast<int>(index), kFocalLengthLowerBound);
@@ -449,14 +1133,15 @@ class DefaultBundleAdjuster {
     for (std::size_t image_index = 0; image_index < image_order_.size();
          ++image_index) {
       const ImageId image_id = image_order_[image_index];
-      Eigen::Matrix<double, 7, 1>& pose = pose_params_.at(image_id);
-      if (!problem_->HasParameterBlock(pose.data())) continue;
+      colmap::Rigid3d& pose = pose_params_.at(image_id);
+      if (!problem_->HasParameterBlock(pose.params.data())) continue;
       if (options_.fix_all_poses ||
           (image_index == 0 && options_.fix_first_pose)) {
-        problem_->SetParameterBlockConstant(pose.data());
+        problem_->SetParameterBlockConstant(pose.params.data());
       } else if (options_.fix_rotations) {
-        colmap::SetManifold(
-            problem_.get(), pose.data(), WrapSubsetManifold(7, {0, 1, 2, 3}));
+        colmap::SetManifold(problem_.get(),
+                            pose.params.data(),
+                            WrapSubsetManifold(7, {0, 1, 2, 3}));
       }
 
       const auto constraints_it = depth_constraints_by_image_.find(image_id);
@@ -479,7 +1164,7 @@ class DefaultBundleAdjuster {
         owned_losses_.push_back(constraint->loss.Create());
         problem_->AddResidualBlock(cost,
                                    owned_losses_.back().get(),
-                                   pose.data(),
+                                   pose.params.data(),
                                    point_xyz_.at(constraint->point3D_id).data(),
                                    shift_scale.data());
         ++result_.diagnostics.num_depth_residuals;
@@ -558,10 +1243,8 @@ class DefaultBundleAdjuster {
     capture.image_ids = playback_image_ids_;
     capture.centers.resize(playback_image_ids_.size(), 3);
     for (std::size_t index = 0; index < playback_image_ids_.size(); ++index) {
-      const auto& pose = pose_params_.at(playback_image_ids_[index]);
-      const Eigen::Map<const Eigen::Quaterniond> rotation(pose.data());
       capture.centers.row(index) =
-          (rotation.conjugate() * -pose.tail<3>()).transpose();
+          GetCameraCenter(playback_image_ids_[index]).transpose();
     }
     capture.point3D_ids = playback_point3D_ids_;
     capture.points_xyz.resize(playback_point3D_ids_.size(), 3);
@@ -577,6 +1260,20 @@ class DefaultBundleAdjuster {
   void PopulateResult(const ceres::Solver::Summary& summary) {
     result_.success = summary.IsSolutionUsable();
     result_.depth_shift_scales = depth_shift_scales_;
+    result_.log_scale = log_scale_;
+    result_.scale = std::exp(log_scale_);
+    result_.gravity_direction = gravity_direction_.normalized();
+    result_.gravity_in_world = result_.gravity_direction * gravity_magnitude_;
+    colmap::Rigid3d metric_imu_from_cam = imu_from_cam_params_;
+    metric_imu_from_cam.rotation().normalize();
+    result_.imu_from_cam = FromColmapPose(metric_imu_from_cam);
+    result_.imu_from_cam.has_pose = has_imu_ || options_.imu_from_cam.has_pose;
+    result_.imu_states.clear();
+    for (const auto& [image_id, state_vec] : imu_state_params_) {
+      result_.imu_states.emplace(
+          image_id,
+          ImuStateRecord::FromVector(image_id, state_vec, result_.scale));
+    }
     BundleAdjustmentDiagnostics& diagnostics = result_.diagnostics;
     diagnostics.num_residual_blocks = summary.num_residual_blocks;
     diagnostics.num_parameter_blocks = summary.num_parameter_blocks;
@@ -593,17 +1290,31 @@ class DefaultBundleAdjuster {
       camera.params = params;
       mapping_problem_->UpdateCamera(camera);
     }
-    if (!options_.fix_all_poses) {
+
+    Eigen::Quaterniond q_align = Eigen::Quaterniond::Identity();
+    double scale_align = 1.0;
+    if (has_imu_ && options_.apply_imu_alignment_to_problem) {
+      scale_align = std::exp(log_scale_);
+      // Align solved gravity direction to canonical Y-down [0, 1, 0].
+      q_align = Eigen::Quaterniond::FromTwoVectors(
+          gravity_direction_.normalized(), Eigen::Vector3d::UnitY());
+    }
+
+    if (!options_.fix_all_poses ||
+        (has_imu_ && options_.apply_imu_alignment_to_problem)) {
       for (const auto& [image_id, pose] : pose_params_) {
         ImageRecord image = mapping_problem_->Image(image_id);
-        image.pose.rotation_xyzw = pose.head<4>();
-        image.pose.translation = pose.tail<3>();
+        colmap::Rigid3d aligned_pose = pose;
+        aligned_pose.rotation() =
+            (pose.rotation() * q_align.conjugate()).normalized();
+        aligned_pose.translation() = scale_align * pose.translation();
+        image.pose = FromColmapPose(aligned_pose);
         mapping_problem_->UpdateImage(image);
       }
     }
     for (const auto& [point3D_id, xyz] : point_xyz_) {
       TrackRecord track = mapping_problem_->Track(point3D_id);
-      track.xyz = xyz;
+      track.xyz = scale_align * (q_align * xyz);
       mapping_problem_->UpdateTrack(track);
     }
   }
@@ -612,6 +1323,8 @@ class DefaultBundleAdjuster {
   const std::vector<DepthConstraintRecord>& depth_constraints_;
   const std::vector<DepthScaleRecord>& depth_scale_records_;
   const std::vector<LogFocalPriorRecord>& intrinsics_priors_;
+  const std::vector<ImuEdgeRecord>& imu_edges_;
+  const std::vector<ImuStateRecord>& imu_states_;
   MappingProblem* mapping_problem_;
 
   std::vector<ImageId> image_order_;
@@ -619,7 +1332,7 @@ class DefaultBundleAdjuster {
   std::unique_ptr<ceres::LossFunction> loss_function_;
   std::vector<std::unique_ptr<ceres::LossFunction>> owned_losses_;
   std::map<CameraId, VectorXd> camera_params_;
-  std::map<ImageId, Eigen::Matrix<double, 7, 1>> pose_params_;
+  std::map<ImageId, colmap::Rigid3d> pose_params_;
   std::map<Point3DId, Eigen::Vector3d> point_xyz_;
   std::map<ImageId, std::vector<PointAssociation>> associations_;
   std::map<Point3DId, std::size_t> track_lengths_;
@@ -632,6 +1345,17 @@ class DefaultBundleAdjuster {
       depth_scale_record_by_image_;
   std::unordered_map<ImageId, std::vector<const DepthConstraintRecord*>>
       depth_constraints_by_image_;
+
+  bool has_imu_ = false;
+  double gravity_magnitude_ = 9.81;
+  double log_scale_ = 0.0;
+  Eigen::Vector3d gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
+  colmap::Rigid3d imu_from_cam_metric_;
+  colmap::Rigid3d imu_from_cam_params_;
+  std::vector<ImuEdgeRecord> mutable_imu_edges_;
+  std::vector<ImageId> imu_image_ids_;
+  std::map<ImageId, Eigen::Matrix<double, 9, 1>> imu_state_params_;
+
   std::vector<ImageId> playback_image_ids_;
   std::vector<Point3DId> playback_point3D_ids_;
   bool playback_selection_ready_ = false;
@@ -659,11 +1383,27 @@ void BundleAdjustmentOptions::Validate() const {
   playback.Validate();
   reprojection_loss.Validate();
   solver_backend.Validate();
+  imu_from_cam.Validate();
   if (min_track_length < 0 || num_threads == 0 || max_num_iterations <= 0 ||
       !std::isfinite(function_tolerance) || function_tolerance < 0.0 ||
       !std::isfinite(gradient_tolerance) || gradient_tolerance < 0.0 ||
       !std::isfinite(parameter_tolerance) || parameter_tolerance < 0.0) {
     throw std::invalid_argument("invalid bundle adjustment options");
+  }
+  if (use_imu) {
+    if (!std::isfinite(initial_log_scale) ||
+        !initial_gravity_direction.allFinite() ||
+        initial_gravity_direction.norm() <= 1e-12 ||
+        !std::isfinite(imu_from_cam_rotation_prior_stddev_deg) ||
+        imu_from_cam_rotation_prior_stddev_deg <= 0.0 ||
+        !std::isfinite(imu_from_cam_translation_prior_stddev) ||
+        imu_from_cam_translation_prior_stddev <= 0.0 ||
+        !std::isfinite(reintegrate_angle_norm_thres) ||
+        reintegrate_angle_norm_thres < 0.0 ||
+        !std::isfinite(reintegrate_vel_norm_thres) ||
+        reintegrate_vel_norm_thres < 0.0) {
+      throw std::invalid_argument("invalid VI-BA options");
+    }
   }
 }
 
@@ -672,7 +1412,9 @@ BundleAdjustmentResult RunBundleAdjustment(
     const std::vector<DepthConstraintRecord>& depth_constraints,
     const std::vector<DepthScaleRecord>& depth_scales,
     const std::vector<LogFocalPriorRecord>& intrinsics_priors,
-    MappingProblem* problem) {
+    MappingProblem* problem,
+    const std::vector<ImuEdgeRecord>& imu_edges,
+    const std::vector<ImuStateRecord>& imu_states) {
   if (problem == nullptr) {
     throw std::invalid_argument("mapping problem must not be null");
   }
@@ -680,6 +1422,8 @@ BundleAdjustmentResult RunBundleAdjustment(
                                depth_constraints,
                                depth_scales,
                                intrinsics_priors,
+                               imu_edges,
+                               imu_states,
                                problem)
       .Solve();
 }

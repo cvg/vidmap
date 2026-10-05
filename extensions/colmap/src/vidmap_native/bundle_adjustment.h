@@ -1,9 +1,12 @@
 #pragma once
 
+#include "colmap/estimators/imu_preintegration.h"
+
 #include <map>
 #include <vector>
 
 #include "vidmap_native/focal_prior.h"
+#include "vidmap_native/imu_types.h"
 #include "vidmap_native/mapping_problem.h"
 #include "vidmap_native/solver_backend.h"
 #include "vidmap_native/solver_playback.h"
@@ -54,6 +57,32 @@ struct BundleAdjustmentOptions {
   SolverBackendOptions solver_backend;
   SolverPlaybackOptions playback;
 
+  // Visual-Inertial Bundle Adjustment (VI-BA) options.
+  bool use_imu = false;
+  bool use_analytical_imu_cost = true;
+  bool refine_imu_scale = true;
+  bool refine_gravity = true;
+  bool refine_imu_velocities = true;
+  bool refine_gyro_bias = true;
+  bool refine_accel_bias = true;
+  bool refine_imu_from_cam_rotation = false;
+  bool refine_imu_from_cam_translation = false;
+  bool auto_initialize_gravity = true;
+  bool auto_initialize_imu_states = true;
+  bool imu_warm_start = true;
+  bool apply_imu_alignment_to_problem = false;
+
+  double initial_log_scale = 0.0;
+  Eigen::Vector3d initial_gravity_direction = Eigen::Vector3d(0.0, 0.0, -1.0);
+  PoseRecord imu_from_cam;
+
+  bool use_imu_from_cam_prior = true;
+  double imu_from_cam_rotation_prior_stddev_deg = 0.5;
+  double imu_from_cam_translation_prior_stddev = 0.02;
+
+  double reintegrate_angle_norm_thres = 1e-4;
+  double reintegrate_vel_norm_thres = 1e-4;
+
   void Validate() const;
 };
 
@@ -62,6 +91,8 @@ struct BundleAdjustmentDiagnostics {
   int num_depth_residuals = 0;
   int num_intrinsics_prior_residuals = 0;
   int num_scale_prior_residuals = 0;
+  int num_imu_residuals = 0;
+  int num_imu_extrinsics_prior_residuals = 0;
   int num_residual_blocks = 0;
   int num_parameter_blocks = 0;
   int num_parameters = 0;
@@ -74,6 +105,12 @@ struct BundleAdjustmentDiagnostics {
 struct BundleAdjustmentResult {
   bool success = false;
   std::map<ImageId, Eigen::Vector2d> depth_shift_scales;
+  double log_scale = 0.0;
+  double scale = 1.0;
+  Eigen::Vector3d gravity_direction = Eigen::Vector3d(0.0, 0.0, -1.0);
+  Eigen::Vector3d gravity_in_world = Eigen::Vector3d(0.0, 0.0, -9.81);
+  PoseRecord imu_from_cam;
+  std::map<ImageId, ImuStateRecord> imu_states;
   BundleAdjustmentDiagnostics diagnostics;
 };
 
@@ -82,6 +119,8 @@ BundleAdjustmentResult RunBundleAdjustment(
     const std::vector<DepthConstraintRecord>& depth_constraints,
     const std::vector<DepthScaleRecord>& depth_scales,
     const std::vector<LogFocalPriorRecord>& intrinsics_priors,
-    MappingProblem* problem);
+    MappingProblem* problem,
+    const std::vector<ImuEdgeRecord>& imu_edges = {},
+    const std::vector<ImuStateRecord>& imu_states = {});
 
 }  // namespace vidmap

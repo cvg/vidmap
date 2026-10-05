@@ -1,8 +1,8 @@
 #include <cmath>
 #include <stdexcept>
-#include "stages/intrinsics_prior.h"
 #include <string>
 
+#include "stages/intrinsics_prior.h"
 #include "vidmap_native/bundle_adjustment.h"
 #include "vidmap_native/global_positioning.h"
 #include "vidmap_native/tracks.h"
@@ -66,6 +66,40 @@ void TestOptionValidation() {
   bundle_options.max_num_iterations = 0;
   CheckInvalidArgument([&] { bundle_options.Validate(); },
                        "zero bundle-adjustment iterations were accepted");
+
+  vidmap::BundleAdjustmentOptions imu_ba_options;
+  imu_ba_options.use_imu = true;
+  imu_ba_options.Validate();
+  imu_ba_options.initial_gravity_direction.setZero();
+  CheckInvalidArgument([&] { imu_ba_options.Validate(); },
+                       "zero initial gravity direction was accepted");
+
+  vidmap::ImuStateRecord state_record;
+  state_record.velocity.x() = std::numeric_limits<double>::quiet_NaN();
+  CheckInvalidArgument([&] { state_record.Validate(); },
+                       "NaN velocity in ImuStateRecord was accepted");
+  state_record.image_id = 5;
+  state_record.velocity = Eigen::Vector3d(1.0, 2.0, 3.0);
+  state_record.bias_gyro = Eigen::Vector3d(0.01, -0.02, 0.03);
+  state_record.bias_accel = Eigen::Vector3d(-0.1, 0.2, -0.3);
+  state_record.Validate();
+  const auto roundtrip =
+      vidmap::ImuStateRecord::FromVector(5, state_record.ToVector(), 2.5);
+  Check((roundtrip.velocity - state_record.velocity).norm() < 1e-12,
+        "ImuStateRecord velocity roundtrip failed");
+  Check(
+      (roundtrip.metric_velocity - 2.5 * state_record.velocity).norm() < 1e-12,
+      "ImuStateRecord metric_velocity scaling failed");
+
+  vidmap::ImuEdgeRecord edge_record;
+  edge_record.image_id1 = 1;
+  edge_record.image_id2 = 1;
+  edge_record.data.delta_t = 0.1;
+  edge_record.data.sqrt_info.setIdentity();
+  CheckInvalidArgument([&] { edge_record.Validate(); },
+                       "self-loop ImuEdgeRecord was accepted");
+  edge_record.image_id2 = 2;
+  edge_record.Validate();
 }
 
 void TestFrozenLogFocalJacobian() {
@@ -78,17 +112,21 @@ void TestFrozenLogFocalJacobian() {
     const double target = 500.0;
     const double sigma_f = 10.0;
     const double sigma_log = sigma_f / target;
-    vidmap::LogMeanFocalPriorCostFunction cost(dimension, indices, target, sigma_log);
+    vidmap::LogMeanFocalPriorCostFunction cost(
+        dimension, indices, target, sigma_log);
     std::vector<double> params(dimension, 600.0), jacobian(dimension);
     const double* blocks[] = {params.data()};
     double* jacobians[] = {jacobian.data()};
     double residual;
-    Check(cost.Evaluate(blocks, &residual, jacobians), "log cost evaluation failed");
+    Check(cost.Evaluate(blocks, &residual, jacobians),
+          "log cost evaluation failed");
     Check(std::abs(residual - std::log(600.0 / target) / sigma_log) < 1e-12,
           "first-order log conversion changed");
     for (int i = 0; i < dimension; ++i) {
-      const double expected = i < focal_count ? 1.0 / (sigma_log * 600.0 * focal_count) : 0.0;
-      Check(std::abs(jacobian[i] - expected) < 1e-15, "log focal analytic Jacobian changed");
+      const double expected =
+          i < focal_count ? 1.0 / (sigma_log * 600.0 * focal_count) : 0.0;
+      Check(std::abs(jacobian[i] - expected) < 1e-15,
+            "log focal analytic Jacobian changed");
       const double step = 1e-3;
       double plus, minus;
       params[i] += step;
@@ -103,7 +141,8 @@ void TestFrozenLogFocalJacobian() {
     cost.Evaluate(blocks, &residual, jacobians);
     Check(residual == 0.0, "original target must have zero residual");
     Check(std::abs(jacobian[0] - 1.0 / (sigma_f * focal_count)) < 1e-15,
-          "first-order derivative at original focal must match pixel uncertainty");
+          "first-order derivative at original focal must match pixel "
+          "uncertainty");
   }
 }
 

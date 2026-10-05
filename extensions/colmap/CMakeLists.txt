@@ -64,7 +64,7 @@ add_library(vidmap_native_algorithms STATIC ${VIDMAP_NATIVE_ALGORITHM_SOURCES})
 set_target_properties(vidmap_native_algorithms PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(
   vidmap_native_algorithms
-  PRIVATE
+  PUBLIC
     src
     ${VIDMAP_COLMAP_INCLUDE_DIRS}
 )
