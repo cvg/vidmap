@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <map>
 #include <vector>
 
+#include "vidmap_native/imu_types.h"
 #include "vidmap_native/mapping_problem.h"
 
 namespace vidmap {
@@ -20,18 +22,42 @@ struct VideoRotationAveragingOptions {
   int num_threads = 1;
   int max_num_iterations = 100;
 
+  // Inertial Rotation Averaging (I-RA) options.
+  bool use_imu = false;
+  PoseRecord imu_from_cam;
+  bool refine_gyro_bias = true;
+  bool auto_initialize_gyro_bias = true;
+  double visual_rotation_stddev_deg = 0.2;
+  double imu_tracking_cauchy_scale_deg = 0.75;
+  double reintegrate_angle_norm_thres = 1e-4;
+  bool invalidate_outlier_pairs = false;
+  // Option RP-B: when invalidate_outlier_pairs is true, attempt to salvage
+  // rotation-rejected pairs via known-rotation 2-point translation RANSAC on
+  // static background matches before invalidating the pair.
+  bool salvage_outlier_translations = false;
+  double salvage_epipolar_angle_thres_deg = 0.4;
+  double salvage_min_inlier_ratio = 0.30;
+  int salvage_min_inliers = 50;
+
   void Validate() const;
 };
 
 struct RotationAveragingResult {
   bool success = false;
   std::vector<ImageId> registered_image_ids;
+  std::vector<PairId> outlier_pair_ids;
+  std::vector<PairId> salvaged_pair_ids;
+  Eigen::Vector3d initial_gyro_bias = Eigen::Vector3d::Zero();
+  Eigen::Vector3d initial_gravity_direction = Eigen::Vector3d(0.0, 0.0, -1.0);
+  std::map<ImageId, ImuStateRecord> imu_states;
 };
 
 RotationAveragingResult RunVideoRotationAveraging(
     const VideoRotationAveragingOptions& options,
     const std::vector<ImageId>& image_map_order,
     const std::vector<PairId>& pair_map_order,
-    MappingProblem* problem);
+    MappingProblem* problem,
+    const std::vector<ImuEdgeRecord>& imu_edges = {},
+    const std::vector<ImuStateRecord>& imu_states = {});
 
 }  // namespace vidmap

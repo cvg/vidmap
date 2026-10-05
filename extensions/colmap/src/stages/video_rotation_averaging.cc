@@ -1,11 +1,15 @@
 // Video-aware rotation averaging over VidMap-owned value records.
 #include "vidmap_native/video_rotation_averaging.h"
 
+#include "colmap/estimators/cost_functions/manifold.h"
+#include "colmap/estimators/imu_preintegration.h"
+#include "colmap/estimators/imu_preintegration_cost.h"
 #include "colmap/geometry/pose.h"
 #include "colmap/math/connected_components.h"
 #include "colmap/math/math.h"
 #include "colmap/math/random.h"
 #include "colmap/math/spanning_tree.h"
+#include "colmap/util/threading.h"
 
 #if __has_include("colmap/util/hash_containers.h")
 #include "colmap/util/hash_containers.h"
@@ -18,6 +22,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <memory>
 #include <queue>
 #include <stdexcept>
 #include <thread>
@@ -27,6 +33,8 @@
 #include <vector>
 
 #include "vidmap_native/conversion.h"
+#include "vidmap_native/view_graph.h"
+#include <Eigen/Dense>
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
 
@@ -34,6 +42,7 @@ namespace vidmap {
 namespace {
 
 constexpr float kLCPenalty = 1e9f;
+constexpr float kImuSpanningTreeWeight = 1e6f;
 
 #if VIDMAP_COLMAP_HAS_FLAT_HASH_SET
 using ConnectedComponentFrameSet = colmap::FlatHashSet<FrameId>;
@@ -42,8 +51,9 @@ using ConnectedComponentFrameSet = std::unordered_set<FrameId>;
 #endif
 
 struct RelativeRotationError {
-  explicit RelativeRotationError(const Eigen::Vector3d& rel_rot_aa)
-      : rel_rot_aa_(rel_rot_aa) {}
+  explicit RelativeRotationError(const Eigen::Vector3d& rel_rot_aa,
+                                 const double weight = 1.0)
+      : rel_rot_aa_(rel_rot_aa), weight_(weight) {}
 
   template <typename T>
   bool operator()(const T* const r1_aa,
@@ -56,15 +66,22 @@ struct RelativeRotationError {
     ceres::AngleAxisToRotationMatrix(rel_aa_t.data(), R_rel.data());
     Eigen::Matrix<T, 3, 3> R_err = R2.transpose() * R_rel * R1;
     ceres::RotationMatrixToAngleAxis(R_err.data(), residuals);
+    if (weight_ != 1.0) {
+      residuals[0] *= T(weight_);
+      residuals[1] *= T(weight_);
+      residuals[2] *= T(weight_);
+    }
     return true;
   }
 
-  static ceres::CostFunction* Create(const Eigen::Vector3d& rel_rot_aa) {
+  static ceres::CostFunction* Create(const Eigen::Vector3d& rel_rot_aa,
+                                     const double weight = 1.0) {
     return new ceres::AutoDiffCostFunction<RelativeRotationError, 3, 3, 3>(
-        new RelativeRotationError(rel_rot_aa));
+        new RelativeRotationError(rel_rot_aa, weight));
   }
 
   const Eigen::Vector3d rel_rot_aa_;
+  const double weight_;
 };
 
 template <typename Id>
@@ -124,6 +141,24 @@ void ValidatePairMapOrder(const MappingProblem& problem,
   }
 }
 
+void ValidateImuInputs(const MappingProblem& problem,
+                       const std::vector<ImuEdgeRecord>& imu_edges,
+                       const std::vector<ImuStateRecord>& imu_states) {
+  for (const ImuEdgeRecord& edge : imu_edges) {
+    edge.Validate();
+    problem.Image(edge.image_id1);
+    problem.Image(edge.image_id2);
+  }
+  std::unordered_set<ImageId> seen_states;
+  for (const ImuStateRecord& state : imu_states) {
+    state.Validate();
+    problem.Image(state.image_id);
+    if (!seen_states.insert(state.image_id).second) {
+      throw std::invalid_argument("duplicate RA IMU state record");
+    }
+  }
+}
+
 bool IsPoseGraphPair(const PairRecord& pair) {
   return pair.is_valid && pair.geometry.cam2_from_cam1.has_pose;
 }
@@ -148,7 +183,9 @@ std::unordered_set<ImageId> ComputeLargestConnectedComponentImageIds(
     const std::vector<ImageId>& image_map_order,
     const std::vector<PairId>& pair_map_order,
     bool filter_unregistered,
-    const std::unordered_set<PairId>& excluded_pair_ids = {}) {
+    const std::unordered_set<PairId>& excluded_pair_ids = {},
+    const std::vector<ImuEdgeRecord>& imu_edges = {},
+    const std::unordered_set<ImageId>* allowed_imu_images = nullptr) {
   ConnectedComponentFrameSet nodes;
   std::vector<std::pair<FrameId, FrameId>> edges;
   for (const PairId pair_id : pair_map_order) {
@@ -157,6 +194,22 @@ std::unordered_set<ImageId> ComputeLargestConnectedComponentImageIds(
     if (!IsPoseGraphPair(pair)) continue;
     const ImageRecord& image1 = problem.Image(pair.image_id1);
     const ImageRecord& image2 = problem.Image(pair.image_id2);
+    if (filter_unregistered &&
+        (!image1.pose.has_pose || !image2.pose.has_pose)) {
+      continue;
+    }
+    nodes.insert(image1.frame_id);
+    nodes.insert(image2.frame_id);
+    edges.emplace_back(image1.frame_id, image2.frame_id);
+  }
+  for (const ImuEdgeRecord& imu_edge : imu_edges) {
+    if (allowed_imu_images != nullptr &&
+        (allowed_imu_images->count(imu_edge.image_id1) == 0 ||
+         allowed_imu_images->count(imu_edge.image_id2) == 0)) {
+      continue;
+    }
+    const ImageRecord& image1 = problem.Image(imu_edge.image_id1);
+    const ImageRecord& image2 = problem.Image(imu_edge.image_id2);
     if (filter_unregistered &&
         (!image1.pose.has_pose || !image2.pose.has_pose)) {
       continue;
@@ -187,11 +240,132 @@ std::vector<ImageId> OrderedActiveImages(
   return SortedHashMapOrderPasses(std::move(ordered), image_order_passes);
 }
 
+Eigen::Quaterniond ComputeBiasCorrectedImuCameraRelativeRotation(
+    const ImuEdgeRecord& edge,
+    const Eigen::Quaterniond& q_IC,
+    const Eigen::Vector3d& bg) {
+  const Eigen::Quaterniond q_CI = q_IC.conjugate();
+  const Eigen::Vector3d dbg = bg - edge.data.biases.head<3>();
+  const Eigen::Vector3d omega_bias = edge.data.dR_dbg * dbg;
+  Eigen::Quaterniond dq_bias = Eigen::Quaterniond::Identity();
+  const double angle = omega_bias.norm();
+  if (angle > 1e-12) {
+    dq_bias = Eigen::Quaterniond(Eigen::AngleAxisd(angle, omega_bias / angle));
+  }
+  const Eigen::Quaterniond delta_R_corr =
+      (edge.data.delta_R * dq_bias).normalized();
+  return (edge.q_iori_2_xyzw * q_CI * delta_R_corr * q_IC *
+          edge.q_iori_1_xyzw.conjugate())
+      .normalized();
+}
+
+// Step 1 of I-RA: Closed-form coordinate-wise median seed for the global
+// gyroscope bias across consecutive pairs that have both an IMU edge and a
+// valid visual relative rotation.
+bool EstimateInitialGyroBiasMedian(
+    const MappingProblem& problem,
+    const std::vector<PairId>& pair_map_order,
+    const std::unordered_set<ImageId>& active_images,
+    const std::unordered_set<PairId>& excluded_pair_ids,
+    const std::vector<ImuEdgeRecord>& imu_edges,
+    const Eigen::Quaterniond& q_IC,
+    Eigen::Vector3d* bg_out) {
+  std::unordered_map<PairId, const PairRecord*> valid_pairs;
+  valid_pairs.reserve(pair_map_order.size());
+  for (const PairId pair_id : pair_map_order) {
+    if (excluded_pair_ids.count(pair_id) != 0) continue;
+    const PairRecord& pair = problem.Pair(pair_id);
+    if (!IsPoseGraphPair(pair)) continue;
+    if (active_images.count(pair.image_id1) == 0 ||
+        active_images.count(pair.image_id2) == 0) {
+      continue;
+    }
+    valid_pairs.emplace(CanonicalPairId(pair.image_id1, pair.image_id2), &pair);
+  }
+
+  const Eigen::Quaterniond q_CI = q_IC.conjugate();
+  std::vector<Eigen::Vector3d> samples;
+  samples.reserve(imu_edges.size());
+  for (const ImuEdgeRecord& edge : imu_edges) {
+    if (active_images.count(edge.image_id1) == 0 ||
+        active_images.count(edge.image_id2) == 0 || edge.data.delta_t <= 1e-4) {
+      continue;
+    }
+    const auto pair_it =
+        valid_pairs.find(CanonicalPairId(edge.image_id1, edge.image_id2));
+    if (pair_it == valid_pairs.end()) continue;
+    const PairRecord& pair = *pair_it->second;
+
+    Eigen::Quaterniond q_c2_from_c1 =
+        ToColmapPose(pair.geometry.cam2_from_cam1).rotation().normalized();
+    if (pair.image_id1 == edge.image_id2 && pair.image_id2 == edge.image_id1) {
+      q_c2_from_c1 = q_c2_from_c1.conjugate();
+    }
+
+    const Eigen::Quaterniond delta_R_vis =
+        (q_IC * edge.q_iori_2_xyzw.conjugate() * q_c2_from_c1 *
+         edge.q_iori_1_xyzw * q_CI)
+            .normalized();
+    const Eigen::Quaterniond q_diff =
+        (edge.data.delta_R.conjugate() * delta_R_vis).normalized();
+    const Eigen::Vector3d theta_err =
+        colmap::RotationMatrixToAngleAxis(q_diff.toRotationMatrix());
+    const Eigen::Vector3d dbg =
+        edge.data.dR_dbg.colPivHouseholderQr().solve(theta_err);
+    const Eigen::Vector3d bg_sample = edge.data.biases.head<3>() + dbg;
+    if (bg_sample.allFinite() && bg_sample.norm() < 2.0) {
+      samples.push_back(bg_sample);
+    }
+  }
+
+  if (samples.empty()) {
+    return false;
+  }
+
+  Eigen::Vector3d median_bg = Eigen::Vector3d::Zero();
+  std::vector<double> coords(samples.size());
+  for (int axis = 0; axis < 3; ++axis) {
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+      coords[i] = samples[i](axis);
+    }
+    std::sort(coords.begin(), coords.end());
+    const std::size_t mid = coords.size() / 2;
+    if (coords.size() % 2 == 1) {
+      median_bg(axis) = coords[mid];
+    } else {
+      median_bg(axis) = 0.5 * (coords[mid - 1] + coords[mid]);
+    }
+  }
+  *bg_out = median_bg;
+  return true;
+}
+
+void ApplyUniformGyroBiasAndReintegrate(
+    const Eigen::Vector3d& bg,
+    std::map<ImageId, Eigen::Matrix<double, 9, 1>>* imu_state_params,
+    std::vector<ImuEdgeRecord>* mutable_imu_edges) {
+  for (auto& [image_id, state] : *imu_state_params) {
+    state.segment<3>(3) = bg;
+  }
+  for (ImuEdgeRecord& edge : *mutable_imu_edges) {
+    if (edge.integrator != nullptr) {
+      Eigen::Vector6d biases = edge.data.biases;
+      biases.head<3>() = bg;
+      edge.integrator->Reintegrate(biases);
+      edge.integrator->Update(&edge.data);
+    }
+  }
+}
+
 void InitializeFromMaximumSpanningTree(
     const VideoRotationAveragingOptions& options,
     const std::vector<PairId>& pair_map_order,
     const std::unordered_set<ImageId>& active_images,
-    MappingProblem* problem) {
+    MappingProblem* problem,
+    const std::unordered_set<PairId>& excluded_pair_ids = {},
+    const std::vector<ImuEdgeRecord>& imu_edges = {},
+    const std::map<ImageId, Eigen::Matrix<double, 9, 1>>& imu_state_params = {},
+    const Eigen::Quaterniond& q_IC = Eigen::Quaterniond::Identity()) {
   const std::vector<ImageId> ordered_images =
       OrderedActiveImages(active_images, options.image_order_passes);
   std::unordered_map<ImageId, int> image_to_index;
@@ -203,6 +377,7 @@ void InitializeFromMaximumSpanningTree(
   std::vector<std::pair<int, int>> edges;
   std::vector<float> weights;
   for (const PairId pair_id : pair_map_order) {
+    if (excluded_pair_ids.count(pair_id) != 0) continue;
     const PairRecord& pair = problem->Pair(pair_id);
     if (!IsPoseGraphPair(pair)) continue;
     const auto image1_it = image_to_index.find(pair.image_id1);
@@ -217,6 +392,27 @@ void InitializeFromMaximumSpanningTree(
       weight -= kLCPenalty;
     }
     weights.push_back(weight);
+  }
+
+  std::unordered_map<PairId, std::pair<ImageId, Eigen::Quaterniond>>
+      imu_rel_rotations;
+  for (const ImuEdgeRecord& imu_edge : imu_edges) {
+    const auto image1_it = image_to_index.find(imu_edge.image_id1);
+    const auto image2_it = image_to_index.find(imu_edge.image_id2);
+    if (image1_it == image_to_index.end() ||
+        image2_it == image_to_index.end()) {
+      continue;
+    }
+    edges.emplace_back(image1_it->second, image2_it->second);
+    weights.push_back(kImuSpanningTreeWeight);
+    const Eigen::Vector3d bg =
+        imu_state_params.count(imu_edge.image_id1) != 0
+            ? imu_state_params.at(imu_edge.image_id1).segment<3>(3).eval()
+            : imu_edge.data.biases.head<3>().eval();
+    imu_rel_rotations[CanonicalPairId(imu_edge.image_id1, imu_edge.image_id2)] =
+        std::make_pair(
+            imu_edge.image_id1,
+            ComputeBiasCorrectedImuCameraRelativeRotation(imu_edge, q_IC, bg));
   }
 
   const colmap::SpanningTree tree =
@@ -247,8 +443,25 @@ void InitializeFromMaximumSpanningTree(
       queue.push(child_index);
       const ImageId child_id = ordered_images[child_index];
       const ImageId parent_id = ordered_images[parent_index];
-      const PairRecord& pair =
-          problem->Pair(CanonicalPairId(child_id, parent_id));
+      const PairId canonical_pair_id = CanonicalPairId(child_id, parent_id);
+      const auto imu_it = imu_rel_rotations.find(canonical_pair_id);
+      if (imu_it != imu_rel_rotations.end()) {
+        const ImageId id1 = imu_it->second.first;
+        const Eigen::Quaterniond& q_c2_from_c1 = imu_it->second.second;
+        if (parent_id == id1) {
+          cam_from_world[child_index].rotation() =
+              (q_c2_from_c1 * cam_from_world[parent_index].rotation())
+                  .normalized();
+        } else {
+          cam_from_world[child_index].rotation() =
+              (q_c2_from_c1.conjugate() *
+               cam_from_world[parent_index].rotation())
+                  .normalized();
+        }
+        continue;
+      }
+
+      const PairRecord& pair = problem->Pair(canonical_pair_id);
       const colmap::Rigid3d relative_pose =
           ToColmapPose(pair.geometry.cam2_from_cam1);
       if (pair.image_id1 == child_id && pair.image_id2 == parent_id) {
@@ -303,42 +516,17 @@ std::unordered_set<PairId> FindRotationOutlierPairs(
   return outlier_pairs;
 }
 
-}  // namespace
-
-void VideoRotationAveragingOptions::Validate() const {
-  if (random_seed < -1 || image_order_passes < 0 ||
-      !std::isfinite(max_rotation_error_deg) || max_rotation_error_deg < 0.0 ||
-      !std::isfinite(video_tracking_huber_scale) ||
-      video_tracking_huber_scale <= 0.0 ||
-      !std::isfinite(video_lc_cauchy_scale) || video_lc_cauchy_scale <= 0.0 ||
-      num_threads == 0 || num_threads < -1 || max_num_iterations <= 0) {
-    throw std::invalid_argument("invalid rotation averaging options");
-  }
-}
-
-RotationAveragingResult RunVideoRotationAveraging(
+bool SolveRotationAveragingCeresPass(
     const VideoRotationAveragingOptions& options,
-    const std::vector<ImageId>& image_map_order,
+    const std::vector<ImageId>& parameter_image_order,
     const std::vector<PairId>& pair_map_order,
+    const std::unordered_set<PairId>& excluded_pair_ids,
+    const bool has_imu,
+    const bool optimize_gyro_bias,
+    const Eigen::Quaterniond& q_IC,
+    std::vector<ImuEdgeRecord>* mutable_imu_edges,
+    std::map<ImageId, Eigen::Matrix<double, 9, 1>>* imu_state_params,
     MappingProblem* problem) {
-  options.Validate();
-  problem->Validate();
-  ValidateImageMapOrder(*problem, image_map_order);
-  ValidatePairMapOrder(*problem, pair_map_order);
-
-  RotationAveragingResult result;
-  std::unordered_set<ImageId> active_images =
-      ComputeLargestConnectedComponentImageIds(*problem,
-                                               image_map_order,
-                                               pair_map_order,
-                                               options.filter_unregistered);
-  if (active_images.empty()) return result;
-  const std::unordered_set<ImageId> initial_active_images = active_images;
-
-  InitializeFromMaximumSpanningTree(
-      options, pair_map_order, active_images, problem);
-  const std::vector<ImageId> parameter_image_order =
-      OrderedActiveImages(active_images, options.image_order_passes);
   const ImageId fixed_image_id = parameter_image_order.front();
 
   std::unordered_map<ImageId, int> image_to_parameter_index;
@@ -346,7 +534,7 @@ RotationAveragingResult RunVideoRotationAveraging(
   Eigen::VectorXd rotations(3 * parameter_image_order.size());
   for (std::size_t index = 0; index < parameter_image_order.size(); ++index) {
     const ImageId image_id = parameter_image_order[index];
-    image_to_parameter_index.emplace(image_id, 3 * index);
+    image_to_parameter_index.emplace(image_id, 3 * static_cast<int>(index));
     const Eigen::AngleAxisd angle_axis(
         ToColmapPose(problem->Image(image_id).pose).rotation());
     rotations.segment<3>(3 * index) = angle_axis.angle() * angle_axis.axis();
@@ -364,7 +552,15 @@ RotationAveragingResult RunVideoRotationAveraging(
     }
   }
 
+  const double vis_weight =
+      has_imu ? (1.0 / colmap::DegToRad(options.visual_rotation_stddev_deg))
+              : 1.0;
+  const double imu_tracking_cauchy_scale =
+      vis_weight * colmap::DegToRad(options.imu_tracking_cauchy_scale_deg);
+  const double lc_cauchy_scale = vis_weight * options.video_lc_cauchy_scale;
+
   for (const PairId pair_id : pair_map_order) {
+    if (excluded_pair_ids.count(pair_id) != 0) continue;
     const PairRecord& pair = problem->Pair(pair_id);
     if (!IsPoseGraphPair(pair)) continue;
     const auto image1_it = image_to_parameter_index.find(pair.image_id1);
@@ -375,21 +571,79 @@ RotationAveragingResult RunVideoRotationAveraging(
     }
     const bool is_tracking = IsTrackingPair(pair);
     if (options.skip_risky_lc_pairs && !is_tracking) continue;
-    ceres::LossFunction* loss =
-        is_tracking ? static_cast<ceres::LossFunction*>(new ceres::HuberLoss(
-                          options.video_tracking_huber_scale))
-                    : static_cast<ceres::LossFunction*>(
-                          new ceres::CauchyLoss(options.video_lc_cauchy_scale));
+    ceres::LossFunction* loss = nullptr;
+    if (has_imu) {
+      loss = new ceres::CauchyLoss(is_tracking ? imu_tracking_cauchy_scale
+                                               : lc_cauchy_scale);
+    } else {
+      loss = is_tracking
+                 ? static_cast<ceres::LossFunction*>(
+                       new ceres::HuberLoss(options.video_tracking_huber_scale))
+                 : static_cast<ceres::LossFunction*>(
+                       new ceres::CauchyLoss(options.video_lc_cauchy_scale));
+    }
     const Eigen::Vector3d relative_angle_axis =
         colmap::RotationMatrixToAngleAxis(
             ToColmapPose(pair.geometry.cam2_from_cam1)
                 .rotation()
                 .toRotationMatrix());
     ceres_problem.AddResidualBlock(
-        RelativeRotationError::Create(relative_angle_axis),
+        RelativeRotationError::Create(relative_angle_axis, vis_weight),
         loss,
         rotations.data() + image1_it->second,
         rotations.data() + image2_it->second);
+  }
+
+  colmap::ImuReintegrationOptions reint_options;
+  reint_options.reintegrate_angle_norm_thres =
+      options.reintegrate_angle_norm_thres;
+  colmap::ImuReintegrationCallback reint_callback(reint_options);
+  bool has_reint = false;
+
+  if (has_imu) {
+    for (ImuEdgeRecord& edge : *mutable_imu_edges) {
+      const auto image1_it = image_to_parameter_index.find(edge.image_id1);
+      const auto image2_it = image_to_parameter_index.find(edge.image_id2);
+      if (image1_it == image_to_parameter_index.end() ||
+          image2_it == image_to_parameter_index.end()) {
+        continue;
+      }
+      const Eigen::Matrix<double, 6, 6> sqrt_info_6x6 =
+          colmap::ExtractRotationGyroBiasSqrtInformation(edge.data);
+      ceres::CostFunction* cost =
+          colmap::InertialRotationCostFunctor::Create(&edge.data,
+                                                      q_IC,
+                                                      sqrt_info_6x6,
+                                                      edge.q_iori_1_xyzw,
+                                                      edge.q_iori_2_xyzw);
+      double* state1_ptr = imu_state_params->at(edge.image_id1).data();
+      double* state2_ptr = imu_state_params->at(edge.image_id2).data();
+      ceres_problem.AddResidualBlock(cost,
+                                     nullptr,
+                                     rotations.data() + image1_it->second,
+                                     state1_ptr,
+                                     rotations.data() + image2_it->second,
+                                     state2_ptr);
+      if (optimize_gyro_bias && edge.integrator != nullptr) {
+        reint_callback.AddEdge(edge.integrator, &edge.data, state1_ptr);
+        has_reint = true;
+      }
+    }
+
+    for (const ImageId image_id : parameter_image_order) {
+      auto state_it = imu_state_params->find(image_id);
+      if (state_it == imu_state_params->end()) continue;
+      double* state_ptr = state_it->second.data();
+      if (!ceres_problem.HasParameterBlock(state_ptr)) continue;
+
+      if (!optimize_gyro_bias) {
+        ceres_problem.SetParameterBlockConstant(state_ptr);
+      } else {
+        colmap::SetManifold(&ceres_problem,
+                            state_ptr,
+                            colmap::CreateImuStateGyroOnlyManifold());
+      }
+    }
   }
 
   ceres::Solver::Options solver_options;
@@ -399,9 +653,14 @@ RotationAveragingResult RunVideoRotationAveraging(
       options.num_threads > 0
           ? options.num_threads
           : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+  if (has_reint) {
+    solver_options.callbacks.push_back(&reint_callback);
+    solver_options.update_state_every_iteration = true;
+  }
+
   ceres::Solver::Summary summary;
   ceres::Solve(solver_options, &ceres_problem, &summary);
-  if (!summary.IsSolutionUsable()) return result;
+  if (!summary.IsSolutionUsable()) return false;
 
   for (std::size_t index = 0; index < parameter_image_order.size(); ++index) {
     ImageRecord image = problem->Image(parameter_image_order[index]);
@@ -412,6 +671,233 @@ RotationAveragingResult RunVideoRotationAveraging(
         colmap::Rigid3d(Eigen::Quaterniond(rotation), translation));
     problem->UpdateImage(image);
   }
+  return true;
+}
+
+Eigen::Vector3d ComputeTelescopingInitialGravityDirection(
+    const MappingProblem& problem,
+    const std::unordered_set<ImageId>& active_images,
+    const std::vector<ImuEdgeRecord>& imu_edges,
+    const std::map<ImageId, Eigen::Matrix<double, 9, 1>>& imu_state_params,
+    const Eigen::Quaterniond& q_IC) {
+  const Eigen::Quaterniond q_CI = q_IC.conjugate();
+  Eigen::Vector3d dv_telescoping = Eigen::Vector3d::Zero();
+  for (const ImuEdgeRecord& edge : imu_edges) {
+    if (active_images.count(edge.image_id1) == 0 ||
+        active_images.count(edge.image_id2) == 0) {
+      continue;
+    }
+    const ImageRecord& img1 = problem.Image(edge.image_id1);
+    if (!img1.pose.has_pose) continue;
+    const Eigen::Quaterniond q_cw_1 =
+        ToColmapPose(img1.pose).rotation().normalized();
+    const Eigen::Quaterniond q_wb_1 =
+        (q_cw_1.conjugate() * edge.q_iori_1_xyzw * q_CI).normalized();
+    const Eigen::Vector3d bg =
+        imu_state_params.count(edge.image_id1) != 0
+            ? imu_state_params.at(edge.image_id1).segment<3>(3).eval()
+            : edge.data.biases.head<3>().eval();
+    const Eigen::Vector3d dbg = bg - edge.data.biases.head<3>();
+    const Eigen::Vector3d dv_corr = edge.data.delta_v + edge.data.dv_dbg * dbg;
+    dv_telescoping += q_wb_1 * dv_corr;
+  }
+  if (dv_telescoping.norm() > 1e-6) {
+    return (-dv_telescoping).normalized();
+  }
+  return Eigen::Vector3d(0.0, 0.0, -1.0);
+}
+
+}  // namespace
+
+void VideoRotationAveragingOptions::Validate() const {
+  imu_from_cam.Validate();
+  if (random_seed < -1 || image_order_passes < 0 ||
+      !std::isfinite(max_rotation_error_deg) || max_rotation_error_deg < 0.0 ||
+      !std::isfinite(video_tracking_huber_scale) ||
+      video_tracking_huber_scale <= 0.0 ||
+      !std::isfinite(video_lc_cauchy_scale) || video_lc_cauchy_scale <= 0.0 ||
+      num_threads == 0 || num_threads < -1 || max_num_iterations <= 0) {
+    throw std::invalid_argument("invalid rotation averaging options");
+  }
+  if (use_imu) {
+    if (!std::isfinite(visual_rotation_stddev_deg) ||
+        visual_rotation_stddev_deg <= 0.0 ||
+        !std::isfinite(imu_tracking_cauchy_scale_deg) ||
+        imu_tracking_cauchy_scale_deg <= 0.0 ||
+        !std::isfinite(reintegrate_angle_norm_thres) ||
+        reintegrate_angle_norm_thres < 0.0) {
+      throw std::invalid_argument("invalid I-RA options");
+    }
+  }
+  if (salvage_outlier_translations) {
+    if (!std::isfinite(salvage_epipolar_angle_thres_deg) ||
+        salvage_epipolar_angle_thres_deg <= 0.0 ||
+        !std::isfinite(salvage_min_inlier_ratio) ||
+        salvage_min_inlier_ratio <= 0.0 || salvage_min_inlier_ratio > 1.0 ||
+        salvage_min_inliers < 2) {
+      throw std::invalid_argument(
+          "invalid salvage_outlier_translations options");
+    }
+  }
+}
+
+RotationAveragingResult RunVideoRotationAveraging(
+    const VideoRotationAveragingOptions& options,
+    const std::vector<ImageId>& image_map_order,
+    const std::vector<PairId>& pair_map_order,
+    MappingProblem* problem,
+    const std::vector<ImuEdgeRecord>& imu_edges,
+    const std::vector<ImuStateRecord>& imu_states) {
+  options.Validate();
+  problem->Validate();
+  ValidateImageMapOrder(*problem, image_map_order);
+  ValidatePairMapOrder(*problem, pair_map_order);
+
+  const bool has_imu = options.use_imu && !imu_edges.empty();
+  if (options.use_imu) {
+    ValidateImuInputs(*problem, imu_edges, imu_states);
+  }
+
+  RotationAveragingResult result;
+  std::unordered_set<ImageId> active_images =
+      ComputeLargestConnectedComponentImageIds(
+          *problem,
+          image_map_order,
+          pair_map_order,
+          options.filter_unregistered,
+          /*excluded_pair_ids=*/{},
+          has_imu ? imu_edges : std::vector<ImuEdgeRecord>{});
+  if (active_images.empty()) return result;
+  const std::unordered_set<ImageId> initial_active_images = active_images;
+
+  Eigen::Quaterniond q_IC = Eigen::Quaterniond::Identity();
+  if (options.imu_from_cam.has_pose) {
+    q_IC = ToColmapPose(options.imu_from_cam).rotation().normalized();
+  }
+
+  std::vector<ImuEdgeRecord> mutable_imu_edges = imu_edges;
+  std::map<ImageId, Eigen::Matrix<double, 9, 1>> imu_state_params;
+  Eigen::Vector3d bg_init = Eigen::Vector3d::Zero();
+
+  if (has_imu) {
+    for (const ImuStateRecord& state : imu_states) {
+      imu_state_params.emplace(state.image_id, state.ToVector());
+    }
+    for (const ImuEdgeRecord& edge : mutable_imu_edges) {
+      for (const ImageId image_id : {edge.image_id1, edge.image_id2}) {
+        if (imu_state_params.count(image_id) == 0) {
+          Eigen::Matrix<double, 9, 1> state =
+              Eigen::Matrix<double, 9, 1>::Zero();
+          state.segment<3>(3) = bg_init;
+          imu_state_params.emplace(image_id, state);
+        }
+      }
+    }
+
+    if (options.auto_initialize_gyro_bias && imu_states.empty() &&
+        EstimateInitialGyroBiasMedian(*problem,
+                                      pair_map_order,
+                                      active_images,
+                                      /*excluded_pair_ids=*/{},
+                                      mutable_imu_edges,
+                                      q_IC,
+                                      &bg_init)) {
+      ApplyUniformGyroBiasAndReintegrate(
+          bg_init, &imu_state_params, &mutable_imu_edges);
+    }
+    result.initial_gyro_bias = bg_init;
+  }
+
+  InitializeFromMaximumSpanningTree(
+      options,
+      pair_map_order,
+      active_images,
+      problem,
+      /*excluded_pair_ids=*/{},
+      has_imu ? mutable_imu_edges : std::vector<ImuEdgeRecord>{},
+      imu_state_params,
+      q_IC);
+  const std::vector<ImageId> parameter_image_order =
+      OrderedActiveImages(active_images, options.image_order_passes);
+
+  if (!has_imu) {
+    if (!SolveRotationAveragingCeresPass(options,
+                                         parameter_image_order,
+                                         pair_map_order,
+                                         /*excluded_pair_ids=*/{},
+                                         /*has_imu=*/false,
+                                         /*optimize_gyro_bias=*/false,
+                                         q_IC,
+                                         &mutable_imu_edges,
+                                         &imu_state_params,
+                                         problem)) {
+      return result;
+    }
+  } else {
+    // Pass 1: Optimize global rotations with redescending CauchyLoss on visual
+    // edges and gyro bias held at the median seed bg_init so contiguous
+    // moving-object outliers cannot twist the gyro bias.
+    if (!SolveRotationAveragingCeresPass(options,
+                                         parameter_image_order,
+                                         pair_map_order,
+                                         /*excluded_pair_ids=*/{},
+                                         /*has_imu=*/true,
+                                         /*optimize_gyro_bias=*/false,
+                                         q_IC,
+                                         &mutable_imu_edges,
+                                         &imu_state_params,
+                                         problem)) {
+      return result;
+    }
+
+    const double internal_outlier_thres_deg =
+        options.max_rotation_error_deg > 0.0 ? options.max_rotation_error_deg
+                                             : 3.0;
+    const std::unordered_set<PairId> pass1_outliers =
+        FindRotationOutlierPairs(*problem,
+                                 pair_map_order,
+                                 initial_active_images,
+                                 internal_outlier_thres_deg);
+
+    if (!pass1_outliers.empty() && options.auto_initialize_gyro_bias &&
+        imu_states.empty() &&
+        EstimateInitialGyroBiasMedian(*problem,
+                                      pair_map_order,
+                                      active_images,
+                                      pass1_outliers,
+                                      mutable_imu_edges,
+                                      q_IC,
+                                      &bg_init)) {
+      ApplyUniformGyroBiasAndReintegrate(
+          bg_init, &imu_state_params, &mutable_imu_edges);
+      result.initial_gyro_bias = bg_init;
+      InitializeFromMaximumSpanningTree(options,
+                                        pair_map_order,
+                                        active_images,
+                                        problem,
+                                        pass1_outliers,
+                                        mutable_imu_edges,
+                                        imu_state_params,
+                                        q_IC);
+    }
+
+    // Pass 2: Jointly optimize global rotations and per-frame gyroscope biases
+    // over the surviving inlier visual edges and 6D IMU preintegration factors.
+    if (options.refine_gyro_bias || !pass1_outliers.empty()) {
+      if (!SolveRotationAveragingCeresPass(options,
+                                           parameter_image_order,
+                                           pair_map_order,
+                                           pass1_outliers,
+                                           /*has_imu=*/true,
+                                           options.refine_gyro_bias,
+                                           q_IC,
+                                           &mutable_imu_edges,
+                                           &imu_state_params,
+                                           problem)) {
+        return result;
+      }
+    }
+  }
 
   if (options.max_rotation_error_deg > 0.0) {
     const std::unordered_set<PairId> outlier_pairs =
@@ -419,10 +905,39 @@ RotationAveragingResult RunVideoRotationAveraging(
                                  pair_map_order,
                                  initial_active_images,
                                  options.max_rotation_error_deg);
+    result.outlier_pair_ids.assign(outlier_pairs.begin(), outlier_pairs.end());
+    std::sort(result.outlier_pair_ids.begin(), result.outlier_pair_ids.end());
+
+    std::unordered_set<PairId> excluded_pairs = outlier_pairs;
+    if (options.invalidate_outlier_pairs ||
+        options.salvage_outlier_translations) {
+      if (options.random_seed >= 0 && options.salvage_outlier_translations) {
+        colmap::SetPRNGSeed(static_cast<unsigned>(options.random_seed));
+      }
+      for (const PairId pair_id : result.outlier_pair_ids) {
+        PairRecord pair = problem->Pair(pair_id);
+        const ImageRecord& image1 = problem->Image(pair.image_id1);
+        const ImageRecord& image2 = problem->Image(pair.image_id2);
+        if (options.salvage_outlier_translations &&
+            TrySalvagePairTranslationWithKnownRotation(
+                image1,
+                image2,
+                options.salvage_epipolar_angle_thres_deg,
+                options.salvage_min_inliers,
+                options.salvage_min_inlier_ratio,
+                &pair)) {
+          problem->UpdatePair(pair);
+          result.salvaged_pair_ids.push_back(pair_id);
+          excluded_pairs.erase(pair_id);
+        } else if (options.invalidate_outlier_pairs) {
+          pair.is_valid = false;
+          problem->UpdatePair(pair);
+        }
+      }
+    }
 
     // Exclude every edge outside the initial largest component so a discarded
     // component cannot re-enter after outlier filtering.
-    std::unordered_set<PairId> excluded_pairs = outlier_pairs;
     for (const PairId pair_id : pair_map_order) {
       const PairRecord& pair = problem->Pair(pair_id);
       if (initial_active_images.count(pair.image_id1) == 0 ||
@@ -431,9 +946,35 @@ RotationAveragingResult RunVideoRotationAveraging(
       }
     }
     active_images = ComputeLargestConnectedComponentImageIds(
-        *problem, image_map_order, pair_map_order, true, excluded_pairs);
+        *problem,
+        image_map_order,
+        pair_map_order,
+        true,
+        excluded_pairs,
+        has_imu ? mutable_imu_edges : std::vector<ImuEdgeRecord>{},
+        has_imu ? &initial_active_images : nullptr);
     if (active_images.empty()) return result;
   }
+
+  if (has_imu) {
+    for (ImuEdgeRecord& edge : mutable_imu_edges) {
+      if (edge.integrator != nullptr &&
+          imu_state_params.count(edge.image_id1) != 0) {
+        Eigen::Vector6d biases = edge.data.biases;
+        biases.head<3>() = imu_state_params.at(edge.image_id1).segment<3>(3);
+        edge.integrator->Reintegrate(biases);
+        edge.integrator->Update(&edge.data);
+      }
+    }
+    result.initial_gravity_direction =
+        ComputeTelescopingInitialGravityDirection(
+            *problem, active_images, mutable_imu_edges, imu_state_params, q_IC);
+    for (const auto& [image_id, state_vec] : imu_state_params) {
+      result.imu_states.emplace(
+          image_id, ImuStateRecord::FromVector(image_id, state_vec));
+    }
+  }
+
   for (const ImageId image_id : active_images) {
     result.registered_image_ids.push_back(image_id);
   }
