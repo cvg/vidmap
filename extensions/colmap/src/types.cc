@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "vidmap_native/imu_types.h"
+
 namespace vidmap {
 namespace {
 
@@ -151,6 +153,34 @@ void TrackRecord::Validate() const {
         "loop-closure anchors must be empty or observation-aligned");
   }
   ValidateObservations(loop_closure_anchors, "loop-closure anchors");
+}
+
+void ImuStateRecord::Validate() const {
+  if (image_id == std::numeric_limits<ImageId>::max() ||
+      !velocity.allFinite() || !metric_velocity.allFinite() ||
+      !bias_gyro.allFinite() || !bias_accel.allFinite()) {
+    throw std::invalid_argument("invalid IMU state record");
+  }
+}
+
+void ImuEdgeRecord::Validate() const {
+  if (image_id1 == std::numeric_limits<ImageId>::max() ||
+      image_id2 == std::numeric_limits<ImageId>::max() ||
+      image_id1 == image_id2) {
+    throw std::invalid_argument(
+        "IMU edge image IDs must be distinct and valid");
+  }
+  if (!std::isfinite(data.delta_t) || data.delta_t <= 0.0 ||
+      !data.delta_p.allFinite() || !data.delta_v.allFinite() ||
+      !data.biases.allFinite() || !data.sqrt_info.allFinite() ||
+      data.sqrt_info.isZero()) {
+    throw std::invalid_argument("invalid PreintegratedImuData in IMU edge");
+  }
+  if (!q_iori_1_xyzw.coeffs().allFinite() || q_iori_1_xyzw.norm() <= 1e-12 ||
+      !q_iori_2_xyzw.coeffs().allFinite() || q_iori_2_xyzw.norm() <= 1e-12) {
+    throw std::invalid_argument("invalid stabilization quaternion in IMU edge");
+  }
+  loss.Validate();
 }
 
 PairId CanonicalPairId(ImageId image_id1, ImageId image_id2) {
