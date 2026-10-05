@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "vidmap_native/conversion.h"
+#include "vidmap_native/view_graph.h"
 #include <Eigen/Dense>
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -515,120 +516,6 @@ std::unordered_set<PairId> FindRotationOutlierPairs(
   return outlier_pairs;
 }
 
-// Option RP-B: Attempt to salvage a rotation-rejected pair by fixing its
-// relative rotation to R_21 = R_cw_2 * R_cw_1^T and running 2-point epipolar
-// translation RANSAC over the raw matches.
-bool TrySalvagePairTranslationWithKnownRotation(
-    const VideoRotationAveragingOptions& options,
-    const ImageRecord& image1,
-    const ImageRecord& image2,
-    PairRecord* pair) {
-  const Eigen::Index num_matches = pair->all_matches.rows();
-  if (!image1.pose.has_pose || !image2.pose.has_pose ||
-      image1.bearings.rows() == 0 || image2.bearings.rows() == 0 ||
-      num_matches < options.salvage_min_inliers) {
-    return false;
-  }
-
-  const Eigen::Quaterniond q_21 =
-      (ToColmapPose(image2.pose).rotation() *
-       ToColmapPose(image1.pose).rotation().inverse())
-          .normalized();
-  const Eigen::Matrix3d R_21 = q_21.toRotationMatrix();
-
-  std::vector<Eigen::Vector3d> b1_rot(num_matches);
-  std::vector<Eigen::Vector3d> b2_vec(num_matches);
-  std::vector<Eigen::Vector3d> normals(num_matches);
-  std::vector<int> valid_indices;
-  valid_indices.reserve(num_matches);
-
-  for (Eigen::Index k = 0; k < num_matches; ++k) {
-    const std::uint32_t idx1 = pair->all_matches(k, 0);
-    const std::uint32_t idx2 = pair->all_matches(k, 1);
-    if (idx1 >= static_cast<std::uint32_t>(image1.bearings.rows()) ||
-        idx2 >= static_cast<std::uint32_t>(image2.bearings.rows())) {
-      continue;
-    }
-    b1_rot[k] = R_21 * image1.bearings.row(idx1).transpose();
-    b2_vec[k] = image2.bearings.row(idx2).transpose();
-    normals[k] = b2_vec[k].cross(b1_rot[k]);
-    if (normals[k].norm() > 1e-4) {
-      valid_indices.push_back(static_cast<int>(k));
-    }
-  }
-  if (static_cast<int>(valid_indices.size()) <
-      std::max(2, options.salvage_min_inliers)) {
-    return false;
-  }
-
-  const double sin_thres =
-      std::sin(colmap::DegToRad(options.salvage_epipolar_angle_thres_deg));
-  const double sin_thres_sq = sin_thres * sin_thres;
-  std::vector<int> best_inliers;
-  double best_score = -1.0;
-  Eigen::Vector3d best_t = Eigen::Vector3d::Zero();
-  constexpr int kNumRansacTrials = 100;
-
-  for (int trial = 0; trial < kNumRansacTrials; ++trial) {
-    const int i1 = colmap::RandomUniformInteger(
-        0, static_cast<int>(valid_indices.size()) - 1);
-    int i2 = colmap::RandomUniformInteger(
-        0, static_cast<int>(valid_indices.size()) - 2);
-    if (i2 >= i1) ++i2;
-
-    Eigen::Vector3d t_base =
-        normals[valid_indices[i1]].cross(normals[valid_indices[i2]]);
-    const double t_norm = t_base.norm();
-    if (t_norm < 1e-8) continue;
-    t_base /= t_norm;
-
-    for (const double sign : {1.0, -1.0}) {
-      const Eigen::Vector3d t_cand = sign * t_base;
-      std::vector<int> inliers;
-      inliers.reserve(valid_indices.size());
-      double score = 0.0;
-      for (const int k : valid_indices) {
-        const double ep_norm = t_cand.cross(b1_rot[k]).norm();
-        if (ep_norm < 1e-4) continue;
-        const double sin_err = std::abs(normals[k].dot(t_cand)) / ep_norm;
-        if (sin_err >= sin_thres) continue;
-        const double dot_b = b1_rot[k].dot(b2_vec[k]);
-        const double t_b1 = b1_rot[k].dot(t_cand);
-        const double t_b2 = b2_vec[k].dot(t_cand);
-        // Positive depth in both cameras:
-        // lambda_1 ~ dot_b * t_b2 - t_b1 > 0, lambda_2 ~ t_b2 - dot_b * t_b1 >
-        // 0
-        if (dot_b * t_b2 - t_b1 <= 0.0 || t_b2 - dot_b * t_b1 <= 0.0) {
-          continue;
-        }
-        inliers.push_back(k);
-        score += 1.0 - (sin_err * sin_err) / sin_thres_sq;
-      }
-      if (score > best_score) {
-        best_score = score;
-        best_inliers = std::move(inliers);
-        best_t = t_cand;
-      }
-    }
-  }
-
-  const int required_inliers =
-      std::max(options.salvage_min_inliers,
-               static_cast<int>(std::ceil(options.salvage_min_inlier_ratio *
-                                          static_cast<double>(num_matches))));
-  if (static_cast<int>(best_inliers.size()) < required_inliers) {
-    return false;
-  }
-
-  pair->is_valid = true;
-  pair->inlier_indices.resize(static_cast<Eigen::Index>(best_inliers.size()));
-  for (std::size_t idx = 0; idx < best_inliers.size(); ++idx) {
-    pair->inlier_indices(static_cast<Eigen::Index>(idx)) = best_inliers[idx];
-  }
-  pair->geometry.cam2_from_cam1 = FromColmapPose(colmap::Rigid3d(q_21, best_t));
-  return true;
-}
-
 bool SolveRotationAveragingCeresPass(
     const VideoRotationAveragingOptions& options,
     const std::vector<ImageId>& parameter_image_order,
@@ -1033,7 +920,12 @@ RotationAveragingResult RunVideoRotationAveraging(
         const ImageRecord& image2 = problem->Image(pair.image_id2);
         if (options.salvage_outlier_translations &&
             TrySalvagePairTranslationWithKnownRotation(
-                options, image1, image2, &pair)) {
+                image1,
+                image2,
+                options.salvage_epipolar_angle_thres_deg,
+                options.salvage_min_inliers,
+                options.salvage_min_inlier_ratio,
+                &pair)) {
           problem->UpdatePair(pair);
           result.salvaged_pair_ids.push_back(pair_id);
           excluded_pairs.erase(pair_id);
