@@ -9,6 +9,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pycolmap
 
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.inputs.database import copy_finalized_database, load_finalized_database
@@ -16,6 +17,7 @@ from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.mapper import SetupOptions
 from vidmap.mapper.replay.cache import ReplayCache
+from vidmap.mapper.replay.evidence.canonical import snapshot_images
 from vidmap.mapper.replay.evidence.stages import database_file_summary, database_to_native_summary
 from vidmap.utils.image_sampling import sample_at_keypoints
 from vidmap.utils.io import ordered_pair_images
@@ -50,8 +52,8 @@ def _index_lc_masks(
 
 
 @dataclass(kw_only=True)
-class MappingProblemLoader:
-    """Load one mapping problem in the established byte-reproducible order."""
+class MappingInputLoader:
+    """Load finalized inputs into the COLMAP scene and VidMap metadata."""
 
     options: SetupOptions
     inputs: MapperInputs
@@ -70,7 +72,7 @@ class MappingProblemLoader:
                 if depth.shape != valid.shape:
                     raise ValueError(f"{depth_path}: {image_name!r} depth and validity shapes differ")
 
-                keypoints = np.asarray(image.keypoints)
+                keypoints = native.point2D_coords(image)
                 if valid.ndim == 2:
                     if "original_width" not in group.attrs or "original_height" not in group.attrs:
                         raise ValueError(f"{depth_path}: {image_name!r} original image size is unavailable")
@@ -82,9 +84,9 @@ class MappingProblemLoader:
                     sx = np.float32(depth_w / original_width)
                     sy = np.float32(depth_h / original_height)
                     if len(keypoints) > 0:
-                        sampled_depth = sample_at_keypoints(keypoints, depth, sx, sy)
+                        sampled_depth = sample_at_keypoints(keypoints.astype(depth.dtype), depth, sx, sy)
                         sampled_valid = sample_at_keypoints(
-                            keypoints,
+                            keypoints.astype(np.float32),
                             valid.astype(np.float32),
                             sx,
                             sy,
@@ -106,15 +108,14 @@ class MappingProblemLoader:
     def attach_depth_inputs(self, state: SolveState, depths) -> None:
         """Attach sampled depth inputs and configured uncertainty to solve images."""
         for image_id in state.image_order:
-            image = state.image(image_id)
-            depth = depths[image.name]
+            image = state.image_data(image_id)
+            depth = depths[state.image(image_id).name]
             image.depth_values = np.asarray(depth["depth"], dtype=np.float64)
             image.depth_stddevs = np.asarray(
                 depth["depth"] * self.options.depth_uncertainty_scale,
                 dtype=np.float64,
             )
             image.depth_validity = np.asarray(depth["valid"], dtype=np.uint8)
-            state.update_image(image)
 
     def load(self, *, on_database_loaded: Callable[[SolveState], None] | None = None) -> MappingStageInputs:
         self.inputs.validate()
@@ -145,10 +146,10 @@ class MappingProblemLoader:
             summary = database_to_native_summary(
                 working_database_path,
                 state,
-                state.image_records(),
+                snapshot_images(state),
             )
             self.replay.write_json("db_to_glomap", "summary.json", summary)
-        depths = self.load_depth_inputs(self.inputs.depth_maps_path, state.image_records().values())
+        depths = self.load_depth_inputs(self.inputs.depth_maps_path, state.reconstruction.images.values())
 
         self.attach_depth_inputs(state, depths)
 
@@ -159,10 +160,12 @@ class MappingProblemLoader:
         # building the name-to-ID index used by later sequence projections.
         pair_name_to_pid = {}
         lc_masks_by_pair = _index_lc_masks(lc_masks)
-        for pid, pair in state.pair_records().items():
+        for pid in state.pair_order:
+            pair = state.pair_data(pid)
+            image_id1, image_id2 = pycolmap.pair_id_to_image_pair(pid)
             name1, name2 = (
-                state.image(pair.image_id1).name,
-                state.image(pair.image_id2).name,
+                state.image(image_id1).name,
+                state.image(image_id2).name,
             )
             pair_key = frozenset((name1, name2))
             pair_name_to_pid[pair_key] = pid
@@ -176,7 +179,6 @@ class MappingProblemLoader:
                 )
                 raise AssertionError(message)
             pair.are_loop_closure = np.asarray(mask, dtype=np.uint8)
-            state.update_pair(pair)
 
         # VGC exclusions are temporary pair IDs, derived only after the full
         # native pair index has been established.
@@ -193,7 +195,7 @@ class MappingProblemLoader:
 
         # The temporal track-pair file must describe exactly one adjacent chain
         # over the finalized database images.
-        images = state.image_records()
+        images = state.reconstruction.images
         sequence_names = ordered_pair_images(consecutive_pairs)
         if consecutive_pairs != list(zip(sequence_names, sequence_names[1:])):
             raise ValueError("Mapper track pairs must form one ordered adjacent image chain")
@@ -209,10 +211,9 @@ class MappingProblemLoader:
             if pair_id is not None:
                 consecutive_pair_ids.append(pair_id)
 
-        # Finalize native pair classifications and relative-pose storage only
+        # Finalize native pair classifications only
         # after masks, exclusions, and temporal ordering have been validated.
-        native.update_image_pair_configurations(state.native_problem)
-        native.decompose_relative_poses(state.native_problem)
+        native.reclassify_calibrated_planar_pairs(state.reconstruction, state.pose_graph, state.sidecars)
 
         return MappingStageInputs(
             solve_state=state,

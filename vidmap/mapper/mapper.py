@@ -12,7 +12,7 @@ from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
 from .checkpoints import remove_disabled_intermediate_reconstructions
 from .inputs.database import remove_database_sidecars
-from .inputs.loader import MappingProblemLoader
+from .inputs.loader import MappingInputLoader
 from .options import MapperOptions
 from .playback_trace import PlaybackTraceOptions, PlaybackTraceRecorder
 from .replay.cache import ReplayCache
@@ -80,7 +80,7 @@ class Mapper:
         replay = ReplayCache(self.conf.replay_cache, self.sfm_outputs_dir)
         working_database = self.sfm_outputs_dir / "database_complete.db"
         try:
-            loader = MappingProblemLoader(
+            loader = MappingInputLoader(
                 options=self.conf.setup,
                 inputs=self.mapper_inputs,
                 sfm_outputs_dir=self.sfm_outputs_dir,
@@ -181,7 +181,7 @@ class Mapper:
 
         # Bearings are shared by relative-pose estimation and the later global
         # positioning stage, so construct them once on the solve state.
-        GlobalPositioner.prepare_bearings(solve_state, self.conf.gp.common.bearing_kp_stddev)
+        GlobalPositioner.prepare_bearings(solve_state)
 
         # Estimate pair geometry first; rotation averaging consumes both its
         # filtered video edges and resolved inlier thresholds.
@@ -219,7 +219,7 @@ class Mapper:
             boundary_depth_outliers_marked=boundary_depth_outliers_marked,
             replay=replay,
         )
-        tracks = track_builder.build()
+        track_builder.build()
 
         record_timing("pre_global_positioning", sync_time() - vgc_start_time)
         log_memory("pre_global_positioning")
@@ -228,7 +228,6 @@ class Mapper:
         # complete reconstruction with bundle adjustment.
         global_positioner = GlobalPositioner(
             solve_state=solve_state,
-            tracks=tracks,
             consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
             sequence_id_to_index=mapping_stage_inputs.sequence_id_to_index,
             inlier_thresholds=relative_pose.inlier_thresholds,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "colmap/estimators/cost_functions/utils.h"
+
 #include <algorithm>
 #include <stdexcept>
 
@@ -10,7 +12,8 @@
 
 namespace vidmap {
 
-struct MetricDepthError {
+struct MetricDepthError
+    : public colmap::AutoDiffCostFunctor<MetricDepthError, 1, 3, 3, 1> {
   MetricDepthError(const Eigen::Quaterniond& rotation,
                    double depth_prior,
                    double sigma_depth,
@@ -85,24 +88,6 @@ struct MetricDepthError {
     }
     residuals[0] = weight * depth_residual;
     return true;
-  }
-
-  static ceres::CostFunction* Create(const Eigen::Quaterniond& rotation,
-                                     double depth_prior,
-                                     double sigma_depth,
-                                     bool use_log_scale,
-                                     MetricDepthResidualType residual_type,
-                                     bool zero_residual_behind,
-                                     double log_linear_threshold) {
-    if (sigma_depth <= 1e-9) return nullptr;
-    return new ceres::AutoDiffCostFunction<MetricDepthError, 1, 3, 3, 1>(
-        new MetricDepthError(rotation,
-                             depth_prior,
-                             sigma_depth,
-                             use_log_scale,
-                             residual_type,
-                             zero_residual_behind,
-                             log_linear_threshold));
   }
 
   const Eigen::Quaterniond rotation_;

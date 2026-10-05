@@ -18,8 +18,8 @@ class LossConfig:
     """Typed keyword-only loss specification."""
 
     name: Literal["trivial", "huber", "cauchy", "soft_l1"]
-    scale: float = 1.0
-    weight: float = 1.0
+    scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0
 
 
 def instantiate_losses(raw, names):
@@ -30,34 +30,35 @@ def instantiate_losses(raw, names):
 class GPCommonOptions:
     use_lc_observations: bool = True
     use_metric_depth_constraint: bool = True
-    roundtrip_before_ba: bool = False
-    canonical_checkpoint: bool = False
-    bearing_kp_stddev: float = 8.0
+    bearing_kp_stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 8.0
     optimize_depth_map_scales: bool = True
     use_log_scale_for_depth_map_scales: bool = False
     smooth_log_linear_transition: bool = False
-    log_linear_threshold: float = 0.1
-    random_seed: int = 1
+    log_linear_threshold: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.1
+    random_seed: Annotated[int, Field(ge=-1)] = 1
     loss_function_type: NativeLossName = "huber"
-    loss_function_weight: float = 1.0
-    loss_function_scale: float = 0.1
+    loss_function_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0
+    loss_function_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.1
     apply_uncalibrated_loss_downweight: bool = False
     num_threads: Optional[int] = None
-    parameter_ordering_strategy: Literal["grouped", "deterministic_singleton_groups"] = "grouped"
-    camera_center_strategy: Literal["frame", "image"] = "frame"
-    random_init_scale: float = 100.0
     zero_residuals_behind_camera: bool = False
+
+    @model_validator(mode="after")
+    def validate_threads(self):
+        if self.num_threads == 0:
+            raise ValueError("num_threads must be nonzero")
+        return self
 
 
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
 class GPFirstPassOptions:
-    scale_prior_stddev: float = 0.05
-    max_iterations: int = 100
-    function_tolerance_when_second: Optional[float] = 1.0e-4
-    gradient_tolerance_when_second: Optional[float] = 1.0e-8
-    parameter_tolerance_when_second: Optional[float] = 1.0e-6
+    scale_prior_stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.05
+    max_iterations: Annotated[int, Field(gt=0)] = 100
+    function_tolerance_when_second: Optional[Annotated[float, Field(ge=0, allow_inf_nan=False)]] = 1.0e-4
+    gradient_tolerance_when_second: Optional[Annotated[float, Field(ge=0, allow_inf_nan=False)]] = 1.0e-8
+    parameter_tolerance_when_second: Optional[Annotated[float, Field(ge=0, allow_inf_nan=False)]] = 1.0e-6
     scale_reg_loss_name: ScaleLossName = "trivial"
-    scale_reg_weight: float = 1.0
+    scale_reg_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0
     initialize_warm_start_scales: bool = True
     sequential_support_warmup_rounds: Annotated[int, Field(ge=0)] = 16
     sequential_support_observations_per_track: Annotated[int, Field(ge=0)] = 16
@@ -94,13 +95,12 @@ class GPFirstPassOptions:
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
 class GPSecondPassOptions:
     enabled: bool = True
-    scale_prior_stddev: float = 0.05
-    max_iterations: int = 100
+    scale_prior_stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.05
+    max_iterations: Annotated[int, Field(gt=0)] = 100
     use_log_depth_residual: bool = True
-    relax_angular_stddevs: float = 1.0
+    relax_angular_stddevs: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
     scale_reg_loss_name: ScaleLossName = "huber"
-    scale_reg_weight: float = 1.0
-    center_init_mode: Literal["native", "python_frame_centers"] = "native"
+    scale_reg_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0
     loss_lc_geometry: LossConfig = LossConfig(name="cauchy", scale=4.0, weight=1.0)
     loss_lc_depth: LossConfig = LossConfig(name="cauchy", scale=4.0, weight=1.0)
     loss_normal_geometry: LossConfig = LossConfig(name="huber")
@@ -122,9 +122,7 @@ class GPSecondPassOptions:
 
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
 class GPTrackFilterOptions:
-    skip_zero_observation_points: bool = False
-    update_point3d_errors: bool = False
-    min_num_views_per_track: int = 2
+    min_num_views_per_track: Annotated[int, Field(gt=0)] = 2
     loss_normal_depth_outlier: LossConfig = LossConfig(name="cauchy", scale=3.0, weight=1.0)
     depth_prior_outlier_max_depth: Optional[Annotated[float, Field(gt=0, allow_inf_nan=False)]] = None
     depth_prior_outlier_stages: Literal["gp1", "gp1_gp2"] = "gp1"
@@ -191,7 +189,7 @@ class DepthConsistencyOptions:
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class MapperTrackOptions:
     include_loop_closure_observations: bool = True
-    min_num_views_per_track: int = 2
+    min_num_views_per_track: Annotated[int, Field(gt=0)] = 2
     max_num_views_per_track: int = 100
     two_view_depth_gate: bool = True
     loop_closure_second_pass: bool = True

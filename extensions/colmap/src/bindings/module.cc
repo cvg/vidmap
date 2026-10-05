@@ -8,12 +8,12 @@
 PYBIND11_MODULE(_core, m) {
   m.doc() = "VidMap native mapping algorithms";
   m.attr("__colmap_revision__") = VIDMAP_COLMAP_REVISION;
+  pybind11::module_::import("pycolmap");
+  pybind11::module_::import("pyceres");
   vidmap::BindRecords(m);
-  vidmap::BindSolverPlayback(m);
-  vidmap::BindMappingProblem(m);
+  vidmap::BindMappingSidecars(m);
   vidmap::BindViewGraph(m);
   vidmap::BindTracks(m);
   vidmap::BindVideoRotationAveraging(m);
   vidmap::BindGlobalPositioning(m);
-  vidmap::BindBundleAdjustment(m);
 }

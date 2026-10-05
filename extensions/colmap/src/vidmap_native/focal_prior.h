@@ -1,9 +1,10 @@
 #pragma once
 
+#include <memory>
 #include <stdexcept>
 
-#include "vidmap_native/ceres_loss.h"
-#include "vidmap_native/mapping_problem.h"
+#include "vidmap_native/mapping_sidecars.h"
+#include <ceres/loss_function.h>
 
 namespace vidmap {
 
@@ -11,10 +12,9 @@ namespace vidmap {
 struct LogFocalPriorRecord {
   CameraId camera_id = 0;
   Eigen::MatrixXd observations;
-  LossConfig loss;
+  std::shared_ptr<ceres::LossFunction> loss;
 
   void Validate() const {
-    loss.Validate();
     if (observations.rows() <= 0 || observations.cols() != 2 ||
         !observations.allFinite() || (observations.array() <= 0.0).any()) {
       throw std::invalid_argument("invalid log-focal prior");

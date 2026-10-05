@@ -1,7 +1,8 @@
 #pragma once
 
+#include "colmap/estimators/view_graph_calibration.h"
+
 #include <cstddef>
-#include <map>
 #include <vector>
 
 #include "vidmap_native/focal_prior.h"
@@ -17,41 +18,21 @@ struct InlierThresholdOptions {
   void Validate() const;
 };
 
-struct ViewGraphCalibrationOptions {
-  double min_focal_length_ratio = 0.1;
-  double max_focal_length_ratio = 10.0;
-  double max_calibration_error = 2.0;
-  double loss_function_scale = 0.01;
-  std::vector<LogFocalPriorRecord> focal_priors;
-  // Scale prior weights by eligible pairs / prior observations.
-  bool normalize_weight_by_pair_count = false;
-  int num_threads = -1;
-  int max_num_iterations = 100;
-  double function_tolerance = 1e-5;
-
-  void Validate() const;
-};
-
-struct FocalLengthCalibResult {
-  bool success = false;
-  std::map<CameraId, double> focal_lengths;
-  std::map<PairId, double> calibration_errors_sq;
-};
-
-void PrepareImageBearings(MappingProblem* problem);
-void UpdateImagePairsConfig(MappingProblem* problem);
-std::size_t DecomposeRelPose(MappingProblem* problem);
-void ImagePairsInlierCount(const InlierThresholdOptions& options,
-                           bool clean_inliers,
-                           MappingProblem* problem);
-std::size_t FilterPairsByInlierNum(int min_inlier_count,
-                                   MappingProblem* problem);
-std::size_t FilterPairsByInlierRatio(double min_inlier_ratio,
-                                     MappingProblem* problem);
-FocalLengthCalibResult CalibrateFocalLengths(
-    const ViewGraphCalibrationOptions& options, const MappingProblem& problem);
-std::size_t ApplyFocalCalibration(const ViewGraphCalibrationOptions& options,
-                                  const FocalLengthCalibResult& result,
-                                  MappingProblem* problem);
-
+void PrepareImageBearings(const colmap::Reconstruction&, MappingSidecars&);
+void ReclassifyCalibratedPlanarPairs(const colmap::Reconstruction&,
+                                     const colmap::PoseGraph&,
+                                     MappingSidecars&);
+void ImagePairsInlierCount(const InlierThresholdOptions&,
+                           const colmap::Reconstruction&,
+                           const colmap::PoseGraph&,
+                           MappingSidecars&);
+std::size_t FilterPairsByInlierNum(int, colmap::PoseGraph&, MappingSidecars&);
+std::size_t FilterPairsByInlierRatio(double,
+                                     colmap::PoseGraph&,
+                                     MappingSidecars&);
+std::size_t CalibrateFocalLengths(const colmap::ViewGraphCalibrationOptions&,
+                                  colmap::Reconstruction&,
+                                  colmap::PoseGraph&,
+                                  const MappingSidecars&,
+                                  const std::vector<LogFocalPriorRecord>&);
 }  // namespace vidmap

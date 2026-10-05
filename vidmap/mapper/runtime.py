@@ -8,7 +8,7 @@ import warnings
 from functools import cache
 from types import ModuleType
 
-TESTED_PYCOLMAP_VERSION = (4, 2)
+TESTED_PYCOLMAP_VERSION = (4, 3)
 
 
 def _colmap_major_minor(version: str) -> tuple[int, int] | None:

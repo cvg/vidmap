@@ -5,15 +5,16 @@ import numpy as np
 
 
 def native_focal_priors(prior, *, camera_ids, loss, scale=1.0, weight=1.0):
+    import pycolmap
+
     from vidmap.mapper.native.extension import native
-    from vidmap.mapper.native.losses import build_named_loss_config
 
     records = []
     for camera_id in sorted(set(camera_ids)):
         record = native.LogFocalPriorRecord()
         record.camera_id = camera_id
         record.observations = np.asarray(prior[camera_id], dtype=np.float64)
-        record.loss = build_named_loss_config(loss, scale=scale, weight=weight)
+        record.loss = pycolmap.create_ceres_loss_function(pycolmap.LossFunctionType(loss.upper()), scale, weight)
         records.append(record)
     return records
 

@@ -16,7 +16,7 @@ class SolverBackendOptions:
 
     ``sparse_schur`` factorizes on a single thread, so ``iterative_schur`` is the
     setting that keeps scaling with cores. CUDA dense Schur requires CUDA, while
-    sparse Schur requires Ceres 2.3 with CUDA and cuDSS. Both change the numerical
+    sparse Schur requires Ceres 2.3 with cuDSS and PyCeres exposing CUDA_SPARSE. Both change the numerical
     path, so the defaults reproduce the direct sparse solve. ``preconditioner`` is
     only consulted by ``iterative_schur``.
     """

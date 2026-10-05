@@ -17,6 +17,7 @@ import pycolmap
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
 
+from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.view_graph import VGCFilterOptions
 from vidmap.utils.logging import progress_bars_enabled
@@ -43,11 +44,12 @@ def filter_vgc_pair(args):
     if len(matches) < min_matches:
         return pair_id, "few_matches", False
 
-    feat1 = features_cache[pair.image_id1]
-    feat2 = features_cache[pair.image_id2]
-    K1 = k_cache[camera_id_cache[pair.image_id1]]
-    K2 = k_cache[camera_id_cache[pair.image_id2]]
-    F = np.asarray(pair.geometry.fundamental)
+    image_id1, image_id2 = pycolmap.pair_id_to_image_pair(pair_id)
+    feat1 = features_cache[image_id1]
+    feat2 = features_cache[image_id2]
+    K1 = k_cache[camera_id_cache[image_id1]]
+    K2 = k_cache[camera_id_cache[image_id2]]
+    F = np.asarray(pair.geometry.F)
     E = K2.T @ F @ K1
     U, _S, Vt = np.linalg.svd(E)
     if np.linalg.det(U) < 0:
@@ -140,7 +142,7 @@ class ViewGraphFilter:
 
     def filter(self) -> set[int]:
         cameras = self.solve_state.reconstruction.cameras
-        images = self.solve_state.image_records()
+        images = self.solve_state.reconstruction.images
         vgc_filtered_pair_ids = self.initial_exclusion_ids
 
         if not (self.options.enabled and self.calibration_enabled):
@@ -156,7 +158,7 @@ class ViewGraphFilter:
         _W = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
 
         _K_cache = {cid: cam.calibration_matrix() for cid, cam in cameras.items()}
-        _features_cache = {image_id: np.asarray(image.keypoints) for image_id, image in images.items()}
+        _features_cache = {image_id: native.point2D_coords(image) for image_id, image in images.items()}
         _camera_id_cache = {image_id: image.camera_id for image_id, image in images.items()}
 
         valid_configurations = {
@@ -165,8 +167,9 @@ class ViewGraphFilter:
         }
         _vgc_pairs = [
             (pid, p)
-            for pid, p in self.solve_state.pair_records().items()
-            if p.is_valid and p.geometry.configuration in valid_configurations
+            for pid in self.solve_state.pair_order
+            if self.solve_state.pose_graph.is_valid(pid)
+            and (p := self.solve_state.pair_data(pid)).geometry.config in valid_configurations
         ]
         _worker_args = [
             (

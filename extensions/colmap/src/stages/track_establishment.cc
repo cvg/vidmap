@@ -1,53 +1,83 @@
 // Track establishment over explicit regular and loop-closure observations.
 #include "colmap/math/union_find.h"
+#include "colmap/scene/two_view_geometry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
-#include <limits>
-#include <optional>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
-#include "track_records.h"
 #include "vidmap_native/tracks.h"
 
 namespace vidmap {
 
-using track_internal::DecodeObservation;
-using track_internal::LoopClosureObservation;
-using track_internal::NativeTrack;
-using track_internal::Observation;
-using track_internal::ToTrackMap;
-using track_internal::ToTrackRecords;
-using track_internal::TrackMap;
+using colmap::TrackElement;
 
 namespace {
 
 constexpr double kDepthEpsilon = 1e-6;
 using LoopClosureKey = std::pair<Point3DId, Point3DId>;
 
-void ValidateImageDomain(const MappingProblem& problem,
+struct LoopClosureObservation {
+  TrackElement observation;
+  TrackElement anchor;
+};
+
+struct NativeTrack {
+  std::vector<TrackElement> observations;
+  std::vector<LoopClosureObservation> loop_closure_observations;
+};
+
+using TrackMap = std::unordered_map<Point3DId, NativeTrack>;
+
+Point3DId EncodeObservationKey(ImageId image_id, std::uint32_t feature_id) {
+  return (static_cast<Point3DId>(image_id) << 32) | feature_id;
+}
+
+TrackElement DecodeObservation(Point3DId encoded) {
+  return {static_cast<ImageId>(encoded >> 32),
+          static_cast<std::uint32_t>(encoded & 0xFFFFFFFFULL)};
+}
+
+TrackData LoopClosureData(const NativeTrack& source) {
+  TrackData data;
+  data.loop_closure_observations.resize(source.loop_closure_observations.size(),
+                                        2);
+  data.loop_closure_anchors.resize(source.loop_closure_observations.size(), 2);
+  for (std::size_t i = 0; i < source.loop_closure_observations.size(); ++i) {
+    const auto& lc = source.loop_closure_observations[i];
+    data.loop_closure_observations.row(i) << lc.observation.image_id,
+        lc.observation.point2D_idx;
+    data.loop_closure_anchors.row(i) << lc.anchor.image_id,
+        lc.anchor.point2D_idx;
+  }
+  return data;
+}
+
+void ValidateImageDomain(const colmap::Reconstruction& reconstruction,
                          const std::vector<ImageId>& image_ids) {
   std::unordered_set<ImageId> unique_ids;
   unique_ids.reserve(image_ids.size());
   for (const ImageId image_id : image_ids) {
-    problem.Image(image_id);
+    reconstruction.Image(image_id);
     if (!unique_ids.insert(image_id).second) {
       throw std::invalid_argument("duplicate image ID in traversal order");
     }
   }
 }
 
-void ValidatePairOrder(const MappingProblem& problem,
+void ValidatePairOrder(const colmap::PoseGraph& graph,
+                       const MappingSidecars& sidecars,
                        const std::vector<PairId>& pair_ids) {
   std::unordered_set<PairId> unique_ids;
   unique_ids.reserve(pair_ids.size());
   for (const PairId pair_id : pair_ids) {
-    const PairRecord& pair = problem.Pair(pair_id);
-    if (!pair.is_valid) {
+    sidecars.pairs.at(pair_id);
+    if (!graph.IsValid(pair_id)) {
       throw std::invalid_argument("pair traversal contains an invalid pair");
     }
     if (!unique_ids.insert(pair_id).second) {
@@ -56,7 +86,7 @@ void ValidatePairOrder(const MappingProblem& problem,
   }
 }
 
-void ValidatePairLoopClosureMetadata(const PairRecord& pair) {
+void ValidatePairLoopClosureMetadata(const PairData& pair) {
   if (pair.are_loop_closure.size() != pair.all_matches.rows()) {
     throw std::invalid_argument(
         "loop-closure mask must be aligned with all matches");
@@ -64,37 +94,37 @@ void ValidatePairLoopClosureMetadata(const PairRecord& pair) {
 }
 
 std::set<LoopClosureKey> CollectLoopClosureMatches(
-    const MappingProblem& problem, const std::vector<PairId>& pair_order) {
+    const MappingSidecars& sidecars, const std::vector<PairId>& pair_order) {
   std::set<LoopClosureKey> loop_closure_matches;
   for (const PairId pair_id : pair_order) {
-    const PairRecord& pair = problem.Pair(pair_id);
+    const auto& pair = sidecars.pairs.at(pair_id);
+    const auto [image_id1, image_id2] = colmap::PairIdToImagePair(pair_id);
     ValidatePairLoopClosureMetadata(pair);
     for (Eigen::Index index = 0; index < pair.inlier_indices.size(); ++index) {
       const int row = pair.inlier_indices[index];
       if (pair.are_loop_closure[row] == 0) continue;
       const Point3DId observation1 =
-          EncodeObservationKey(pair.image_id1, pair.all_matches(row, 0));
+          EncodeObservationKey(image_id1, pair.all_matches(row, 0));
       const Point3DId observation2 =
-          EncodeObservationKey(pair.image_id2, pair.all_matches(row, 1));
+          EncodeObservationKey(image_id2, pair.all_matches(row, 1));
       loop_closure_matches.emplace(observation1, observation2);
-      loop_closure_matches.emplace(observation2, observation1);
     }
   }
   return loop_closure_matches;
 }
 
-bool HasValidDepthPrior(const MappingProblem& problem,
-                        const Observation& observation) {
-  const ImageRecord& image = problem.Image(observation.image_id);
-  const auto feature_id = static_cast<Eigen::Index>(observation.feature_id);
-  return feature_id < image.depth_validity.size() &&
-         image.depth_validity[feature_id] != 0 &&
-         feature_id < image.depth_values.size() &&
-         image.depth_values[feature_id] > kDepthEpsilon;
+bool HasValidDepthPrior(const MappingSidecars& sidecars,
+                        const TrackElement& observation) {
+  const auto& data = sidecars.images.at(observation.image_id);
+  const auto feature_id = static_cast<Eigen::Index>(observation.point2D_idx);
+  return feature_id < data.depth_validity.size() &&
+         data.depth_validity[feature_id] != 0 &&
+         feature_id < data.depth_values.size() &&
+         data.depth_values[feature_id] > kDepthEpsilon;
 }
 
-TrackMap EstablishTracks(const MappingProblem& problem,
-                         const std::vector<ImageId>& image_order,
+TrackMap EstablishTracks(const colmap::Reconstruction& reconstruction,
+                         const MappingSidecars& sidecars,
                          const std::vector<PairId>& pair_order,
                          const TrackEstablishmentOptions& options,
                          const std::set<LoopClosureKey>& ignored_matches) {
@@ -105,13 +135,14 @@ TrackMap EstablishTracks(const MappingProblem& problem,
   };
 
   for (const PairId pair_id : pair_order) {
-    const PairRecord& pair = problem.Pair(pair_id);
+    const auto& pair = sidecars.pairs.at(pair_id);
+    const auto [image_id1, image_id2] = colmap::PairIdToImagePair(pair_id);
     for (Eigen::Index index = 0; index < pair.inlier_indices.size(); ++index) {
       const int row = pair.inlier_indices[index];
       const Point3DId observation1 =
-          EncodeObservationKey(pair.image_id1, pair.all_matches(row, 0));
+          EncodeObservationKey(image_id1, pair.all_matches(row, 0));
       const Point3DId observation2 =
-          EncodeObservationKey(pair.image_id2, pair.all_matches(row, 1));
+          EncodeObservationKey(image_id2, pair.all_matches(row, 1));
       if (should_ignore(observation1, observation2)) continue;
       if (observation2 < observation1) {
         union_find.Union(observation1, observation2);
@@ -121,38 +152,24 @@ TrackMap EstablishTracks(const MappingProblem& problem,
     }
   }
 
-  std::unordered_map<Point3DId, std::unordered_set<Point3DId>> track_map;
-  for (const PairId pair_id : pair_order) {
-    const PairRecord& pair = problem.Pair(pair_id);
-    for (Eigen::Index index = 0; index < pair.inlier_indices.size(); ++index) {
-      const int row = pair.inlier_indices[index];
-      const Point3DId observation1 =
-          EncodeObservationKey(pair.image_id1, pair.all_matches(row, 0));
-      const Point3DId observation2 =
-          EncodeObservationKey(pair.image_id2, pair.all_matches(row, 1));
-      if (should_ignore(observation1, observation2)) continue;
-      const Point3DId track_id1 = union_find.Find(observation1);
-      const Point3DId track_id2 = union_find.Find(observation2);
-      if (track_id1 == track_id2) {
-        track_map[track_id1].insert(observation1);
-        track_map[track_id1].insert(observation2);
-      }
-    }
+  union_find.Compress();
+  std::unordered_map<Point3DId, std::vector<Point3DId>> track_map;
+  for (const auto& [observation, root] : union_find.Parents()) {
+    track_map[root].push_back(observation);
   }
 
   TrackMap candidates;
-  std::vector<std::pair<std::size_t, Point3DId>> track_lengths;
   for (const auto& [track_id, encoded_observations] : track_map) {
     std::unordered_map<ImageId, std::vector<Eigen::Vector2d>> image_points;
     NativeTrack track;
     bool consistent = true;
     for (const Point3DId encoded_observation : encoded_observations) {
-      const Observation observation = DecodeObservation(encoded_observation);
-      const ImageRecord& image = problem.Image(observation.image_id);
-      if (observation.feature_id >= image.NumFeatures()) {
+      const TrackElement observation = DecodeObservation(encoded_observation);
+      const auto& image = reconstruction.Image(observation.image_id);
+      if (observation.point2D_idx >= image.NumPoints2D()) {
         throw std::invalid_argument("track match references a missing feature");
       }
-      const Eigen::Vector2d point = image.keypoints.row(observation.feature_id);
+      const Eigen::Vector2d point = image.Point2D(observation.point2D_idx).xy;
       auto image_it = image_points.find(observation.image_id);
       if (image_it != image_points.end()) {
         const double squared_threshold =
@@ -176,64 +193,37 @@ TrackMap EstablishTracks(const MappingProblem& problem,
             static_cast<std::size_t>(options.min_num_views_per_track)) {
       continue;
     }
-    track_lengths.emplace_back(track.observations.size(), track_id);
     candidates.emplace(track_id, std::move(track));
   }
 
-  std::sort(track_lengths.begin(), track_lengths.end(), std::greater<>());
-  std::unordered_map<ImageId, std::size_t> tracks_per_image;
-  std::size_t images_left = image_order.size();
-  TrackMap selected;
-  for (const auto& [track_length, track_id] : track_lengths) {
-    NativeTrack& track = candidates.at(track_id);
-    const bool should_add = std::any_of(
-        track.observations.begin(),
-        track.observations.end(),
-        [&](const Observation& observation) {
-          return tracks_per_image[observation.image_id] <=
-                 static_cast<std::size_t>(options.required_tracks_per_view);
-        });
-    if (!should_add) continue;
-
-    for (const Observation& observation : track.observations) {
-      std::size_t& count = tracks_per_image[observation.image_id];
-      if (count == static_cast<std::size_t>(options.required_tracks_per_view)) {
-        --images_left;
-      }
-      ++count;
-    }
-    selected.emplace(track_id, std::move(track));
-    if (images_left == 0) break;
-  }
-  return selected;
+  return candidates;
 }
 
-void AppendLoopClosureObservationsToMap(const MappingProblem& problem,
+void AppendLoopClosureObservationsToMap(const MappingSidecars& sidecars,
                                         const std::vector<PairId>& pair_order,
                                         TrackMap* tracks) {
   std::unordered_map<Point3DId, Point3DId> observation_to_track;
   for (const auto& [track_id, track] : *tracks) {
-    for (const Observation& observation : track.observations) {
+    for (const TrackElement& observation : track.observations) {
       observation_to_track.emplace(
-          EncodeObservationKey(observation.image_id, observation.feature_id),
+          EncodeObservationKey(observation.image_id, observation.point2D_idx),
           track_id);
     }
   }
 
   for (const PairId pair_id : pair_order) {
-    const PairRecord& pair = problem.Pair(pair_id);
+    const auto& pair = sidecars.pairs.at(pair_id);
+    const auto [image_id1, image_id2] = colmap::PairIdToImagePair(pair_id);
     ValidatePairLoopClosureMetadata(pair);
     for (Eigen::Index index = 0; index < pair.inlier_indices.size(); ++index) {
       const int row = pair.inlier_indices[index];
       if (pair.are_loop_closure[row] == 0) continue;
-      const Observation observation1 = {pair.image_id1,
-                                        pair.all_matches(row, 0)};
-      const Observation observation2 = {pair.image_id2,
-                                        pair.all_matches(row, 1)};
+      const TrackElement observation1 = {image_id1, pair.all_matches(row, 0)};
+      const TrackElement observation2 = {image_id2, pair.all_matches(row, 1)};
       const Point3DId key1 =
-          EncodeObservationKey(observation1.image_id, observation1.feature_id);
+          EncodeObservationKey(observation1.image_id, observation1.point2D_idx);
       const Point3DId key2 =
-          EncodeObservationKey(observation2.image_id, observation2.feature_id);
+          EncodeObservationKey(observation2.image_id, observation2.point2D_idx);
       const auto track1_it = observation_to_track.find(key1);
       const auto track2_it = observation_to_track.find(key2);
       const bool has_track1 = track1_it != observation_to_track.end();
@@ -279,93 +269,57 @@ void AppendLoopClosureObservationsToMap(const MappingProblem& problem,
 void TrackEstablishmentOptions::Validate() const {
   if (!std::isfinite(intra_image_consistency_threshold) ||
       intra_image_consistency_threshold < 0.0 || min_num_views_per_track <= 0 ||
-      required_tracks_per_view < 0) {
+      max_num_views_per_track < min_num_views_per_track) {
     throw std::invalid_argument("invalid track establishment options");
   }
 }
 
-void TrackProblemFilterOptions::Validate() const {
-  if (min_num_views_per_track <= 0 ||
-      max_num_views_per_track < min_num_views_per_track) {
-    throw std::invalid_argument("invalid track problem filter options");
-  }
-}
+namespace {
 
-Point3DId EncodeObservationKey(const ImageId image_id,
-                               const std::uint32_t feature_id) {
-  return (static_cast<Point3DId>(image_id) << 32) |
-         static_cast<Point3DId>(feature_id);
-}
-
-std::vector<TrackRecord> EstablishTracksFromCorrGraph(
-    const MappingProblem& problem,
+TrackMap EstablishTracksFromCorrGraph(
+    const colmap::Reconstruction& reconstruction,
+    const colmap::PoseGraph& graph,
+    const MappingSidecars& sidecars,
     const std::vector<ImageId>& image_order,
     const std::vector<PairId>& pair_order,
     const TrackEstablishmentOptions& options,
-    const bool loop_closure_second_pass,
-    const std::vector<PairId>& loop_closure_pair_order) {
-  problem.Validate();
+    const bool loop_closure_second_pass) {
+  sidecars.Validate(reconstruction);
   options.Validate();
-  ValidateImageDomain(problem, image_order);
-  ValidatePairOrder(problem, pair_order);
+  ValidateImageDomain(reconstruction, image_order);
+  ValidatePairOrder(graph, sidecars, pair_order);
 
   std::set<LoopClosureKey> ignored_matches;
-  const std::vector<PairId>& lc_pair_order =
-      loop_closure_pair_order.empty() ? pair_order : loop_closure_pair_order;
-  TrackEstablishmentOptions effective_options = options;
   if (loop_closure_second_pass) {
-    ValidatePairOrder(problem, lc_pair_order);
-    ignored_matches = CollectLoopClosureMatches(problem, lc_pair_order);
-    effective_options.required_tracks_per_view =
-        std::numeric_limits<int>::max();
+    ignored_matches = CollectLoopClosureMatches(sidecars, pair_order);
   }
 
   TrackMap tracks = EstablishTracks(
-      problem, image_order, pair_order, effective_options, ignored_matches);
+      reconstruction, sidecars, pair_order, options, ignored_matches);
   if (loop_closure_second_pass) {
-    AppendLoopClosureObservationsToMap(problem, lc_pair_order, &tracks);
+    AppendLoopClosureObservationsToMap(sidecars, pair_order, &tracks);
   }
-  return ToTrackRecords(tracks);
+  return tracks;
 }
 
-std::vector<TrackRecord> AppendLoopClosureObservations(
-    const MappingProblem& problem,
-    const std::vector<PairId>& pair_order,
-    const std::vector<TrackRecord>& track_records) {
-  ValidatePairOrder(problem, pair_order);
-  TrackMap tracks = ToTrackMap(track_records);
-  AppendLoopClosureObservationsToMap(problem, pair_order, &tracks);
-  return ToTrackRecords(tracks);
-}
-
-std::vector<TrackRecord> FilterTracksForProblem(
-    const MappingProblem& problem,
+TrackMap FilterTracksForProblem(
+    const MappingSidecars& sidecars,
     const std::vector<ImageId>& registered_image_ids,
-    const std::vector<TrackRecord>& track_records,
-    const TrackProblemFilterOptions& options) {
-  options.Validate();
-  ValidateImageDomain(problem, registered_image_ids);
-  const TrackMap tracks_full = ToTrackMap(track_records);
-  std::vector<std::pair<std::size_t, Point3DId>> track_lengths;
-  for (const auto& [track_id, track] : tracks_full) {
-    if (track.observations.size() <
-            static_cast<std::size_t>(options.min_num_views_per_track) ||
-        track.observations.size() >
-            static_cast<std::size_t>(options.max_num_views_per_track)) {
-      continue;
-    }
-    track_lengths.emplace_back(track.observations.size(), track_id);
-  }
-  std::sort(track_lengths.begin(), track_lengths.end(), std::greater<>());
-
+    const TrackMap& tracks_full,
+    const TrackEstablishmentOptions& options) {
   std::unordered_set<ImageId> registered_image_id_set(
       registered_image_ids.begin(), registered_image_ids.end());
   TrackMap selected;
-  for (const auto& [track_length, track_id] : track_lengths) {
-    const NativeTrack& source = tracks_full.at(track_id);
+  for (const auto& [track_id, source] : tracks_full) {
+    if (source.observations.size() <
+            static_cast<std::size_t>(options.min_num_views_per_track) ||
+        source.observations.size() >
+            static_cast<std::size_t>(options.max_num_views_per_track)) {
+      continue;
+    }
     NativeTrack candidate;
     std::unordered_set<ImageId> distinct_image_ids;
-    for (const Observation& observation : source.observations) {
+    for (const TrackElement& observation : source.observations) {
       if (registered_image_id_set.count(observation.image_id) == 0) continue;
       candidate.observations.push_back(observation);
       distinct_image_ids.insert(observation.image_id);
@@ -387,20 +341,111 @@ std::vector<TrackRecord> FilterTracksForProblem(
       const bool regular_depths_valid =
           std::all_of(candidate.observations.begin(),
                       candidate.observations.end(),
-                      [&](const Observation& observation) {
-                        return HasValidDepthPrior(problem, observation);
+                      [&](const TrackElement& observation) {
+                        return HasValidDepthPrior(sidecars, observation);
                       });
       const bool loop_closure_depths_valid = std::all_of(
           candidate.loop_closure_observations.begin(),
           candidate.loop_closure_observations.end(),
           [&](const LoopClosureObservation& observation) {
-            return HasValidDepthPrior(problem, observation.observation);
+            return HasValidDepthPrior(sidecars, observation.observation);
           });
       if (!regular_depths_valid || !loop_closure_depths_valid) continue;
     }
     selected.emplace(track_id, std::move(candidate));
   }
-  return ToTrackRecords(selected);
+  return selected;
 }
 
+}  // namespace
+
+TrackEstablishmentResult EstablishAndCommitTracks(
+    colmap::Reconstruction& reconstruction,
+    const colmap::PoseGraph& graph,
+    MappingSidecars& sidecars,
+    const std::vector<ImageId>& image_order,
+    const std::vector<PairId>& pair_order,
+    const TrackEstablishmentOptions& options,
+    bool loop_closure_second_pass,
+    bool include_loop_closure_observations,
+    bool capture_tracks) {
+  auto full = EstablishTracksFromCorrGraph(reconstruction,
+                                           graph,
+                                           sidecars,
+                                           image_order,
+                                           pair_order,
+                                           options,
+                                           loop_closure_second_pass);
+  auto selected = FilterTracksForProblem(sidecars, image_order, full, options);
+  TrackEstablishmentResult result;
+  result.num_full_tracks = full.size();
+  result.num_tracks = selected.size();
+  if (capture_tracks) {
+    for (const auto& [id, source] : full) {
+      colmap::Track track;
+      track.SetElements(source.observations);
+      result.full_tracks.emplace(id, std::move(track));
+      result.full_track_data.emplace(id, LoopClosureData(source));
+    }
+  }
+  for (const auto id : reconstruction.Point3DIds())
+    reconstruction.DeletePoint3D(id);
+  sidecars.tracks.clear();
+  for (const auto& [id, source] : selected) {
+    colmap::Point3D point;
+    point.xyz.setZero();
+    point.track.SetElements(source.observations);
+    reconstruction.AddPoint3D(id, point);
+    if (!include_loop_closure_observations ||
+        source.loop_closure_observations.empty())
+      continue;
+    sidecars.tracks.emplace(id, LoopClosureData(source));
+  }
+  return result;
+}
+
+std::shared_ptr<colmap::CorrespondenceGraph> CreateCorrespondenceGraph(
+    const colmap::Reconstruction& reconstruction,
+    const MappingSidecars& sidecars,
+    const std::vector<PairId>& pair_order) {
+  auto result = std::make_shared<colmap::CorrespondenceGraph>();
+  for (const auto& [id, image] : reconstruction.Images())
+    result->AddImage(id, image.NumPoints2D());
+  for (const auto id : pair_order) {
+    const auto& pair = sidecars.pairs.at(id);
+    const auto [id1, id2] = colmap::PairIdToImagePair(id);
+    if (!reconstruction.ExistsImage(id1) || !reconstruction.ExistsImage(id2) ||
+        pair.inlier_indices.size() == 0)
+      continue;
+    colmap::TwoViewGeometry geometry;
+    geometry.config = colmap::TwoViewGeometry::CALIBRATED;
+    for (Eigen::Index i = 0; i < pair.inlier_indices.size(); ++i) {
+      const auto row = pair.inlier_indices[i];
+      geometry.inlier_matches.push_back(
+          {pair.all_matches(row, 0), pair.all_matches(row, 1)});
+    }
+    result->AddTwoViewGeometry(id1, id2, geometry);
+  }
+  result->Finalize();
+  return result;
+}
+std::shared_ptr<colmap::CorrespondenceGraph> FilterCorrespondenceGraph(
+    const colmap::CorrespondenceGraph& source,
+    const colmap::Reconstruction& reconstruction,
+    const std::vector<PairId>& pair_order) {
+  auto result = std::make_shared<colmap::CorrespondenceGraph>();
+  for (const auto& [id, image] : reconstruction.Images())
+    result->AddImage(id, image.NumPoints2D());
+  for (const auto id : pair_order) {
+    const auto [first, second] = colmap::PairIdToImagePair(id);
+    if (!reconstruction.ExistsImage(first) ||
+        !reconstruction.ExistsImage(second) ||
+        source.NumMatchesBetweenImages(first, second) == 0)
+      continue;
+    result->AddTwoViewGeometry(
+        first, second, source.ExtractTwoViewGeometry(first, second, true));
+  }
+  result->Finalize();
+  return result;
+}
 }  // namespace vidmap

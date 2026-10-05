@@ -10,9 +10,6 @@ namespace vidmap {
 void BindVideoRotationAveraging(py::module_& m) {
   py::class_<VideoRotationAveragingOptions>(m, "RotationAveragingOptions")
       .def(py::init<>())
-      .def_readwrite("random_seed", &VideoRotationAveragingOptions::random_seed)
-      .def_readwrite("image_order_passes",
-                     &VideoRotationAveragingOptions::image_order_passes)
       .def_readwrite("filter_unregistered_images",
                      &VideoRotationAveragingOptions::filter_unregistered)
       .def_readwrite("skip_risky_loop_closure_pairs",
@@ -25,8 +22,7 @@ void BindVideoRotationAveraging(py::module_& m) {
                      &VideoRotationAveragingOptions::video_lc_cauchy_scale)
       .def_readwrite("num_threads", &VideoRotationAveragingOptions::num_threads)
       .def_readwrite("max_num_iterations",
-                     &VideoRotationAveragingOptions::max_num_iterations)
-      .def("validate", &VideoRotationAveragingOptions::Validate);
+                     &VideoRotationAveragingOptions::max_num_iterations);
 
   py::class_<RotationAveragingResult>(m, "RotationAveragingResult")
       .def_readonly("success", &RotationAveragingResult::success)
@@ -36,9 +32,9 @@ void BindVideoRotationAveraging(py::module_& m) {
   m.def("run_video_rotation_averaging",
         &RunVideoRotationAveraging,
         py::arg("options"),
-        py::arg("image_map_order"),
-        py::arg("pair_map_order"),
-        py::arg("problem"));
+        py::arg("reconstruction"),
+        py::arg("pose_graph"),
+        py::arg("sidecars"));
 }
 
 }  // namespace vidmap

@@ -17,8 +17,8 @@ class ColmapRuntimeVariant:
 COLMAP_RUNTIME_VARIANTS = {
     "stock": ColmapRuntimeVariant(
         name="stock",
-        revision="fa8e3b3ff591552855f8ad2806723c80f963f69c",
-        pycolmap_major_minor=(4, 1),
+        revision="ea063e6874583429143dd5c53d86c3e68c895e8f",
+        pycolmap_major_minor=(4, 3),
         canonical_environment="VIDMAP_STOCK_COLMAP",
     ),
 }

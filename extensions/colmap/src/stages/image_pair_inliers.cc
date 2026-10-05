@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <vector>
 
-#include "vidmap_native/conversion.h"
 #include "vidmap_native/view_graph.h"
 
 namespace vidmap {
@@ -55,14 +54,17 @@ double BearingSampsonError(const Eigen::Matrix3d& essential,
 }
 
 void ScoreEssentialPair(const InlierThresholdOptions& options,
-                        const MappingProblem& problem,
-                        PairRecord* pair) {
-  if (!pair->geometry.cam2_from_cam1.has_pose) {
+                        const colmap::Reconstruction& reconstruction,
+                        const colmap::PoseGraph& graph,
+                        const MappingSidecars& sidecars,
+                        PairId pair_id,
+                        PairData* pair) {
+  if (!pair->has_relative_pose) {
     throw std::invalid_argument(
         "calibrated pair requires cam2_from_cam1 for inlier scoring");
   }
   const colmap::Rigid3d cam2_from_cam1 =
-      ToColmapPose(pair->geometry.cam2_from_cam1);
+      graph.Edges().at(pair_id).cam2_from_cam1;
   const Eigen::Matrix3d essential =
       colmap::EssentialMatrixFromPose(cam2_from_cam1);
   Eigen::Vector3d epipole12 = cam2_from_cam1.translation();
@@ -72,14 +74,15 @@ void ScoreEssentialPair(const InlierThresholdOptions& options,
   if (epipole12[2] < 0.0) epipole12 = -epipole12;
   if (epipole21[2] < 0.0) epipole21 = -epipole21;
 
-  const ImageRecord& image1 = problem.Image(pair->image_id1);
-  const ImageRecord& image2 = problem.Image(pair->image_id2);
-  const colmap::Camera camera1 =
-      ToColmapCamera(problem.Camera(image1.camera_id));
-  const colmap::Camera camera2 =
-      ToColmapCamera(problem.Camera(image2.camera_id));
-  if (image1.bearings.rows() != image1.keypoints.rows() ||
-      image2.bearings.rows() != image2.keypoints.rows()) {
+  const auto [id1, id2] = colmap::PairIdToImagePair(pair_id);
+  const auto& image1 = reconstruction.Image(id1);
+  const auto& image2 = reconstruction.Image(id2);
+  const auto& data1 = sidecars.images.at(id1);
+  const auto& data2 = sidecars.images.at(id2);
+  const colmap::Camera camera1 = *image1.CameraPtr();
+  const colmap::Camera camera2 = *image2.CameraPtr();
+  if (data1.bearings.rows() != image1.NumPoints2D() ||
+      data2.bearings.rows() != image2.NumPoints2D()) {
     throw std::invalid_argument(
         "essential inlier scoring requires feature-aligned bearings");
   }
@@ -90,23 +93,18 @@ void ScoreEssentialPair(const InlierThresholdOptions& options,
   const double threshold_sq = threshold * threshold;
   const double epipole_threshold =
       std::cos(colmap::DegToRad(options.min_angle_from_epipole_deg)) + 1e-6;
-  const double angle_threshold = 1.0 + 1e-6;
 
   std::vector<int> inliers;
   inliers.reserve(pair->all_matches.rows());
   for (Eigen::Index row = 0; row < pair->all_matches.rows(); ++row) {
     const Eigen::Vector3d point1 =
-        image1.bearings.row(pair->all_matches(row, 0));
+        data1.bearings.row(pair->all_matches(row, 0));
     const Eigen::Vector3d point2 =
-        image2.bearings.row(pair->all_matches(row, 1));
+        data2.bearings.row(pair->all_matches(row, 1));
     if (BearingSampsonError(essential, point1, point2) >= threshold_sq) {
       continue;
     }
     if (!CheckCheirality(cam2_from_cam1, point1, point2, 1e-2, 100.0)) {
-      continue;
-    }
-    if (point1.dot(cam2_from_cam1.rotation().inverse() * point2) >=
-        angle_threshold) {
       continue;
     }
     if (point1.dot(epipole21) >= epipole_threshold ||
@@ -120,20 +118,22 @@ void ScoreEssentialPair(const InlierThresholdOptions& options,
 }
 
 void ScoreFundamentalPair(const InlierThresholdOptions& options,
-                          const MappingProblem& problem,
-                          PairRecord* pair) {
-  if (!pair->geometry.has_fundamental) {
+                          const colmap::Reconstruction& reconstruction,
+                          PairId pair_id,
+                          PairData* pair) {
+  if (!pair->geometry.F) {
     throw std::invalid_argument(
         "uncalibrated pair requires a fundamental matrix");
   }
-  const Eigen::Matrix3d& fundamental = pair->geometry.fundamental;
+  const Eigen::Matrix3d& fundamental = *pair->geometry.F;
   Eigen::Vector3d epipole = fundamental.row(0).cross(fundamental.row(2));
   if ((epipole.array().abs() <= kEpsilon).all()) {
     epipole = fundamental.row(1).cross(fundamental.row(2));
   }
 
-  const ImageRecord& image1 = problem.Image(pair->image_id1);
-  const ImageRecord& image2 = problem.Image(pair->image_id2);
+  const auto [id1, id2] = colmap::PairIdToImagePair(pair_id);
+  const auto& image1 = reconstruction.Image(id1);
+  const auto& image2 = reconstruction.Image(id2);
   const double threshold_sq = options.max_epipolar_error_fundamental *
                               options.max_epipolar_error_fundamental;
   std::vector<double> signs;
@@ -141,10 +141,8 @@ void ScoreFundamentalPair(const InlierThresholdOptions& options,
   int positive_count = 0;
   int negative_count = 0;
   for (Eigen::Index row = 0; row < pair->all_matches.rows(); ++row) {
-    const Eigen::Vector2d point1 =
-        image1.keypoints.row(pair->all_matches(row, 0));
-    const Eigen::Vector2d point2 =
-        image2.keypoints.row(pair->all_matches(row, 1));
+    const Eigen::Vector2d point1 = image1.Point2D(pair->all_matches(row, 0)).xy;
+    const Eigen::Vector2d point2 = image2.Point2D(pair->all_matches(row, 1)).xy;
     const double error = colmap::ComputeSquaredSampsonError(
         point1.homogeneous(), point2.homogeneous(), fundamental);
     if (error >= threshold_sq) continue;
@@ -171,23 +169,23 @@ void ScoreFundamentalPair(const InlierThresholdOptions& options,
 }
 
 void ScoreHomographyPair(const InlierThresholdOptions& options,
-                         const MappingProblem& problem,
-                         PairRecord* pair) {
-  if (!pair->geometry.has_homography) {
+                         const colmap::Reconstruction& reconstruction,
+                         PairId pair_id,
+                         PairData* pair) {
+  if (!pair->geometry.H) {
     throw std::invalid_argument("planar pair requires a homography matrix");
   }
-  const ImageRecord& image1 = problem.Image(pair->image_id1);
-  const ImageRecord& image2 = problem.Image(pair->image_id2);
+  const auto [id1, id2] = colmap::PairIdToImagePair(pair_id);
+  const auto& image1 = reconstruction.Image(id1);
+  const auto& image2 = reconstruction.Image(id2);
   const double threshold_sq = options.max_epipolar_error_homography *
                               options.max_epipolar_error_homography;
   std::vector<int> inliers;
   for (Eigen::Index row = 0; row < pair->all_matches.rows(); ++row) {
-    const Eigen::Vector2d point1 =
-        image1.keypoints.row(pair->all_matches(row, 0));
-    const Eigen::Vector2d point2 =
-        image2.keypoints.row(pair->all_matches(row, 1));
+    const Eigen::Vector2d point1 = image1.Point2D(pair->all_matches(row, 0)).xy;
+    const Eigen::Vector2d point2 = image2.Point2D(pair->all_matches(row, 1)).xy;
     if (colmap::ComputeSquaredHomographyError(
-            point1, point2, pair->geometry.homography) < threshold_sq) {
+            point1, point2, *pair->geometry.H) < threshold_sq) {
       inliers.push_back(static_cast<int>(row));
     }
   }
@@ -207,34 +205,32 @@ void InlierThresholdOptions::Validate() const {
 }
 
 void ImagePairsInlierCount(const InlierThresholdOptions& options,
-                           bool clean_inliers,
-                           MappingProblem* problem) {
+                           const colmap::Reconstruction& reconstruction,
+                           const colmap::PoseGraph& graph,
+                           MappingSidecars& sidecars) {
   options.Validate();
-  problem->Validate();
-  for (const PairId pair_id : problem->PairIds()) {
-    PairRecord pair = problem->Pair(pair_id);
-    if (!clean_inliers && pair.inlier_indices.size() > 0) continue;
+  sidecars.Validate(reconstruction);
+  for (auto& [pair_id, pair] : sidecars.pairs) {
     pair.inlier_indices.resize(0);
-    if (!pair.is_valid) {
-      problem->UpdatePair(pair);
+    if (!graph.IsValid(pair_id)) {
       continue;
     }
-    switch (pair.geometry.configuration) {
+    switch (pair.geometry.config) {
       case colmap::TwoViewGeometry::CALIBRATED:
-        ScoreEssentialPair(options, *problem, &pair);
+        ScoreEssentialPair(
+            options, reconstruction, graph, sidecars, pair_id, &pair);
         break;
       case colmap::TwoViewGeometry::UNCALIBRATED:
-        ScoreFundamentalPair(options, *problem, &pair);
+        ScoreFundamentalPair(options, reconstruction, pair_id, &pair);
         break;
       case colmap::TwoViewGeometry::PLANAR:
       case colmap::TwoViewGeometry::PANORAMIC:
       case colmap::TwoViewGeometry::PLANAR_OR_PANORAMIC:
-        ScoreHomographyPair(options, *problem, &pair);
+        ScoreHomographyPair(options, reconstruction, pair_id, &pair);
         break;
       default:
         break;
     }
-    problem->UpdatePair(pair);
   }
 }
 

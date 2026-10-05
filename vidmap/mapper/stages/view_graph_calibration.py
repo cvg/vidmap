@@ -40,64 +40,64 @@ class ViewGraphCalibrator:
         if self.options.unlock_focal:
             for _cid, _cam in cameras.items():
                 _cam.has_prior_focal_length = False
-        state.import_cameras()
 
         original_configs = {}
         try:
             if self.exclusion_ids:
-                for pid, pair in state.pair_records().items():
+                for pid in state.pair_order:
+                    pair = state.pair_data(pid)
                     if pid in self.exclusion_ids:
-                        original_configs[pid] = pair.geometry.configuration
+                        original_configs[pid] = pair.geometry.config
                         geometry = pair.geometry
-                        geometry.configuration = pycolmap.TwoViewGeometryConfiguration.PLANAR
+                        geometry.config = pycolmap.TwoViewGeometryConfiguration.PLANAR
                         pair.geometry = geometry
-                        state.update_pair(pair)
                 logger.info(
                     "Temporarily marked %d pairs as PLANAR for two-stage VGC",
                     len(original_configs),
                 )
 
-            consec_validity_before_vgc = {pid: state.pair(pid).is_valid for pid in self.consecutive_pair_ids}
+            consec_validity_before_vgc = {pid: state.pose_graph.is_valid(pid) for pid in self.consecutive_pair_ids}
 
-            vgc_options = native.FocalCalibrationOptions()
+            vgc_options = pycolmap.ViewGraphCalibrationOptions()
+            focal_priors = []
             num_inputs = 0
             valid_configurations = {
                 pycolmap.TwoViewGeometryConfiguration.CALIBRATED,
                 pycolmap.TwoViewGeometryConfiguration.UNCALIBRATED,
             }
-            for pid, pair in state.pair_records().items():
+            for pid in state.pair_order:
+                pair = state.pair_data(pid)
                 geometry = pair.geometry
-                if geometry.configuration not in valid_configurations:
+                if geometry.config not in valid_configurations:
                     continue
-                if not pair.is_valid:
+                if not state.pose_graph.is_valid(pid):
                     continue
-                if not geometry.has_fundamental:
+                if geometry.F is None:
                     raise RuntimeError(
-                        f"Valid VGC pair {pid} ({pair.image_id1}->{pair.image_id2}) has no fundamental matrix"
+                        f"Valid VGC pair {pid} ({pycolmap.pair_id_to_image_pair(pid)}) has no fundamental matrix"
                     )
                 num_inputs += 1
 
             if self.focal_prior is not None:
                 prior = self.focal_prior
-                vgc_options.normalize_weight_by_pair_count = self.options.normalize_weight_by_pair_count
                 vgc_options.min_focal_length_ratio = np.finfo(float).tiny
                 vgc_options.max_focal_length_ratio = np.finfo(float).max
-                vgc_options.focal_priors = native_focal_priors(
+                weight = self.options.focal_prior_weight
+                if self.options.normalize_weight_by_pair_count and num_inputs and prior:
+                    weight *= num_inputs / sum(len(rows) for rows in prior.values())
+                focal_priors = native_focal_priors(
                     prior,
                     camera_ids=prior,
                     loss="cauchy",
-                    weight=self.options.focal_prior_weight,
+                    weight=weight,
                 )
-            result = native.calibrate_focal_lengths(vgc_options, state.native_problem)
-            if not result.success:
-                raise RuntimeError("View graph calibration failed")
-
-            invalid_count = native.apply_focal_calibration(
+            invalid_count = native.calibrate_focal_lengths(
                 vgc_options,
-                result,
-                state.native_problem,
+                state.reconstruction,
+                state.pose_graph,
+                state.sidecars,
+                focal_priors,
             )
-            state.export_cameras()
             logger.info(
                 "VGC: invalidated %d / %d pairs (residual^2 > %.4f)",
                 invalid_count,
@@ -110,12 +110,12 @@ class ViewGraphCalibrator:
                     "Restoring %d pair configurations after two-stage VGC",
                     len(original_configs),
                 )
-                for pid, pair in state.pair_records().items():
+                for pid in state.pair_order:
+                    pair = state.pair_data(pid)
                     if pid in original_configs:
                         geometry = pair.geometry
-                        geometry.configuration = original_configs[pid]
+                        geometry.config = original_configs[pid]
                         pair.geometry = geometry
-                        state.update_pair(pair)
                 logger.info(
                     "Restored %d pair configurations for rotation averaging",
                     len(original_configs),
@@ -123,10 +123,8 @@ class ViewGraphCalibrator:
 
         restored_consec_count = 0
         for pid in self.consecutive_pair_ids:
-            pair = state.pair(pid)
-            if consec_validity_before_vgc[pid] and not pair.is_valid:
-                pair.is_valid = True
-                state.update_pair(pair)
+            if consec_validity_before_vgc[pid] and not state.pose_graph.is_valid(pid):
+                state.pose_graph.set_valid_edge(pid)
                 restored_consec_count += 1
         if restored_consec_count > 0:
             logger.info(
