@@ -62,6 +62,13 @@ void TestOptionValidation() {
   CheckInvalidArgument([&] { rotation_options.Validate(); },
                        "zero rotation-averaging threads were accepted");
 
+  vidmap::VideoRotationAveragingOptions imu_ra_options;
+  imu_ra_options.use_imu = true;
+  imu_ra_options.Validate();
+  imu_ra_options.visual_rotation_stddev_deg = 0.0;
+  CheckInvalidArgument([&] { imu_ra_options.Validate(); },
+                       "zero visual_rotation_stddev_deg was accepted");
+
   vidmap::BundleAdjustmentOptions bundle_options;
   bundle_options.max_num_iterations = 0;
   CheckInvalidArgument([&] { bundle_options.Validate(); },
