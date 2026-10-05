@@ -34,15 +34,6 @@ void BindVideoRotationAveraging(py::module_& m) {
                      &VideoRotationAveragingOptions::refine_gyro_bias)
       .def_readwrite("auto_initialize_gyro_bias",
                      &VideoRotationAveragingOptions::auto_initialize_gyro_bias)
-      .def_readwrite("use_gyro_bias_prior",
-                     &VideoRotationAveragingOptions::use_gyro_bias_prior)
-      .def_readwrite("gyro_bias_prior",
-                     &VideoRotationAveragingOptions::gyro_bias_prior)
-      .def_readwrite("gyro_bias_prior_stddev",
-                     &VideoRotationAveragingOptions::gyro_bias_prior_stddev)
-      .def_readwrite(
-          "apply_bias_prior_to_all_frames",
-          &VideoRotationAveragingOptions::apply_bias_prior_to_all_frames)
       .def_readwrite("visual_rotation_stddev_deg",
                      &VideoRotationAveragingOptions::visual_rotation_stddev_deg)
       .def_readwrite(

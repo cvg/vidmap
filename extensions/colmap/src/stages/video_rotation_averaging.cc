@@ -637,7 +637,6 @@ bool SolveRotationAveragingCeresPass(
     const bool has_imu,
     const bool optimize_gyro_bias,
     const Eigen::Quaterniond& q_IC,
-    const Eigen::Vector3d& effective_gyro_bias_prior,
     std::vector<ImuEdgeRecord>* mutable_imu_edges,
     std::map<ImageId, Eigen::Matrix<double, 9, 1>>* imu_state_params,
     MappingProblem* problem) {
@@ -744,7 +743,6 @@ bool SolveRotationAveragingCeresPass(
       }
     }
 
-    bool first_imu_state = true;
     for (const ImageId image_id : parameter_image_order) {
       auto state_it = imu_state_params->find(image_id);
       if (state_it == imu_state_params->end()) continue;
@@ -757,16 +755,7 @@ bool SolveRotationAveragingCeresPass(
         colmap::SetManifold(&ceres_problem,
                             state_ptr,
                             colmap::CreateImuStateGyroOnlyManifold());
-        if (options.use_gyro_bias_prior &&
-            (first_imu_state || options.apply_bias_prior_to_all_frames)) {
-          ceres_problem.AddResidualBlock(
-              colmap::BiasPriorCostFunctor<9>::CreateGyro(
-                  effective_gyro_bias_prior, options.gyro_bias_prior_stddev),
-              nullptr,
-              state_ptr);
-        }
       }
-      first_imu_state = false;
     }
   }
 
@@ -844,10 +833,7 @@ void VideoRotationAveragingOptions::Validate() const {
     throw std::invalid_argument("invalid rotation averaging options");
   }
   if (use_imu) {
-    if (!gyro_bias_prior.allFinite() ||
-        !std::isfinite(gyro_bias_prior_stddev) ||
-        gyro_bias_prior_stddev <= 0.0 ||
-        !std::isfinite(visual_rotation_stddev_deg) ||
+    if (!std::isfinite(visual_rotation_stddev_deg) ||
         visual_rotation_stddev_deg <= 0.0 ||
         !std::isfinite(imu_tracking_cauchy_scale_deg) ||
         imu_tracking_cauchy_scale_deg <= 0.0 ||
@@ -904,8 +890,7 @@ RotationAveragingResult RunVideoRotationAveraging(
 
   std::vector<ImuEdgeRecord> mutable_imu_edges = imu_edges;
   std::map<ImageId, Eigen::Matrix<double, 9, 1>> imu_state_params;
-  Eigen::Vector3d bg_init = options.gyro_bias_prior;
-  Eigen::Vector3d effective_gyro_bias_prior = options.gyro_bias_prior;
+  Eigen::Vector3d bg_init = Eigen::Vector3d::Zero();
 
   if (has_imu) {
     for (const ImuStateRecord& state : imu_states) {
@@ -930,9 +915,6 @@ RotationAveragingResult RunVideoRotationAveraging(
                                       mutable_imu_edges,
                                       q_IC,
                                       &bg_init)) {
-      if (options.gyro_bias_prior.isZero(1e-12)) {
-        effective_gyro_bias_prior = bg_init;
-      }
       ApplyUniformGyroBiasAndReintegrate(
           bg_init, &imu_state_params, &mutable_imu_edges);
     }
@@ -959,7 +941,6 @@ RotationAveragingResult RunVideoRotationAveraging(
                                          /*has_imu=*/false,
                                          /*optimize_gyro_bias=*/false,
                                          q_IC,
-                                         effective_gyro_bias_prior,
                                          &mutable_imu_edges,
                                          &imu_state_params,
                                          problem)) {
@@ -976,7 +957,6 @@ RotationAveragingResult RunVideoRotationAveraging(
                                          /*has_imu=*/true,
                                          /*optimize_gyro_bias=*/false,
                                          q_IC,
-                                         effective_gyro_bias_prior,
                                          &mutable_imu_edges,
                                          &imu_state_params,
                                          problem)) {
@@ -1001,9 +981,6 @@ RotationAveragingResult RunVideoRotationAveraging(
                                       mutable_imu_edges,
                                       q_IC,
                                       &bg_init)) {
-      if (options.gyro_bias_prior.isZero(1e-12)) {
-        effective_gyro_bias_prior = bg_init;
-      }
       ApplyUniformGyroBiasAndReintegrate(
           bg_init, &imu_state_params, &mutable_imu_edges);
       result.initial_gyro_bias = bg_init;
@@ -1027,7 +1004,6 @@ RotationAveragingResult RunVideoRotationAveraging(
                                            /*has_imu=*/true,
                                            options.refine_gyro_bias,
                                            q_IC,
-                                           effective_gyro_bias_prior,
                                            &mutable_imu_edges,
                                            &imu_state_params,
                                            problem)) {

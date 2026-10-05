@@ -27,10 +27,6 @@ struct VideoRotationAveragingOptions {
   PoseRecord imu_from_cam;
   bool refine_gyro_bias = true;
   bool auto_initialize_gyro_bias = true;
-  bool use_gyro_bias_prior = true;
-  Eigen::Vector3d gyro_bias_prior = Eigen::Vector3d::Zero();
-  double gyro_bias_prior_stddev = 0.1;
-  bool apply_bias_prior_to_all_frames = false;
   double visual_rotation_stddev_deg = 0.2;
   double imu_tracking_cauchy_scale_deg = 0.75;
   double reintegrate_angle_norm_thres = 1e-4;
