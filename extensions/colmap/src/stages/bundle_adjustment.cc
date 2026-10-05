@@ -369,10 +369,8 @@ class DefaultBundleAdjuster {
       gravity_magnitude_ = 9.81;
     }
 
-    Eigen::Vector3d bg_init = options_.gyro_bias_prior;
-    Eigen::Vector3d ba_init = options_.accel_bias_prior;
-    effective_gyro_bias_prior_ = options_.gyro_bias_prior;
-    effective_accel_bias_prior_ = options_.accel_bias_prior;
+    Eigen::Vector3d bg_init = Eigen::Vector3d::Zero();
+    Eigen::Vector3d ba_init = Eigen::Vector3d::Zero();
     CollectImuImageIdsAndInitStates(bg_init, ba_init);
 
     // Stage 1: Estimate initial gyroscope bias via InertialRotationCostFunctor.
@@ -451,10 +449,6 @@ class DefaultBundleAdjuster {
     if (summary.IsSolutionUsable() && bg_mean.allFinite() &&
         bg_mean.norm() < 1.0) {
       *bg_init = bg_mean;
-      if (options_.gyro_bias_prior.isZero(1e-12) &&
-          options_.apply_bias_prior_to_all_frames) {
-        effective_gyro_bias_prior_ = *bg_init;
-      }
       ApplyUniformBiasesAndReintegrate(*bg_init, ba_init);
     }
   }
@@ -493,11 +487,8 @@ class DefaultBundleAdjuster {
       const bool init_gravity,
       const bool init_states,
       const bool optimize_accel_bias,
-      const Eigen::Vector3d& ba_prior,
       const int max_iterations,
       std::unordered_map<ImageId, Eigen::Vector3d>* centers) {
-    const double visual_pos_var = options_.fix_all_poses ? 0.0 : (1e-2 * 1e-2);
-
     ceres::Problem problem;
     for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
       const Eigen::Quaterniond q_cw_phys_1 =
@@ -508,12 +499,9 @@ class DefaultBundleAdjuster {
           (edge.q_iori_2_xyzw.conjugate() *
            pose_params_.at(edge.image_id2).rotation())
               .normalized();
-      Eigen::Matrix<double, 9, 9> cov_9x9 =
+      const Eigen::Matrix<double, 9, 9> cov_9x9 =
           colmap::ExtractPositionVelocityAccelBiasCovariance(
               edge.data.covariance);
-      if (visual_pos_var > 0.0) {
-        cov_9x9.topLeftCorner<3, 3>().diagonal().array() += visual_pos_var;
-      }
       const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
           colmap::ComputeSubBlockSqrtInformation<9>(cov_9x9);
       ceres::CostFunction* cost =
@@ -534,7 +522,7 @@ class DefaultBundleAdjuster {
                                imu_state_params_.at(edge.image_id2).data());
     }
 
-    if (!init_states || !options_.refine_imu_scale) {
+    if (!init_states || !options_.refine_imu_scale || optimize_accel_bias) {
       problem.SetParameterBlockConstant(&log_scale_);
     }
     gravity_direction_.normalize();
@@ -561,8 +549,7 @@ class DefaultBundleAdjuster {
       constant_state_indices.insert(constant_state_indices.end(), {6, 7, 8});
     }
 
-    for (std::size_t idx = 0; idx < imu_image_ids_.size(); ++idx) {
-      const ImageId image_id = imu_image_ids_[idx];
+    for (const ImageId image_id : imu_image_ids_) {
       double* state_ptr = imu_state_params_.at(image_id).data();
       if (!problem.HasParameterBlock(state_ptr)) continue;
       if (constant_state_indices.size() == 9) {
@@ -570,13 +557,6 @@ class DefaultBundleAdjuster {
       } else {
         colmap::SetManifold(
             &problem, state_ptr, WrapSubsetManifold(9, constant_state_indices));
-      }
-      if (idx == 0 && optimize_accel_bias && init_states &&
-          options_.refine_accel_bias) {
-        problem.AddResidualBlock(
-            colmap::BiasPriorCostFunctor<9>::CreateAccel(ba_prior, 0.1),
-            nullptr,
-            state_ptr);
       }
     }
 
@@ -605,17 +585,15 @@ class DefaultBundleAdjuster {
     SolveInertialPositioningStep(init_gravity,
                                  init_states,
                                  /*optimize_accel_bias=*/false,
-                                 *ba_init,
                                  /*max_iterations=*/25,
                                  &centers);
 
-    // Sub-pass 2b: Jointly refine accelerometer bias, scale, gravity, and
-    // velocities when accelerometer bias refinement is enabled.
+    // Sub-pass 2b: Refine accelerometer bias, gravity direction, and velocities
+    // with scale held at the Sub-pass 2a estimate.
     if (init_states && options_.refine_accel_bias &&
         SolveInertialPositioningStep(init_gravity,
                                      init_states,
                                      /*optimize_accel_bias=*/true,
-                                     *ba_init,
                                      /*max_iterations=*/25,
                                      &centers)) {
       Eigen::Vector3d ba_mean = Eigen::Vector3d::Zero();
@@ -625,10 +603,6 @@ class DefaultBundleAdjuster {
       ba_mean /= static_cast<double>(imu_image_ids_.size());
       if (ba_mean.allFinite() && ba_mean.norm() < 2.0) {
         *ba_init = ba_mean;
-        if (options_.accel_bias_prior.isZero(1e-12) &&
-            options_.apply_bias_prior_to_all_frames) {
-          effective_accel_bias_prior_ = *ba_init;
-        }
         ApplyUniformBiasesAndReintegrate(bg_init, *ba_init);
       }
     }
@@ -941,7 +915,7 @@ class DefaultBundleAdjuster {
       }
     }
 
-    // 4. Per-frame 9D IMU states [v(3), bg(3), ba(3)] and bias priors.
+    // 4. Per-frame 9D IMU states [v(3), bg(3), ba(3)].
     std::vector<int> constant_state_indices;
     if (!options_.refine_imu_velocities) {
       constant_state_indices.insert(constant_state_indices.end(), {0, 1, 2});
@@ -953,8 +927,7 @@ class DefaultBundleAdjuster {
       constant_state_indices.insert(constant_state_indices.end(), {6, 7, 8});
     }
 
-    for (std::size_t idx = 0; idx < imu_image_ids_.size(); ++idx) {
-      const ImageId image_id = imu_image_ids_[idx];
+    for (const ImageId image_id : imu_image_ids_) {
       Eigen::Matrix<double, 9, 1>& state = imu_state_params_.at(image_id);
       if (!problem->HasParameterBlock(state.data())) continue;
 
@@ -964,32 +937,6 @@ class DefaultBundleAdjuster {
         colmap::SetManifold(problem,
                             state.data(),
                             WrapSubsetManifold(9, constant_state_indices));
-      }
-
-      const bool add_prior_for_frame =
-          (idx == 0) || options_.apply_bias_prior_to_all_frames;
-      if (add_prior_for_frame) {
-        if (options_.use_gyro_bias_prior && options_.refine_gyro_bias) {
-          problem->AddResidualBlock(
-              colmap::BiasPriorCostFunctor<9>::CreateGyro(
-                  effective_gyro_bias_prior_, options_.gyro_bias_prior_stddev),
-              nullptr,
-              state.data());
-          if (count_diagnostics) {
-            ++result_.diagnostics.num_imu_bias_prior_residuals;
-          }
-        }
-        if (options_.use_accel_bias_prior && options_.refine_accel_bias) {
-          problem->AddResidualBlock(
-              colmap::BiasPriorCostFunctor<9>::CreateAccel(
-                  effective_accel_bias_prior_,
-                  options_.accel_bias_prior_stddev),
-              nullptr,
-              state.data());
-          if (count_diagnostics) {
-            ++result_.diagnostics.num_imu_bias_prior_residuals;
-          }
-        }
       }
     }
   }
@@ -1403,8 +1350,6 @@ class DefaultBundleAdjuster {
   double gravity_magnitude_ = 9.81;
   double log_scale_ = 0.0;
   Eigen::Vector3d gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
-  Eigen::Vector3d effective_gyro_bias_prior_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d effective_accel_bias_prior_ = Eigen::Vector3d::Zero();
   colmap::Rigid3d imu_from_cam_metric_;
   colmap::Rigid3d imu_from_cam_params_;
   std::vector<ImuEdgeRecord> mutable_imu_edges_;
@@ -1478,11 +1423,6 @@ void BundleAdjustmentOptions::Validate() const {
     if (!std::isfinite(initial_log_scale) ||
         !initial_gravity_direction.allFinite() ||
         initial_gravity_direction.norm() <= 1e-12 ||
-        !gyro_bias_prior.allFinite() ||
-        !std::isfinite(gyro_bias_prior_stddev) ||
-        gyro_bias_prior_stddev <= 0.0 || !accel_bias_prior.allFinite() ||
-        !std::isfinite(accel_bias_prior_stddev) ||
-        accel_bias_prior_stddev <= 0.0 ||
         !std::isfinite(imu_from_cam_rotation_prior_stddev_deg) ||
         imu_from_cam_rotation_prior_stddev_deg <= 0.0 ||
         !std::isfinite(imu_from_cam_translation_prior_stddev) ||
