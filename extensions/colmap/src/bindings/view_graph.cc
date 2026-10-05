@@ -71,6 +71,14 @@ void BindViewGraph(py::module_& m) {
         py::arg("options"),
         py::arg("result"),
         py::arg("problem"));
+  m.def("try_salvage_pair_translation_with_known_rotation",
+        &TrySalvagePairTranslationWithKnownRotation,
+        py::arg("image1"),
+        py::arg("image2"),
+        py::arg("max_epipolar_angle_deg"),
+        py::arg("min_inliers"),
+        py::arg("min_inlier_ratio"),
+        py::arg("pair"));
 }
 
 }  // namespace vidmap

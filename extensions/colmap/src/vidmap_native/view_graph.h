@@ -53,5 +53,11 @@ FocalLengthCalibResult CalibrateFocalLengths(
 std::size_t ApplyFocalCalibration(const ViewGraphCalibrationOptions& options,
                                   const FocalLengthCalibResult& result,
                                   MappingProblem* problem);
+bool TrySalvagePairTranslationWithKnownRotation(const ImageRecord& image1,
+                                                const ImageRecord& image2,
+                                                double max_epipolar_angle_deg,
+                                                int min_inliers,
+                                                double min_inlier_ratio,
+                                                PairRecord* pair);
 
 }  // namespace vidmap
