@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 import numpy as np
+import pycolmap
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from tqdm import tqdm
 
-from vidmap.mapper.native.records import pose_record_to_pycolmap
+from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.positioning import DepthConsistencyOptions
 from vidmap.utils.logging import progress_bars_enabled
@@ -39,20 +40,21 @@ def classify_depth_consistency(
     image_data = {
         image_id: {
             "camera_id": image.camera_id,
-            "features": np.asarray(image.keypoints),
-            "depth_priors": np.asarray(image.depth_values),
-            "depth_prior_validity": np.asarray(image.depth_validity, dtype=bool),
+            "features": native.point2D_coords(image),
+            "depth_priors": np.asarray(solve_state.image_data(image_id).depth_values),
+            "depth_prior_validity": np.asarray(solve_state.image_data(image_id).depth_validity, dtype=bool),
         }
-        for image_id, image in solve_state.image_records().items()
+        for image_id, image in solve_state.reconstruction.images.items()
     }
 
     pair_data = {}
     for pair_id in consecutive_pair_ids:
-        image_pair = solve_state.pair(pair_id)
-        cam2_from_cam1 = pose_record_to_pycolmap(image_pair.geometry.cam2_from_cam1)
+        image_pair = solve_state.pair_data(pair_id)
+        image_id1, image_id2 = pycolmap.pair_id_to_image_pair(pair_id)
+        cam2_from_cam1 = solve_state.pose_graph.edges[pair_id].cam2_from_cam1
         pair_data[pair_id] = {
-            "id1": image_pair.image_id1,
-            "id2": image_pair.image_id2,
+            "id1": image_id1,
+            "id2": image_id2,
             "rotation": np.asarray(cam2_from_cam1.rotation.matrix()),
             "translation": np.asarray(cam2_from_cam1.translation),
             "matches": np.asarray(image_pair.all_matches),
@@ -167,23 +169,25 @@ class DepthConsistencyFilter:
                 initial_tainted_keypoints.update(result["tainted_keypoints"])
 
                 if self.options.depth_outlier_propagation == "boundary" and result["tainted_keypoints"]:
-                    pair = state.pair(pid)
-                    if pair.image_id1 in seq_id_to_idx and pair.image_id2 in seq_id_to_idx:
-                        idx1 = seq_id_to_idx[pair.image_id1]
-                        idx2 = seq_id_to_idx[pair.image_id2]
+                    pair = state.pair_data(pid)
+                    if (
+                        pycolmap.pair_id_to_image_pair(pid)[0] in seq_id_to_idx
+                        and pycolmap.pair_id_to_image_pair(pid)[1] in seq_id_to_idx
+                    ):
+                        idx1 = seq_id_to_idx[pycolmap.pair_id_to_image_pair(pid)[0]]
+                        idx2 = seq_id_to_idx[pycolmap.pair_id_to_image_pair(pid)[1]]
                         boundary = min(idx1, idx2)
                         for kp in result["tainted_keypoints"]:
                             tainted_kp_to_boundary[kp] = boundary
 
                 if result["is_outlier"] is not None:
-                    pair = state.pair(pid)
+                    pair = state.pair_data(pid)
                     are_lc = np.asarray(pair.are_loop_closure).copy()
                     outlier_indices = np.where(result["is_outlier"])[0]
                     for idx in outlier_indices:
                         if idx < len(are_lc):
                             are_lc[idx] = True
                     pair.are_loop_closure = np.asarray(are_lc, dtype=np.uint8)
-                    state.update_pair(pair)
 
             logger.info(f"Depth consistency: {len(initial_tainted_keypoints)} tainted keypoints from depth outliers")
 
@@ -198,19 +202,19 @@ class DepthConsistencyFilter:
 
     def propagate_boundary(self, tainted_kp_to_boundary: dict[Keypoint, int]) -> bool:
         state = self.solve_state
-        images = state.image_records()
+        images = state.reconstruction.images
         seq_id_to_idx = self.sequence_id_to_index
 
         logger.info(f"Building track membership for {len(tainted_kp_to_boundary)} tainted keypoints...")
 
-        max_kps = max(len(img.keypoints) for img in images.values())
+        max_kps = max(img.num_points2D() for img in images.values())
         kp_shift = max(max_kps + 1, 100000)
 
         all_enc1 = []
         all_enc2 = []
         for pair_id in tqdm(state.pair_order, disable=not progress_bars_enabled()):
-            image_pair = state.pair(pair_id)
-            if not image_pair.is_valid:
+            image_pair = state.pair_data(pair_id)
+            if not state.pose_graph.is_valid(pair_id):
                 continue
             inliers = np.asarray(image_pair.inlier_indices)
             if len(inliers) == 0:
@@ -220,8 +224,8 @@ class DepthConsistencyFilter:
             if len(non_lc_inliers) == 0:
                 continue
             matches = image_pair.all_matches
-            id1 = image_pair.image_id1
-            id2 = image_pair.image_id2
+            id1 = pycolmap.pair_id_to_image_pair(pair_id)[0]
+            id2 = pycolmap.pair_id_to_image_pair(pair_id)[1]
             all_enc1.append(id1 * kp_shift + matches[non_lc_inliers, 0].astype(np.int64))
             all_enc2.append(id2 * kp_shift + matches[non_lc_inliers, 1].astype(np.int64))
 
@@ -288,12 +292,12 @@ class DepthConsistencyFilter:
 
         total_lc_marked = 0
         for pair_id in state.pair_order:
-            image_pair = state.pair(pair_id)
-            if not image_pair.is_valid:
+            image_pair = state.pair_data(pair_id)
+            if not state.pose_graph.is_valid(pair_id):
                 continue
 
-            id1 = image_pair.image_id1
-            id2 = image_pair.image_id2
+            id1 = pycolmap.pair_id_to_image_pair(pair_id)[0]
+            id2 = pycolmap.pair_id_to_image_pair(pair_id)[1]
             if id1 not in seq_id_to_idx or id2 not in seq_id_to_idx:
                 continue
             idx1_seq = seq_id_to_idx[id1]
@@ -351,7 +355,6 @@ class DepthConsistencyFilter:
             if n_marked > 0:
                 are_lc[non_lc_inliers[candidate_idx[mark_mask]]] = True
                 image_pair.are_loop_closure = np.asarray(are_lc, dtype=np.uint8)
-                state.update_pair(image_pair)
                 total_lc_marked += n_marked
 
         logger.info(f"Track-aware boundary LC marking: {total_lc_marked} matches marked LC")
@@ -370,9 +373,9 @@ class DepthConsistencyFilter:
 
             depth_outliers_marked = 0
             for image_id, kp_indices in depth_outliers_per_image.items():
-                image = state.image(image_id)
+                image = state.image_data(image_id)
                 if len(image.is_depth_outlier) == 0:
-                    arr = np.zeros(len(image.keypoints), dtype=bool)
+                    arr = np.zeros(state.image(image_id).num_points2D(), dtype=bool)
                 else:
                     arr = np.asarray(image.is_depth_outlier, dtype=bool).copy()
 
@@ -381,7 +384,6 @@ class DepthConsistencyFilter:
                     depth_outliers_marked += 1
 
                 image.is_depth_outlier = np.asarray(arr, dtype=np.uint8)
-                state.update_image(image)
 
             logger.info(f"Marked {depth_outliers_marked} keypoints as depth outliers (after boundary)")
             return depth_outliers_marked > 0
@@ -404,8 +406,8 @@ class DepthConsistencyFilter:
             newly_tainted = set()
 
             for pair_id in state.pair_order:
-                image_pair = state.pair(pair_id)
-                if not image_pair.is_valid:
+                image_pair = state.pair_data(pair_id)
+                if not state.pose_graph.is_valid(pair_id):
                     continue
                 matches = image_pair.all_matches
                 are_lc = np.asarray(image_pair.are_loop_closure, dtype=bool).copy()
@@ -413,15 +415,14 @@ class DepthConsistencyFilter:
 
                 for idx in inliers:
                     if idx < len(are_lc) and not are_lc[idx]:
-                        kp1 = (image_pair.image_id1, int(matches[idx, 0]))
-                        kp2 = (image_pair.image_id2, int(matches[idx, 1]))
+                        kp1 = (pycolmap.pair_id_to_image_pair(pair_id)[0], int(matches[idx, 0]))
+                        kp2 = (pycolmap.pair_id_to_image_pair(pair_id)[1], int(matches[idx, 1]))
                         if kp1 in tainted_keypoints:
                             are_lc[idx] = True
                             new_lc_count += 1
                             newly_tainted.add(kp2)
 
                 image_pair.are_loop_closure = np.asarray(are_lc, dtype=np.uint8)
-                state.update_pair(image_pair)
 
             tainted_keypoints.update(newly_tainted)
             total_new_lc += new_lc_count

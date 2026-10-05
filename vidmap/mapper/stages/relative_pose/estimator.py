@@ -13,10 +13,10 @@ from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
 
 from vidmap.mapper.native.extension import native
-from vidmap.mapper.native.records import pose_record_from_pycolmap
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.view_graph import InlierThresholdOptions, MDRPOptions
 from vidmap.mapper.replay.cache import ReplayCache
+from vidmap.mapper.replay.evidence.canonical import snapshot_images
 from vidmap.mapper.replay.evidence.stages import capture_relative_pose_state, relative_pose_summary
 from vidmap.utils.logging import progress_bars_enabled
 
@@ -44,17 +44,15 @@ class RelativePoseEstimator:
         state = self.solve_state
         rec = self.solve_state.reconstruction
         cameras = rec.cameras
-        images = state.image_records()
+        images = rec.images
         consecutive_pair_ids = self.consecutive_pair_ids
         inlier_thresholds = self.inlier_threshold_options
         native_inlier_thresholds = build_inlier_threshold_options(inlier_thresholds)
         filtered_consecutive_pairs = set()
         identity_pose = pycolmap.Rigid3d()
-        for pair in state.pair_records().values():
-            geometry = pair.geometry
-            geometry.cam2_from_cam1 = pose_record_from_pycolmap(identity_pose)
-            pair.geometry = geometry
-            state.update_pair(pair)
+        for pair_id, edge in state.pose_graph.edges.items():
+            edge.cam2_from_cam1 = identity_pose
+            state.pair_data(pair_id).has_relative_pose = True
 
         logger.info("Estimating relative poses using MDRP")
         ransac_options = poselib.RansacOptions(
@@ -68,19 +66,22 @@ class RelativePoseEstimator:
             camera_id: poselib.Camera(camera.model.name, camera.params.tolist(), camera.width, camera.height)
             for camera_id, camera in cameras.items()
         }
-        image_feature_cache = {image_id: np.asarray(image.keypoints) for image_id, image in images.items()}
-        image_depth_cache = {image_id: np.asarray(image.depth_values) for image_id, image in images.items()}
+        image_feature_cache = {image_id: native.point2D_coords(image) for image_id, image in images.items()}
+        image_depth_cache = {
+            image_id: np.asarray(state.image_data(image_id).depth_values) for image_id, image in images.items()
+        }
         image_valid_cache = {
-            image_id: np.asarray(image.depth_validity, dtype=bool) for image_id, image in images.items()
+            image_id: np.asarray(state.image_data(image_id).depth_validity, dtype=bool)
+            for image_id, image in images.items()
         }
 
         valid_pair_ids = []
-        for image_pair_id, image_pair in tqdm(
-            state.pair_records().items(),
+        for image_pair_id in tqdm(
+            state.pair_order,
             desc="Filtering valid image pairs",
             disable=not progress_bars_enabled(),
         ):
-            if image_pair.is_valid:
+            if state.pose_graph.is_valid(image_pair_id):
                 valid_pair_ids.append(image_pair_id)
         logger.info("Estimating relative poses for %d image pairs", len(valid_pair_ids))
 
@@ -88,8 +89,6 @@ class RelativePoseEstimator:
         worker = functools.partial(
             estimate_mdrp_pose_for_pair,
             images=images,
-            compute_reproj_error_outliers=self.options.compute_reproj_error_outliers,
-            reproj_outlier_threshold=self.options.reproj_outlier_threshold,
             ransac_options=ransac_options,
             bundle_options=bundle_options,
             camera_poselib_cache=camera_poselib_cache,
@@ -99,12 +98,11 @@ class RelativePoseEstimator:
         )
         pair_args_list = []
         for image_pair_id in valid_pair_ids:
-            image_pair = state.pair(image_pair_id)
+            image_pair = state.pair_data(image_pair_id)
             pair_args_list.append(
                 (
                     image_pair_id,
-                    image_pair.image_id1,
-                    image_pair.image_id2,
+                    *pycolmap.pair_id_to_image_pair(image_pair_id),
                     image_pair.all_matches,
                 )
             )
@@ -133,51 +131,44 @@ class RelativePoseEstimator:
         valid_items: list[tuple[int, ValidMDRPResult]] = []
         for image_pair_id, result in results.items():
             if not result["is_valid"]:
-                pair = state.pair(image_pair_id)
-                pair.is_valid = False
-                state.update_pair(pair)
+                state.pose_graph.set_invalid_edge(image_pair_id)
             else:
                 valid_items.append((image_pair_id, result))
 
         for image_pair_id, result in valid_items:
-            pair = state.pair(image_pair_id)
-            pair.is_valid = True
-            geometry = pair.geometry
-            geometry.cam2_from_cam1 = pose_record_from_pycolmap(result["cam2_from_cam1"])
-            pair.geometry = geometry
-            pair.inlier_indices = np.asarray(result["inliers"], dtype=np.int32)
-            state.update_pair(pair)
+            edge = state.pose_graph.edges[image_pair_id]
+            edge.valid = True
+            edge.cam2_from_cam1 = result["cam2_from_cam1"]
+            state.pair_data(image_pair_id).inlier_indices = np.asarray(result["inliers"], dtype=np.int32)
 
         logger.info("Assigned %d/%d valid MDRP results", len(valid_items), len(results))
 
         valid_image_ids = set()
         for image_pair_id in results:
-            pair = state.pair(image_pair_id)
-            if pair.is_valid:
-                valid_image_ids.update((pair.image_id1, pair.image_id2))
+            if state.pose_graph.is_valid(image_pair_id):
+                valid_image_ids.update(pycolmap.pair_id_to_image_pair(image_pair_id))
         for image_id in sorted(valid_image_ids):
-            image = state.image(image_id)
+            image = state.image_data(image_id)
             image.depth_values = np.asarray(image.depth_values, dtype=np.float64)
             image.depth_stddevs = np.asarray(image.depth_stddevs) * self.options.depth_stddev_multiplier
-            state.update_image(image)
 
         filter_operations = (
             (
                 native.score_image_pair_inliers,
-                (native_inlier_thresholds, True, state.native_problem),
+                (native_inlier_thresholds, state.reconstruction, state.pose_graph, state.sidecars),
             ),
             (
                 native.filter_pairs_by_inlier_count,
-                (int(inlier_thresholds.min_inlier_num), state.native_problem),
+                (int(inlier_thresholds.min_inlier_num), state.pose_graph, state.sidecars),
             ),
             (
                 native.filter_pairs_by_inlier_ratio,
-                (inlier_thresholds.min_inlier_ratio, state.native_problem),
+                (inlier_thresholds.min_inlier_ratio, state.pose_graph, state.sidecars),
             ),
         )
         for operation, args in filter_operations:
             operation(*args)
-            current = {pair_id for pair_id in consecutive_pair_ids if not state.pair(pair_id).is_valid}
+            current = {pair_id for pair_id in consecutive_pair_ids if not state.pose_graph.is_valid(pair_id)}
             newly_filtered = len(current - filtered_consecutive_pairs)
             if newly_filtered:
                 logger.warning(
@@ -189,10 +180,9 @@ class RelativePoseEstimator:
         summary = (
             relative_pose_summary(
                 state,
-                state.image_records(),
+                snapshot_images(state),
                 filtered_consecutive_pairs,
                 results,
-                None,
             )
             if write_replay
             else None
@@ -203,11 +193,9 @@ class RelativePoseEstimator:
                 "state.pkl",
                 capture_relative_pose_state(
                     state,
-                    state.image_records(),
-                    consecutive_pair_ids,
+                    snapshot_images(state),
                     filtered_consecutive_pairs,
                     results,
-                    None,
                 ),
             )
             self.replay.write_json("relative_pose", "summary.json", summary)

@@ -5,7 +5,6 @@ import os
 import re
 import sys
 from argparse import ArgumentParser, Namespace
-from collections.abc import Mapping
 from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
@@ -275,7 +274,7 @@ def compose_raw_config(
     if stage == "mapping":
         if "frontend_tag" in raw:
             raise ValueError("Mapping configs no longer accept frontend_tag; select the frontend config explicitly")
-        from vidmap.repro.profile import apply_mapper_reproducibility_policy, apply_reproducibility_profile
+        from vidmap.repro.profile import apply_reproducibility_profile
 
         raw = apply_reproducibility_profile(raw)
     elif OmegaConf.select(raw, "reproducibility") is not None:
@@ -287,15 +286,10 @@ def compose_raw_config(
         raise ValueError("Mapping configs no longer accept frontend_tag; select the frontend config explicitly")
     if config_policy is not None:
         config_policy(raw)
-    explicit_keys = set()
     for key, value in parsed_overrides:
         if _is_reproducibility_key(key):
             continue
-        explicit_keys.add(key)
-        explicit_keys.update(_mapping_leaf_keys(key, value))
         OmegaConf.update(raw, key, value, merge=True, force_add=True)
-    if stage == "mapping":
-        raw = apply_mapper_reproducibility_policy(raw, projected_cli_conf, explicit_keys)
 
     if stage == "frontend":
         raw.name = source_name
@@ -332,17 +326,6 @@ def _validate_safe_component(value, label, *, allow_path=False):
         requirement = "one non-empty safe output path component"
     if not valid:
         raise ValueError(f"{label} must be {requirement}; got {value!r}")
-
-
-def _mapping_leaf_keys(prefix, value):
-    if not isinstance(value, Mapping):
-        return set()
-    leaves = set()
-    for key, child in value.items():
-        path = f"{prefix}.{key}"
-        nested = _mapping_leaf_keys(path, child)
-        leaves.update(nested or {path})
-    return leaves
 
 
 def config_source_name(source, *, stage):

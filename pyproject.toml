@@ -1,7 +1,7 @@
 [build-system]
 requires = [
   "scikit-build-core>=0.11,<0.12",
-  "pybind11==3.0.2",
+  "pybind11==3.1.0",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -32,6 +32,7 @@ dependencies = [
   "addict==2.4.0",
   "requests==2.32.4",
   "tomli==2.2.1; python_version < '3.11'",
+  "pyceres @ git+https://github.com/cvg/pyceres.git@86ffa83b7099bdc46a0c8117f606b54f2d83ff03",
   "poselib @ git+https://github.com/PoseLib/PoseLib.git@48b0fdd032534f1d76ffb5bc1536b337d5517c50",
   "lightglue @ git+https://github.com/cvg/LightGlue.git@c2f8561576f0160b2cdaa3e4634b6b61d6cf6cb8",
   "geocalib @ git+https://github.com/cvg/GeoCalib.git@982f625d822fbb2b50c65d123fd1362a5c01ec2c",

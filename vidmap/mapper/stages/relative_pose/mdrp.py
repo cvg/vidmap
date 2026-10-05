@@ -18,11 +18,7 @@ class ValidMDRPResult(TypedDict):
     is_valid: Literal[True]
     cam2_from_cam1: pycolmap.Rigid3d
     inliers: np.ndarray
-    weight: float
     rel_depth_scale: float
-    depth1_outliers: np.ndarray | None
-    depth2_outliers: np.ndarray | None
-    inlier_match_indices: np.ndarray | None
 
 
 MDRPResult: TypeAlias = InvalidMDRPResult | ValidMDRPResult
@@ -32,8 +28,6 @@ def estimate_mdrp_pose_for_pair(
     pair_args,
     *,
     images,
-    compute_reproj_error_outliers,
-    reproj_outlier_threshold,
     ransac_options,
     bundle_options,
     camera_poselib_cache,
@@ -137,56 +131,10 @@ def estimate_mdrp_pose_for_pair(
     cam2_from_cam1 = pycolmap.Rigid3d(translation=t_vec, rotation=rot)
     inlier_mask = inliers_info["inliers"]
     inliers = np.where(inlier_mask)[0].astype(np.int32)
-    weight = float(len(inliers) / len(matches))
-
-    if compute_reproj_error_outliers:
-        # Reprojection-error-based outlier detection (scale-only variant).
-        # Unproject with depth, transform, reproject — depth outliers surface as big reprojection errors.
-        R = pose_rel_calc.R
-        t = np.asarray(pose_rel_calc.t)
-
-        valid_indices = np.where(valid)[0]
-        inlier_valid_indices = valid_indices[inlier_mask]
-        pts1 = points2D_1[valid][inlier_mask]
-        pts2 = points2D_2[valid][inlier_mask]
-        d1 = depths1[valid][inlier_mask]
-        d2 = depths2[valid][inlier_mask]
-
-        # Direction 1 -> 2
-        norm1 = np.array(camera_poselib1.unproject(pts1))
-        P1_cam1 = np.column_stack([norm1 * d1[:, None], d1])
-        P1_cam2 = (R @ P1_cam1.T).T + t
-        with np.errstate(divide="ignore", invalid="ignore"):
-            P1_cam2_norm = P1_cam2[:, :2] / P1_cam2[:, 2:3]
-        pts2_proj = np.array(camera_poselib2.project(P1_cam2_norm))
-        reproj_err_1to2 = np.linalg.norm(pts2_proj - pts2, axis=1)
-
-        # Direction 2 -> 1
-        d2_scaled = scale * d2
-        norm2 = np.array(camera_poselib2.unproject(pts2))
-        P2_cam2 = np.column_stack([norm2 * d2_scaled[:, None], d2_scaled])
-        P2_cam1 = (R.T @ (P2_cam2 - t).T).T
-        with np.errstate(divide="ignore", invalid="ignore"):
-            P2_cam1_norm = P2_cam1[:, :2] / P2_cam1[:, 2:3]
-        pts1_proj = np.array(camera_poselib1.project(P2_cam1_norm))
-        reproj_err_2to1 = np.linalg.norm(pts1_proj - pts1, axis=1)
-
-        threshold = reproj_outlier_threshold
-        depth1_outlier = (reproj_err_1to2 > threshold) | ~np.isfinite(reproj_err_1to2)
-        depth2_outlier = (reproj_err_2to1 > threshold) | ~np.isfinite(reproj_err_2to1)
-    else:
-        depth1_outlier = None
-        depth2_outlier = None
-        inlier_valid_indices = None
-
     result: ValidMDRPResult = {
         "is_valid": True,
         "cam2_from_cam1": cam2_from_cam1,
         "inliers": inliers,
-        "weight": weight,
         "rel_depth_scale": scale,
-        "depth1_outliers": depth1_outlier,
-        "depth2_outliers": depth2_outlier,
-        "inlier_match_indices": inlier_valid_indices,
     }
     return image_pair_id, result

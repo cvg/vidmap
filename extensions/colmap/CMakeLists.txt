@@ -1,11 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/python/vidmap_native/_version.py" VIDMAP_VERSION_SOURCE)
-string(REGEX MATCH "__version__ = \"([0-9]+\\.[0-9]+\\.[0-9]+)(\\.dev[0-9]+)?\"" _ "${VIDMAP_VERSION_SOURCE}")
-if(NOT CMAKE_MATCH_1)
-  message(FATAL_ERROR "Cannot read the VidMap version")
-endif()
-project(vidmap_native VERSION "${CMAKE_MATCH_1}" LANGUAGES C CXX)
+project(vidmap_native LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,14 +12,14 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
-find_package(pybind11 3.0.2 CONFIG REQUIRED)
+find_package(pybind11 3.1.0 CONFIG REQUIRED)
 
-set(VIDMAP_COLMAP_VERSION "4.2.0")
+set(VIDMAP_COLMAP_VERSION "4.3.0")
 set(
   VIDMAP_COLMAP_REVISION
-  "be5e29168d4aff238409d60424812df66aac919f"
+  "ea063e6874583429143dd5c53d86c3e68c895e8f"
   CACHE STRING
-  "Official COLMAP release revision used by vidmap_native"
+  "Upstream COLMAP revision used by vidmap_native"
 )
 find_package(colmap CONFIG REQUIRED)
 if(NOT colmap_VERSION VERSION_EQUAL VIDMAP_COLMAP_VERSION)
@@ -44,20 +39,12 @@ get_target_property(
 set(
   VIDMAP_NATIVE_ALGORITHM_SOURCES
     src/types.cc
-    src/solver_playback.cc
-    src/ceres_loss.cc
-    src/solver_backend.cc
-    src/conversion.cc
-    src/mapping_problem.cc
+    src/mapping_sidecars.cc
     src/stages/image_pair_inliers.cc
     src/stages/view_graph_manipulation.cc
     src/stages/view_graph_calibration.cc
-    src/stages/track_records.cc
     src/stages/track_establishment.cc
-    src/stages/track_filter.cc
     src/stages/video_rotation_averaging.cc
-    src/stages/global_positioning.cc
-    src/stages/bundle_adjustment.cc
 )
 
 add_library(vidmap_native_algorithms STATIC ${VIDMAP_NATIVE_ALGORITHM_SOURCES})
@@ -66,6 +53,7 @@ target_include_directories(
   vidmap_native_algorithms
   PRIVATE
     src
+  PUBLIC
     ${VIDMAP_COLMAP_INCLUDE_DIRS}
 )
 target_link_libraries(vidmap_native_algorithms PUBLIC ${VIDMAP_COLMAP_ESTIMATORS_TARGET})
@@ -82,13 +70,11 @@ set(
   VIDMAP_NATIVE_BINDING_SOURCES
     src/bindings/module.cc
     src/bindings/records.cc
-    src/bindings/solver_playback.cc
-    src/bindings/mapping_problem.cc
+    src/bindings/mapping_sidecars.cc
     src/bindings/view_graph.cc
     src/bindings/tracks.cc
     src/bindings/video_rotation_averaging.cc
     src/bindings/global_positioning.cc
-    src/bindings/bundle_adjustment.cc
 )
 
 pybind11_add_module(
@@ -144,3 +130,15 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS vidmap_native_core LIBRARY DESTINATION vidmap_native)
+
+pybind11_add_module(vidmap_gp_costs NO_EXTRAS src/bindings/global_positioning_problem.cc)
+set_target_properties(vidmap_gp_costs PROPERTIES OUTPUT_NAME global_positioning)
+target_include_directories(vidmap_gp_costs PRIVATE src)
+target_link_libraries(vidmap_gp_costs PRIVATE vidmap_native_algorithms)
+install(TARGETS vidmap_gp_costs LIBRARY DESTINATION vidmap_native)
+
+pybind11_add_module(vidmap_ba_costs NO_EXTRAS src/bindings/bundle_adjustment_problem.cc)
+set_target_properties(vidmap_ba_costs PROPERTIES OUTPUT_NAME bundle_adjustment)
+target_include_directories(vidmap_ba_costs PRIVATE src ${VIDMAP_COLMAP_INCLUDE_DIRS})
+target_link_libraries(vidmap_ba_costs PRIVATE ${VIDMAP_COLMAP_ESTIMATORS_TARGET})
+install(TARGETS vidmap_ba_costs LIBRARY DESTINATION vidmap_native)

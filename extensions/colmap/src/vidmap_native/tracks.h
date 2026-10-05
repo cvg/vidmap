@@ -2,21 +2,16 @@
 
 #include <cstddef>
 #include <limits>
+#include <map>
+#include <memory>
 #include <vector>
 
-#include "vidmap_native/mapping_problem.h"
+#include "vidmap_native/mapping_sidecars.h"
 
 namespace vidmap {
 
 struct TrackEstablishmentOptions {
   double intra_image_consistency_threshold = 10.0;
-  int min_num_views_per_track = 3;
-  int required_tracks_per_view = std::numeric_limits<int>::max();
-
-  void Validate() const;
-};
-
-struct TrackProblemFilterOptions {
   int min_num_views_per_track = 3;
   int max_num_views_per_track = std::numeric_limits<int>::max();
   bool two_view_depth_gate = false;
@@ -24,39 +19,29 @@ struct TrackProblemFilterOptions {
   void Validate() const;
 };
 
-struct TrackFilterResult {
-  std::vector<TrackRecord> tracks;
-  std::size_t counter = 0;
+struct TrackEstablishmentResult {
+  std::size_t num_full_tracks = 0;
+  std::size_t num_tracks = 0;
+  std::map<Point3DId, colmap::Track> full_tracks;
+  std::map<Point3DId, TrackData> full_track_data;
 };
-
-Point3DId EncodeObservationKey(ImageId image_id, std::uint32_t feature_id);
-
-std::vector<TrackRecord> EstablishTracksFromCorrGraph(
-    const MappingProblem& problem,
-    const std::vector<ImageId>& image_order,
-    const std::vector<PairId>& pair_order,
-    const TrackEstablishmentOptions& options,
-    bool loop_closure_second_pass,
-    const std::vector<PairId>& loop_closure_pair_order = {});
-
-std::vector<TrackRecord> AppendLoopClosureObservations(
-    const MappingProblem& problem,
-    const std::vector<PairId>& pair_order,
-    const std::vector<TrackRecord>& tracks);
-
-std::vector<TrackRecord> FilterTracksForProblem(
-    const MappingProblem& problem,
-    const std::vector<ImageId>& registered_image_ids,
-    const std::vector<TrackRecord>& tracks_full,
-    const TrackProblemFilterOptions& options);
-
-TrackFilterResult FilterTracksByAngle(const MappingProblem& problem,
-                                      const std::vector<TrackRecord>& tracks,
-                                      double max_angle_error_deg = 1.0);
-
-TrackFilterResult FilterTrackTriangulationAngle(
-    const MappingProblem& problem,
-    const std::vector<TrackRecord>& tracks,
-    double min_angle_deg = 1.0);
+TrackEstablishmentResult EstablishAndCommitTracks(
+    colmap::Reconstruction&,
+    const colmap::PoseGraph&,
+    MappingSidecars&,
+    const std::vector<ImageId>&,
+    const std::vector<PairId>&,
+    const TrackEstablishmentOptions&,
+    bool,
+    bool,
+    bool);
+std::shared_ptr<colmap::CorrespondenceGraph> CreateCorrespondenceGraph(
+    const colmap::Reconstruction&,
+    const MappingSidecars&,
+    const std::vector<PairId>&);
+std::shared_ptr<colmap::CorrespondenceGraph> FilterCorrespondenceGraph(
+    const colmap::CorrespondenceGraph&,
+    const colmap::Reconstruction&,
+    const std::vector<PairId>&);
 
 }  // namespace vidmap

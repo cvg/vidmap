@@ -1,111 +1,86 @@
 import numpy as np
+import pycolmap
 import pytest
 import vidmap_native._core as native
 
 
-def test_global_positioning_ordering_names_are_current():
-    assert set(native.GlobalPositioningOrdering.__members__) == {"GROUPED", "SINGLETON"}
+def camera(camera_id=1, has_prior=False):
+    result = pycolmap.Camera(
+        camera_id=camera_id, model="PINHOLE", width=640, height=480, params=[500.0, 500.0, 320.0, 240.0]
+    )
+    result.has_prior_focal_length = has_prior
+    return result
 
 
-def camera_record(camera_id=1):
-    camera = native.CameraRecord()
-    camera.camera_id = camera_id
-    camera.model_id = 1  # PINHOLE
-    camera.width = 640
-    camera.height = 480
-    camera.params = np.array([500.0, 500.0, 320.0, 240.0])
-    return camera
+def scene(num_images=2, num_features=3):
+    reconstruction = pycolmap.Reconstruction()
+    reconstruction.add_camera_with_trivial_rig(camera())
+    sidecars = native.MappingSidecars()
+    graph = pycolmap.PoseGraph()
+    for image_id in range(1, num_images + 1):
+        image = pycolmap.Image(
+            image_id=image_id,
+            camera_id=1,
+            name=f"image-{image_id}.jpg",
+            keypoints=np.arange(num_features * 2, dtype=float).reshape(-1, 2),
+        )
+        reconstruction.add_image_with_trivial_frame(image, pycolmap.Rigid3d())
+        data = native.ImageData()
+        data.depth_values = np.ones(num_features)
+        data.depth_stddevs = np.full(num_features, 0.1)
+        data.depth_validity = np.ones(num_features, dtype=np.uint8)
+        sidecars.add_image(image_id, data)
+    return reconstruction, graph, sidecars
 
 
-def image_record(image_id, camera_id=1, num_features=3):
-    image = native.ImageRecord()
-    image.image_id = image_id
-    image.camera_id = camera_id
-    image.frame_id = image_id
-    image.name = f"image-{image_id}.jpg"
-    image.keypoints = np.arange(num_features * 2, dtype=float).reshape(-1, 2)
-    image.depth_values = np.ones(num_features)
-    image.depth_stddevs = np.full(num_features, 0.1)
-    image.depth_validity = np.ones(num_features, dtype=np.uint8)
-    return image
+def add_pair(owners, first=1, second=2, matches=((0, 1), (1, 2)), loop_rows=()):
+    _, graph, sidecars = owners
+    pair = native.PairData()
+    pair.all_matches = np.asarray(matches, dtype=np.uint32).reshape(-1, 2)
+    pair.inlier_indices = np.arange(len(matches), dtype=np.int32)
+    mask = np.zeros(len(matches), dtype=np.uint8)
+    mask[list(loop_rows)] = 1
+    pair.are_loop_closure = mask
+    pair_id = pycolmap.image_pair_to_pair_id(first, second)
+    sidecars.add_pair(pair_id, pair)
+    graph.add_edge(first, second, pycolmap.PoseGraphEdge())
+    return pair_id
 
 
-def pair_record(image_id1=1, image_id2=2):
-    pair = native.PairRecord()
-    pair.image_id1 = image_id1
-    pair.image_id2 = image_id2
-    pair.pair_id = min(image_id1, image_id2) * 2147483647 + max(image_id1, image_id2)
-    pair.all_matches = np.array([[0, 1], [1, 2]], dtype=np.uint32)
-    pair.inlier_indices = np.array([0], dtype=np.int32)
-    pair.are_loop_closure = np.array([0, 1], dtype=np.uint8)
-    return pair
+def test_metadata_mutates_without_duplicating_scene_geometry():
+    rec, _, data = scene()
+    data.image(1).depth_values = np.full(3, 2.0)
+    np.testing.assert_array_equal(data.image(1).depth_values, 2.0)
+    data.validate(rec)
 
 
-def test_mapping_problem_owns_records_and_orders_ids():
-    problem = native.MappingProblem()
-    problem.add_camera(camera_record())
-    problem.add_image(image_record(2))
-    problem.add_image(image_record(1))
-    pair = pair_record()
-    problem.add_pair(pair)
-
-    pair.all_matches = np.array([[2, 1], [1, 2]], dtype=np.uint32)
-    assert problem.image_ids == [1, 2]
-    assert problem.pair(pair.pair_id).all_matches[0, 0] == 0
-    problem.validate()
+def test_metadata_checks_feature_alignment():
+    rec, _, data = scene()
+    data.image(1).depth_stddevs = np.ones(2)
+    with pytest.raises(ValueError, match="feature-aligned"):
+        data.validate(rec)
 
 
-def test_mapping_problem_clears_tracks():
-    problem = native.MappingProblem()
-    problem.add_camera(camera_record())
-    problem.add_image(image_record(1))
-    track = native.TrackRecord()
-    track.point3D_id = 7
-    track.observations = np.array([[1, 0]], dtype=np.uint32)
-    problem.add_track(track)
-
-    problem.clear_tracks()
-
-    assert problem.num_tracks == 0
-    assert problem.point3D_ids == []
-
-
-def test_track_error_uses_colmap_default():
-    assert native.TrackRecord().error == -1.0
-
-
-def test_pair_record_rejects_misaligned_loop_closure_mask():
-    pair = pair_record()
+def test_pair_rejects_misaligned_loop_closure_mask():
+    owners = scene()
+    pair_id = add_pair(owners)
+    pair = owners[2].pair(pair_id)
     pair.are_loop_closure = np.ones(1, dtype=np.uint8)
     with pytest.raises(ValueError, match="loop-closure mask"):
         pair.validate()
 
 
-def test_problem_rejects_feature_index_outside_image():
-    problem = native.MappingProblem()
-    problem.add_camera(camera_record())
-    problem.add_image(image_record(1, num_features=1))
-    problem.add_image(image_record(2, num_features=1))
-    pair = pair_record()
-    problem.add_pair(pair)
-    with pytest.raises(ValueError, match="missing feature"):
-        problem.validate()
+def test_metadata_rejects_feature_index_outside_image():
+    owners = scene(num_features=1)
+    add_pair(owners)
+    with pytest.raises(ValueError, match="unknown feature"):
+        owners[2].validate(owners[0])
 
 
-def test_problem_rejects_duplicate_ids():
-    problem = native.MappingProblem()
-    problem.add_camera(camera_record())
-    with pytest.raises(ValueError, match="already exists"):
-        problem.add_camera(camera_record())
-
-
-def test_native_classes_are_not_colmap_types():
-    classes = (
-        native.CameraRecord,
-        native.ImageRecord,
-        native.PairRecord,
-        native.TrackRecord,
-        native.MappingProblem,
-    )
-    assert all(cls.__module__ == "vidmap_native._core" for cls in classes)
-    assert all("colmap" not in cls.__name__.lower() for cls in classes)
+def test_release_workspace_retains_image_metadata():
+    owners = scene()
+    pair_id = add_pair(owners)
+    owners[2].clear_pairs()
+    with pytest.raises(IndexError):
+        owners[2].pair(pair_id)
+    assert len(owners[2].image(1).depth_values) == 3

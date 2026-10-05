@@ -14,12 +14,8 @@ from .canonical import (
     count_content_hash,
     hash_array_like,
     hash_pose_translation,
-    image_has_pose,
     image_pose,
-    image_value,
     inlier_array,
-    int_sort_key,
-    pair_cam2_from_cam1,
     pose_rotation,
     rotation_matrix,
     rotation_quaternion,
@@ -33,7 +29,7 @@ def cameras_summary(cameras: dict | None) -> dict:
     items = () if cameras is None else cameras.items()
     for camera_id, camera in sorted(items, key=lambda item: int(item[0])):
         h.update(int(camera_id).to_bytes(8, "little", signed=False))
-        h.update(_camera_model_id(camera).to_bytes(4, "little", signed=True))
+        h.update(int(camera.model).to_bytes(4, "little", signed=True))
         h.update(int(camera.width).to_bytes(8, "little", signed=False))
         h.update(int(camera.height).to_bytes(8, "little", signed=False))
         h.update(_camera_params_hash(camera.params).encode())
@@ -48,14 +44,10 @@ def _camera_params_hash(params: Any) -> str:
     return hashlib.sha1(arr.tobytes()).hexdigest()[:16]
 
 
-def _camera_model_id(camera: Any) -> int:
-    if isinstance(camera, pycolmap.Camera):
-        return int(camera.model)
-    return int(camera.model_id)
-
-
 def native_problem_summary(state: Any) -> dict:
-    items = sorted(state.pair_records().items(), key=lambda item: int(item[0]))
+    if state.replay_graph_summary is not None:
+        return state.replay_graph_summary
+    items = [(pid, state.pair_data(pid)) for pid in sorted(state.pair_order)]
     n_pairs = 0
     n_valid = 0
     total_matches = 0
@@ -65,7 +57,7 @@ def native_problem_summary(state: Any) -> dict:
 
     for pid, pair in items:
         n_pairs += 1
-        valid = bool(pair.is_valid)
+        valid = state.pose_graph.is_valid(pid)
         n_valid += int(valid)
         matches = np.asarray(pair.all_matches)
         inliers = inlier_array(pair)
@@ -89,13 +81,10 @@ def native_problem_summary(state: Any) -> dict:
 _IMAGE_ARRAY_FIELDS = (
     "features",
     "features_undist",
-    "angular_stddevs",
     "depth_priors",
     "depth_prior_stddevs",
     "depth_prior_validity",
-    "is_inlier",
     "is_depth_outlier",
-    "is_track_anchor",
 )
 
 
@@ -122,10 +111,10 @@ def images_summary(images: dict) -> dict:
 
     for iid, image in items:
         n_images += 1
-        has_pose = image_has_pose(image)
+        has_pose = image.has_pose
         n_registered += int(has_pose)
-        features = np.asarray(image_value(image, "features"))
-        depth_priors = np.asarray(image_value(image, "depth_priors"))
+        features = np.asarray(image.features)
+        depth_priors = np.asarray(image.depth_priors)
         total_features += int(features.shape[0]) if features.ndim else 0
         total_depth_priors += int(depth_priors.shape[0]) if depth_priors.ndim else 0
 
@@ -136,7 +125,7 @@ def images_summary(images: dict) -> dict:
         for field in _IMAGE_ARRAY_FIELDS:
             bump(
                 h_arrays[field],
-                hash_array_like(image_value(image, field)).encode(),
+                hash_array_like(getattr(image, field)).encode(),
             )
 
         pose = image_pose(image)
@@ -186,13 +175,6 @@ def images_summary(images: dict) -> dict:
     }
 
 
-def track_observation_lists(track: Any) -> tuple[list, list]:
-    return (
-        list(ordered_observation_pairs(track.observations)),
-        list(ordered_observation_pairs(track.loop_closure_observations)),
-    )
-
-
 def ordered_observation_pairs(observations: list) -> tuple[tuple[int, int], ...]:
     return tuple((int(image_id), int(point2D_idx)) for image_id, point2D_idx in observations)
 
@@ -205,11 +187,10 @@ def _canonical_observation_pairs(
 
 def track_identity_map(tracks: dict | None) -> dict:
     identity_by_point3D_id = {}
-    for point3D_id, track in sorted((tracks or {}).items(), key=lambda item: int_sort_key(item[0])):
-        obs_list, lc_list = track_observation_lists(track)
+    for point3D_id, track in sorted((tracks or {}).items(), key=lambda item: int(item[0])):
         identity_by_point3D_id[int(point3D_id)] = {
-            "observations": _canonical_observation_pairs(obs_list),
-            "lc_observations": _canonical_observation_pairs(lc_list),
+            "observations": _canonical_observation_pairs(track.observations),
+            "lc_observations": _canonical_observation_pairs(track.loop_closure_observations),
         }
     return identity_by_point3D_id
 
@@ -222,7 +203,7 @@ def track_identity_summary(identity_by_point3D_id: dict | None) -> dict:
     sample = []
     for point3D_id, identity in sorted(
         (() if identity_by_point3D_id is None else identity_by_point3D_id.items()),
-        key=lambda item: int_sort_key(item[0]),
+        key=lambda item: int(item[0]),
     ):
         observations = tuple(identity["observations"])
         lc_observations = tuple(identity["lc_observations"])
@@ -264,8 +245,6 @@ def track_records_summary(tracks: dict | None) -> dict:
     h_track_id = hashlib.sha1()
     h_track_id_order = hashlib.sha1()
     h_xyz = hashlib.sha1()
-    h_color = hashlib.sha1()
-    h_error = hashlib.sha1()
     h_obs = hashlib.sha1()
     h_obs_order = hashlib.sha1()
     h_lc_obs = hashlib.sha1()
@@ -276,7 +255,8 @@ def track_records_summary(tracks: dict | None) -> dict:
 
     for tid, track in items:
         n_tracks += 1
-        obs_list, lc_list = track_observation_lists(track)
+        obs_list = ordered_observation_pairs(track.observations)
+        lc_list = ordered_observation_pairs(track.loop_closure_observations)
         total_obs += len(obs_list)
         total_lc_obs += len(lc_list)
         for image_id, _ in obs_list:
@@ -296,17 +276,10 @@ def track_records_summary(tracks: dict | None) -> dict:
 
         update_intish_hash(h_track_id, tid)
         h_xyz.update(hash_array_like(track.xyz).encode())
-        h_color.update(b"")
-        h_error.update(b"")
         h_obs.update(hash_array_like(sorted_obs).encode())
         h_lc_obs.update(hash_array_like(sorted_lc).encode())
         h_obs_order.update(stable_tuple_json_hash(ordered_obs).encode())
         h_lc_obs_order.update(stable_tuple_json_hash(ordered_lc).encode())
-
-        update_intish_hash(h, tid)
-        h.update(hash_array_like(track.xyz).encode())
-        h.update(hash_array_like(sorted_obs).encode())
-        h.update(hash_array_like(sorted_lc).encode())
 
         if len(sample) < 3:
             sample.append({"track_id": int(tid)})
@@ -320,8 +293,6 @@ def track_records_summary(tracks: dict | None) -> dict:
             "track_id": h_track_id.hexdigest()[:12],
             "track_id_order": h_track_id_order.hexdigest()[:12],
             "xyz": h_xyz.hexdigest()[:12],
-            "color": h_color.hexdigest()[:12],
-            "error": h_error.hexdigest()[:12],
             "observations": h_obs.hexdigest()[:12],
             "observation_tuples_ordered": h_obs_order.hexdigest()[:12],
             "lc_observations": h_lc_obs.hexdigest()[:12],
@@ -333,7 +304,9 @@ def track_records_summary(tracks: dict | None) -> dict:
 
 
 def pose_graph_summary(solve_state: Any) -> dict:
-    items = sorted(solve_state.pair_records().items(), key=lambda item: int(item[0]))
+    if solve_state.replay_pose_graph_summary is not None:
+        return solve_state.replay_pose_graph_summary
+    items = [(pid, solve_state.pair_data(pid)) for pid in sorted(solve_state.pair_order)]
     n_edges = 0
     n_valid = 0
     total_matches = 0
@@ -347,11 +320,11 @@ def pose_graph_summary(solve_state: Any) -> dict:
 
     for pid, pair in items:
         n_edges += 1
-        valid = bool(pair.is_valid)
+        valid = solve_state.pose_graph.is_valid(pid)
         n_valid += int(valid)
         num_matches = int(np.asarray(pair.all_matches).shape[0])
         total_matches += num_matches
-        pose = pair_cam2_from_cam1(pair)
+        pose = solve_state.pose_graph.edges[pid].cam2_from_cam1 if pair.has_relative_pose else None
         h.update(int(pid).to_bytes(8, "little", signed=False))
         h.update(b"\x01" if valid else b"\x00")
         h.update(int(num_matches).to_bytes(4, "little", signed=False))
@@ -407,16 +380,9 @@ def reconstruction_summary(images: dict, tracks: dict | None, cameras: dict | No
     return reconstruction_summary_from_tracks_summary(images, track_records_summary(tracks), cameras)
 
 
-def colmap_reconstruction_summary(rec: Any) -> dict:
+def colmap_reconstruction_summary(rec: pycolmap.Reconstruction | None) -> dict:
     if rec is None:
         return {"exists": False}
-    if not all(hasattr(rec, name) for name in ("num_images", "num_reg_images", "num_points3D")):
-        return {
-            "exists": True,
-            "num_images": len(getattr(rec, "images", {}) or {}),
-            "num_reg_images": len(getattr(rec, "images", {}) or {}),
-            "num_points3D": len(getattr(rec, "points3D", {}) or {}),
-        }
     return {
         "exists": True,
         "num_images": int(rec.num_images()),

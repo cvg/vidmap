@@ -90,26 +90,10 @@ class MapperOptions:
             return self
 
         replay_only = []
-        for field in (
-            "roundtrip_before_ba",
-            "canonical_checkpoint",
-        ):
-            if getattr(self.gp.common, field):
-                replay_only.append(f"gp.common.{field}")
-        for field in ("skip_zero_observation_points", "update_point3d_errors"):
-            if getattr(self.gp.track_filter, field):
-                replay_only.append(f"gp.track_filter.{field}")
-
         if self.gp.common.num_threads is not None:
             replay_only.append("gp.common.num_threads")
         if self.ba.num_threads is not None:
             replay_only.append("ba.num_threads")
-        if self.gp.second_pass.center_init_mode != GPOptions().second_pass.center_init_mode:
-            replay_only.append("gp.second_pass.center_init_mode")
-        if self.gp.common.parameter_ordering_strategy != GPOptions().common.parameter_ordering_strategy:
-            replay_only.append("gp.common.parameter_ordering_strategy")
-        if self.gp.common.camera_center_strategy != GPOptions().common.camera_center_strategy:
-            replay_only.append("gp.common.camera_center_strategy")
         if replay_only:
             controls = ", ".join(sorted(replay_only))
             raise ValueError(

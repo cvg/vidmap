@@ -10,19 +10,9 @@ import numpy as np
 import pycolmap
 
 from vidmap.mapper.native.extension import native
-from vidmap.mapper.native.records import (
-    camera_record_from_pycolmap,
-    image_record_from_pycolmap,
-    pair_record_from_pycolmap,
-)
 from vidmap.mapper.native.state import SolveState
 
 logger = logging.getLogger(__name__)
-
-
-def _copy_optional_fundamental(target: pycolmap.TwoViewGeometry, value: np.ndarray | None) -> None:
-    if value is not None:
-        target.F = np.asarray(value, dtype=float)
 
 
 def remove_database_sidecars(database_path: Path) -> None:
@@ -46,13 +36,12 @@ def load_finalized_database(
         raise FileNotFoundError(f"Finalized mapper database not found: {database_path}")
     database = pycolmap.Database.open(str(database_path))
     try:
-        correspondence_graph = pycolmap.CorrespondenceGraph()
         rec = pycolmap.Reconstruction()
-        problem = native.MappingProblem()
+        sidecars = native.MappingSidecars()
+        pose_graph = pycolmap.PoseGraph()
 
         for cam in database.read_all_cameras():
             rec.add_camera_with_trivial_rig(cam)
-            problem.add_camera(camera_record_from_pycolmap(cam))
 
         images_colmap = database.read_all_images()
         logger.info("Loading %d images from the finalized database", len(images_colmap))
@@ -67,8 +56,7 @@ def load_finalized_database(
                 keypoints=features,
             )
             rec.add_image_with_trivial_frame(gimg, pycolmap.Rigid3d())
-            correspondence_graph.add_image(image_id, len(features))
-            problem.add_image(image_record_from_pycolmap(rec.image(image_id), features))
+            sidecars.add_image(image_id, native.ImageData())
         pair_ids, matches = database.read_all_matches()
         total_pairs = len(pair_ids)
         invalid_count = 0
@@ -85,41 +73,25 @@ def load_finalized_database(
                 invalid_count += 1
                 continue
 
-            tvg = pycolmap.TwoViewGeometry()
-            tvg.config = cfg
-            if cfg in (
-                pycolmap.TwoViewGeometryConfiguration.UNCALIBRATED,
-                pycolmap.TwoViewGeometryConfiguration.CALIBRATED,
-            ):
-                tvg.F = np.asarray(two_view.F, dtype=float)
-            elif cfg in (
-                pycolmap.TwoViewGeometryConfiguration.PLANAR,
-                pycolmap.TwoViewGeometryConfiguration.PANORAMIC,
-                pycolmap.TwoViewGeometryConfiguration.PLANAR_OR_PANORAMIC,
-            ):
-                tvg.H = np.asarray(two_view.H, dtype=float)
-                # Homography-only rows have no fundamental matrix. Some
-                # pycolmap versions expose that absence as None and reject the
-                # scalar NaN that np.asarray(None) would pass to the 3x3 setter.
-                _copy_optional_fundamental(tvg, two_view.F)
-
-            correspondence_graph.add_two_view_geometry(img1_id, img2_id, tvg)
-            problem.add_pair(
-                pair_record_from_pycolmap(
-                    int(pair_id),
-                    img1_id,
-                    img2_id,
-                    tvg,
-                    feat_matches if len(feat_matches) > 0 else np.empty((0, 2), dtype=np.uint32),
-                )
-            )
+            if img1_id == img2_id:
+                raise ValueError("An image pair must contain two distinct images")
+            rec.image(img1_id)
+            rec.image(img2_id)
+            data = native.PairData()
+            data.geometry = pycolmap.TwoViewGeometry(config=cfg, F=two_view.F, H=two_view.H)
+            data.all_matches = np.asarray(feat_matches, dtype=np.uint32).reshape((-1, 2))
+            sidecars.add_pair(int(pair_id), data)
+            edge = pycolmap.PoseGraphEdge()
+            edge.num_matches = len(feat_matches)
+            pose_graph.add_edge(img1_id, img2_id, edge)
 
         logger.info("Loaded %d image pairs; %d are invalid", total_pairs, invalid_count)
         return SolveState(
             rec,
-            problem,
+            pose_graph,
+            sidecars,
             image_order=list(rec.images.keys()),
-            pair_order=correspondence_graph.image_pairs(),
+            pair_order=sorted(pose_graph.edges),
         )
     finally:
         database.close()

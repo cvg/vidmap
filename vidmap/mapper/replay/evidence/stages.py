@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -23,8 +24,9 @@ from .canonical import (
     rotation_artifact,
     rotation_artifact_summary,
     rotation_quaternion,
+    snapshot_images,
+    snapshot_tracks,
 )
-from .fingerprints import fingerprint_scene
 from .scene import (
     cameras_summary,
     colmap_reconstruction_summary,
@@ -36,7 +38,6 @@ from .scene import (
     reconstruction_summary_from_tracks_summary,
     track_identity_map,
     track_identity_summary,
-    track_observation_lists,
     track_records_summary,
 )
 
@@ -44,12 +45,10 @@ from .scene import (
 def _track_state(tracks: dict | None) -> dict:
     state = {}
     for point3D_id, track in sorted((tracks or {}).items(), key=lambda item: int(item[0])):
-        obs_list, lc_list = track_observation_lists(track)
         state[int(point3D_id)] = {
-            "observations": ordered_observation_pairs(obs_list),
-            "lc_observations": ordered_observation_pairs(lc_list),
+            "observations": ordered_observation_pairs(track.observations),
+            "lc_observations": ordered_observation_pairs(track.loop_closure_observations),
             "xyz": np.asarray(track.xyz, dtype=np.float64),
-            "is_initialized": False,
         }
     return state
 
@@ -59,21 +58,16 @@ def _image_mask_state(images: dict | None) -> dict:
     for image_id, image in sorted((images or {}).items(), key=lambda item: (0, int(item[0]))):
         state[int(image_id)] = {
             "is_depth_outlier": np.asarray(image.is_depth_outlier, dtype=bool),
-            "is_track_anchor": np.asarray(image.is_track_anchor, dtype=bool),
-            "is_inlier": np.asarray(image.is_inlier, dtype=bool),
-            "is_excluded": np.asarray([], dtype=bool),
         }
     return state
 
 
 def _pair_state(solve_state) -> dict:
     state = {}
-    for pair_id, pair in sorted(
-        solve_state.pair_records().items(),
-        key=lambda item: int(item[0]),
-    ):
+    for pair_id in sorted(solve_state.pair_order):
+        pair = solve_state.pair_data(pair_id)
         state[int(pair_id)] = {
-            "is_valid": bool(pair.is_valid),
+            "is_valid": solve_state.pose_graph.is_valid(pair_id),
             "inliers": inlier_array(pair),
             "are_lc": np.asarray(pair.are_loop_closure, dtype=bool),
         }
@@ -97,48 +91,6 @@ def _rotation_summary(images: dict) -> dict:
         "active_image_count": active,
         "rotation_fingerprint_hash": h.hexdigest()[:16],
         "sample": sample,
-    }
-
-
-def _rotation_averaging_summary(
-    solve_state,
-    images: dict,
-    *,
-    success: bool | None = None,
-    weights: dict | None = None,
-    filtered_consecutive_pairs=None,
-    random_seed=None,
-    fixed_image_id=None,
-) -> dict:
-    graph = native_problem_summary(solve_state)
-    image_fp = images_summary(images)
-    rotation_fp = _rotation_summary(images)
-    rotation_summary = rotation_artifact_summary(images)
-    active_image_ids = sorted(int(iid) for iid in (images or {}).keys())
-    inferred_fixed_image_id = (
-        int(fixed_image_id) if fixed_image_id is not None else (active_image_ids[0] if active_image_ids else None)
-    )
-    return {
-        "graph": graph,
-        "images": image_fp,
-        "active_image_count": rotation_fp["active_image_count"],
-        "valid_pair_count": graph["n_valid"],
-        "fixed_gauge_image_id": inferred_fixed_image_id,
-        "fixed_gauge_image_source": ("explicit" if fixed_image_id is not None else "first_active_image"),
-        "random_initialization": False,
-        "random_initialization_evidence": (
-            "base RA calls pyglomap.run_rotation_averaging directly with opt_ra; "
-            "only GP has random_init_scale/use_init state in this code path"
-        ),
-        "random_seed": random_seed,
-        "rotations": rotation_fp,
-        "rotation_artifact": rotation_summary,
-        "success": None if success is None else bool(success),
-        "weights": {
-            "num_weights": len(weights or {}),
-            "hash": hash_array_like([(int(pid), float(weight)) for pid, weight in sorted((weights or {}).items())]),
-        },
-        "filtered_consecutive_pairs": sorted(int(pid) for pid in (filtered_consecutive_pairs or set())),
     }
 
 
@@ -201,54 +153,45 @@ def relative_pose_summary(
     images,
     filtered_consecutive_pairs,
     mdrp_results,
-    mdrp_depth_outlier_masks,
 ) -> dict:
     return {
         "graph": native_problem_summary(solve_state),
         "images": images_summary(images),
         "filtered_consecutive_pairs": sorted(int(pid) for pid in (filtered_consecutive_pairs or set())),
         "num_mdrp_results": len(mdrp_results or {}),
-        "num_mdrp_depth_masks": len(mdrp_depth_outlier_masks or {}),
     }
 
 
 def capture_relative_pose_state(
     solve_state,
     images,
-    consecutive_pair_ids,
     filtered_consecutive_pairs,
     mdrp_results,
-    mdrp_depth_outlier_masks,
 ) -> dict:
     pair_state = {}
-    consecutive_pair_ids = set(consecutive_pair_ids or [])
     mdrp_results = mdrp_results or {}
-    for pid, pair in solve_state.pair_records().items():
+    for pid in solve_state.pair_order:
+        pair = solve_state.pair_data(pid)
         geom = pair.geometry
         result = mdrp_results.get(pid, mdrp_results.get(int(pid)))
         if isinstance(result, Mapping):
             rel_depth_scale = float(result.get("rel_depth_scale", 1.0))
-            weight = float(result.get("weight", 0.0))
-            if int(pid) in consecutive_pair_ids:
-                weight = 138.0
         else:
             rel_depth_scale = -1.0
-            weight = 0.0
         pair_state[int(pid)] = {
-            "is_valid": bool(pair.is_valid),
-            "cam2_from_cam1": solve_state.export_pair_pose(pid),
+            "is_valid": solve_state.pose_graph.is_valid(pid),
+            "cam2_from_cam1": solve_state.pose_graph.edges[pid].cam2_from_cam1,
             "inliers": inlier_array(pair),
-            "weight": weight,
             "rel_depth_scale": rel_depth_scale,
-            "config": int(geom.configuration),
+            "config": int(geom.config),
         }
 
     image_state = {}
     for iid, image in sorted(images.items(), key=lambda item: int(item[0])):
         image_state[int(iid)] = {
-            "depth_priors": np.asarray(image.depth_values),
-            "depth_prior_stddevs": np.asarray(image.depth_stddevs),
-            "depth_prior_validity": np.asarray(image.depth_validity, dtype=bool),
+            "depth_priors": np.asarray(image.depth_priors),
+            "depth_prior_stddevs": np.asarray(image.depth_prior_stddevs),
+            "depth_prior_validity": np.asarray(image.depth_prior_validity, dtype=bool),
         }
 
     return {
@@ -257,31 +200,29 @@ def capture_relative_pose_state(
         "pair_state": pair_state,
         "image_state": image_state,
         "filtered_consecutive_pairs": set(filtered_consecutive_pairs or set()),
-        "mdrp_depth_outlier_masks": mdrp_depth_outlier_masks,
         "mdrp_results_cache": mdrp_results,
         "summary": relative_pose_summary(
             solve_state,
             images,
             filtered_consecutive_pairs,
             mdrp_results,
-            mdrp_depth_outlier_masks,
         ),
     }
 
 
 def ra_summary(solve_state, images, filtered_consecutive_pairs) -> dict:
-    summary = _rotation_averaging_summary(
-        solve_state,
-        images,
-        success=True,
-        weights=None,
-        filtered_consecutive_pairs=filtered_consecutive_pairs,
-    )
-    summary["rotation_artifact"] = {
-        **summary["rotation_artifact"],
-        "file": "rotations.json",
+    graph = native_problem_summary(solve_state)
+    rotations = _rotation_summary(images)
+    return {
+        "graph": graph,
+        "images": images_summary(images),
+        "active_image_count": rotations["active_image_count"],
+        "valid_pair_count": graph["n_valid"],
+        "rotations": rotations,
+        "rotation_artifact": {**rotation_artifact_summary(images), "file": "rotations.json"},
+        "success": True,
+        "filtered_consecutive_pairs": sorted(int(pid) for pid in filtered_consecutive_pairs),
     }
-    return summary
 
 
 def tracks_summary(
@@ -289,7 +230,6 @@ def tracks_summary(
     images,
     tracks_full,
     tracks,
-    mdrp_depth_outlier_masks,
     boundary_depth_outliers_marked,
 ) -> dict:
     return {
@@ -297,8 +237,6 @@ def tracks_summary(
         "images": images_summary(images),
         "tracks_full": track_records_summary(tracks_full or {}),
         "tracks": track_records_summary(tracks or {}),
-        "num_track_anchor_masks": 0,
-        "num_mdrp_depth_masks": len(mdrp_depth_outlier_masks or {}),
         "boundary_depth_outliers_marked": bool(boundary_depth_outliers_marked),
     }
 
@@ -308,7 +246,7 @@ def ba_start_summary(rec, solve_state, tracks=None, *, track_summary=None) -> di
 
     if track_summary is None:
         track_summary = track_records_summary(tracks or {})
-    images = solve_state.image_records()
+    images = snapshot_images(solve_state)
 
     return {
         "stage": "ba_start",
@@ -333,7 +271,6 @@ def capture_tracks_state(
     images,
     tracks_full,
     tracks,
-    mdrp_depth_outlier_masks,
     boundary_depth_outliers_marked,
 ) -> dict:
     return {
@@ -343,10 +280,6 @@ def capture_tracks_state(
         "tracks": _track_state(tracks),
         "image_masks": _image_mask_state(images),
         "pair_state": _pair_state(solve_state),
-        "track_anchor_masks": {},
-        "mdrp_depth_outlier_masks": {
-            int(image_id): np.asarray(mask) for image_id, mask in (mdrp_depth_outlier_masks or {}).items()
-        },
         "boundary_depth_outliers_marked": bool(boundary_depth_outliers_marked),
     }
 
@@ -434,13 +367,13 @@ def _gp_init_scalar_map(value: Mapping | None) -> dict:
 
 def capture_gp_initial_state(
     stage: str,
-    native_opts,
+    initial_depth_map_scales,
     result: dict,
     input_summary: dict,
     tracks: dict | None = None,
 ) -> dict:
     _require_gp_debug_result(stage, result)
-    initial_dmap_scales = dict(native_opts.initial_depth_map_scales)
+    initial_dmap_scales = dict(initial_depth_map_scales)
     if not initial_dmap_scales:
         initial_dmap_scales = {int(image_id): 1.0 for image_id in sorted(result["dmap_scale_map"])}
     return {
@@ -466,14 +399,18 @@ def gp_initial_state_summary(state: dict) -> dict:
     }
 
 
-def gp_output_summary(stage: str, state, result: dict) -> dict:
-    tracks = state.track_records()
+def gp_output_summary(stage: str, state, result: dict, *, reconstruction=None, depth_outlier_masks=None) -> dict:
+    tracks = snapshot_tracks(state, reconstruction=reconstruction)
+    rec = state.reconstruction if reconstruction is None else reconstruction
+    images = snapshot_images(state, reconstruction=rec)
+    for image_id, mask in (depth_outlier_masks or {}).items():
+        images[image_id] = replace(images[image_id], is_depth_outlier=np.asarray(mask, dtype=bool))
     return {
         "stage": stage,
-        "gp_rec": fingerprint_scene(
-            state.image_records(),
+        "gp_rec": reconstruction_summary(
+            images,
             tracks,
-            state.reconstruction.cameras,
+            rec.cameras,
         ),
         "dmap_scale_map": _scale_stats(dict(result["dmap_scale_map"])),
         "success": bool(result["success"]),

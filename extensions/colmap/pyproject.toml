@@ -2,7 +2,7 @@
 requires = [
   "cmake>=3.28",
   "scikit-build-core>=0.11,<0.12",
-  "pybind11==3.0.2",
+  "pybind11==3.1.0",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -15,6 +15,7 @@ dependencies = ["numpy>=1.26"]
 
 [tool.scikit-build]
 cmake.build-type = "Release"
+cmake.define.BUILD_TESTING = "OFF"
 wheel.packages = ["python/vidmap_native"]
 sdist.include = [
   ".clang-format",

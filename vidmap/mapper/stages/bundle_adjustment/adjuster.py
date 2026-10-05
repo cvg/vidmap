@@ -14,15 +14,16 @@ import vidmap.utils.multiview_geometry as multiview_geometry
 from vidmap.mapper.checkpoints import reconstruction_checkpoint_directory
 from vidmap.mapper.focal_prior import native_focal_priors
 from vidmap.mapper.native.extension import native
-from vidmap.mapper.native.losses import native_loss_type
 from vidmap.mapper.native.state import SolveState
+from vidmap.mapper.options.positioning import LossConfig
 from vidmap.mapper.options.refinement import BAOptions, BATriangulationOptions
-from vidmap.mapper.playback_trace import PlaybackTraceRecorder
+from vidmap.mapper.playback_trace import PlaybackTraceRecorder, SolverPlaybackOptions
 from vidmap.mapper.replay.cache import ReplayCache
 from vidmap.utils.multiview_geometry import point_has_positive_depth
 from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
-from .native_options import build_bundle_adjustment_options, make_depth_constraint_record, make_depth_scale_record
+from .options import build_bundle_adjustment_options
+from .problem import DepthObservationBatch, DepthScale, run_bundle_adjustment
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class BundleAdjuster:
     observations: pycolmap.ObservationManager = field(init=False)
     triangulator: pycolmap.IncrementalTriangulator = field(init=False)
     triangulator_options: pycolmap.IncrementalTriangulatorOptions = field(init=False)
-    shift_scale: dict = field(init=False)
+    log_depth_scales: dict[int, float] = field(init=False)
     truncation_multiplier: float = field(init=False)
 
     @property
@@ -90,10 +91,7 @@ class BundleAdjuster:
     @property
     def final_depth_map_scales(self) -> dict[int, float]:
         """Return the physical raw-depth multipliers used by final BA."""
-        return {
-            int(image_id): float(np.exp(np.asarray(values, dtype=np.float64)[1]))
-            for image_id, values in self.shift_scale.items()
-        }
+        return {int(image_id): float(np.exp(value)) for image_id, value in self.log_depth_scales.items()}
 
     def adjust(self) -> None:
         pp_solves = self.options.intrinsics.principal_point_last_n_solves
@@ -134,11 +132,11 @@ class BundleAdjuster:
 
     def prepare_workspace(self) -> None:
         target_multiplier = self.options.depth.target_stddev_multiplier
-        for image in self.solve_state.image_records().values():
+        for image_id in self.solve_state.image_order:
+            image = self.solve_state.image_data(image_id)
             image.depth_stddevs = np.asarray(image.depth_stddevs) / self.depth_stddev_multiplier * target_multiplier
-            self.solve_state.update_image(image)
 
-        self.observation_graph = self.build_observation_graph()
+        self.observation_graph = self.solve_state.retriangulation_graph
         self.observations = pycolmap.ObservationManager(self.reconstruction, self.observation_graph)
         self.triangulator = pycolmap.IncrementalTriangulator(
             self.observation_graph,
@@ -146,26 +144,6 @@ class BundleAdjuster:
             self.observations,
         )
         self.triangulator_options = self.build_triangulator_options(self.options.triangulation)
-
-    def build_observation_graph(self) -> pycolmap.CorrespondenceGraph:
-        graph = pycolmap.CorrespondenceGraph()
-        for image_id, image in self.reconstruction.images.items():
-            graph.add_image(image_id, len(image.points2D))
-
-        registered_image_ids = set(self.reconstruction.images.keys())
-        for image_pair in self.solve_state.pair_records().values():
-            image_id1, image_id2 = image_pair.image_id1, image_pair.image_id2
-            if len(image_pair.inlier_indices) == 0:
-                continue
-            if image_id1 not in registered_image_ids or image_id2 not in registered_image_ids:
-                continue
-            geometry = pycolmap.TwoViewGeometry()
-            geometry.inlier_matches = image_pair.all_matches[image_pair.inlier_indices].astype(np.uint32)
-            geometry.config = pycolmap.TwoViewGeometryConfiguration.CALIBRATED
-            graph.add_two_view_geometry(image_id1, image_id2, geometry)
-
-        graph.finalize()
-        return graph
 
     def build_triangulator_options(
         self,
@@ -191,8 +169,8 @@ class BundleAdjuster:
         iteration = 0
         while iteration < self.options.normal.iterations:
             if iteration == 0:
-                self.shift_scale = {image_id: np.array([0.0, 0.0]) for image_id in self.reconstruction.images.keys()}
-                self.shift_scale = self.reset_and_retriangulate(
+                self.log_depth_scales = {image_id: 0.0 for image_id in self.reconstruction.images.keys()}
+                self.log_depth_scales = self.reset_and_retriangulate(
                     max_error_multiplier=self.options.first_iteration_error_multiplier * self.options.multiply_errors,
                 )
                 self.solve_problem(
@@ -206,7 +184,7 @@ class BundleAdjuster:
                     param_multiplier=self.options.depth.param_multiplier,
                 )
 
-            self.shift_scale = self.reset_and_retriangulate(
+            self.log_depth_scales = self.reset_and_retriangulate(
                 max_error_multiplier=(
                     self.options.first_iteration_error_multiplier * self.options.multiply_errors
                     if iteration == 0
@@ -262,20 +240,21 @@ class BundleAdjuster:
         logger.info("Annealed bundle adjustment start")
         refinement = self.options.annealing
         for iteration in range(refinement.iterations):
-            self.shift_scale = self.estimate_depth_scales()
+            self.log_depth_scales = self.estimate_log_depth_scales()
             logger.debug(
-                "[Annealed BA iter %s] Computed shift/scale for %s images",
+                "[Annealed BA iter %s] Computed depth scales for %s images",
                 iteration,
-                len(self.shift_scale),
+                len(self.log_depth_scales),
             )
-            self.shift_scale = self.reset_and_retriangulate(
+            self.log_depth_scales = self.reset_and_retriangulate(
                 max_error_multiplier=(
                     self.options.first_iteration_error_multiplier * self.options.multiply_errors
                     if iteration == 0
                     else self.options.multiply_errors
                 ),
             )
-            self.truncation_multiplier = self.estimate_truncation_multiplier()
+            points = self.point3D_table()
+            self.truncation_multiplier = self.estimate_truncation_multiplier(points)
             adapted_multiplier = refinement.depth_param_multiplier * self.truncation_multiplier
             solved = self.solve_problem(
                 policy=BASolvePolicy(
@@ -287,6 +266,7 @@ class BundleAdjuster:
                     refine_principal_point=self._refine_principal_point(refinement.iterations - iteration),
                 ),
                 param_multiplier=adapted_multiplier,
+                points=points,
             )
             if solved:
                 logger.debug(
@@ -313,8 +293,8 @@ class BundleAdjuster:
     def run_final(self) -> None:
         refinement = self.options.annealing
         logger.info("[Annealed BA] Final refinement with aggressive outlier downweighting")
-        self.shift_scale = self.estimate_depth_scales()
-        self.shift_scale = self.reset_and_retriangulate(max_error_multiplier=self.options.multiply_errors)
+        self.log_depth_scales = self.estimate_log_depth_scales()
+        self.log_depth_scales = self.reset_and_retriangulate(max_error_multiplier=self.options.multiply_errors)
         solved = self.solve_problem(
             policy=BASolvePolicy(
                 refinement=True,
@@ -335,7 +315,7 @@ class BundleAdjuster:
     def run_post_annealing_point_refinement(self) -> bool:
         """Retriangulate and refine only points under the normal BA model."""
         logger.info("Post-annealing point-only refinement start")
-        self.shift_scale = self.reset_and_retriangulate(
+        self.log_depth_scales = self.reset_and_retriangulate(
             max_error_multiplier=self.options.multiply_errors,
         )
         solved = self.solve_problem(
@@ -356,28 +336,19 @@ class BundleAdjuster:
                 0,
             )
             logger.info("Post-annealing point-only refinement done")
-            logger.info("Post-annealing point-only refinement filtered %d observations", filtered_num)
+            logger.info(
+                "Post-annealing point-only refinement filtered %d observations",
+                filtered_num,
+            )
         return solved
 
     @staticmethod
     def image_point3D_ids(image) -> np.ndarray:
-        points2D = image.points2D
-        return np.fromiter(
-            (point.point3D_id for point in points2D),
-            dtype=np.uint64,
-            count=len(points2D),
-        )
+        return native.image_point3D_ids(image)
 
     def point3D_table(self) -> Point3DTable:
         """Snapshot every point once so per-image work is numpy indexing, not pybind calls."""
-        points3D = self.reconstruction.points3D
-        ids = np.empty(len(points3D), dtype=np.int64)
-        xyz = np.empty((len(points3D), 3), dtype=np.float64)
-        track_lengths = np.empty(len(points3D), dtype=np.int64)
-        for index, (point3D_id, point) in enumerate(points3D.items()):
-            ids[index] = point3D_id
-            xyz[index] = point.xyz
-            track_lengths[index] = point.track.length()
+        ids, xyz, track_lengths = native.point3D_table(self.reconstruction)
         order = np.argsort(ids)
         return Point3DTable(
             ids=ids,
@@ -393,25 +364,25 @@ class BundleAdjuster:
         The filter is per-track independent, so one pass over the whole problem answers
         every per-image query; the caller masks with ``small_triangulation_angle_mask``.
         """
-        problem = self.solve_state.native_problem
-        records = [problem.track(point3D_id) for point3D_id in problem.point3D_ids]
-        result = native.filter_tracks_by_triangulation_angle(problem, records, min_angle)
-        small_ids = [int(track.point3D_id) for track in result.tracks if len(track.observations) == 0]
+        if not np.isfinite(min_angle) or min_angle < 0:
+            raise ValueError("minimum triangulation angle must be non-negative")
+        small_ids = self.observations.find_points3D_with_small_triangulation_angle(
+            float(min_angle), self.reconstruction.point3D_ids()
+        )
         return np.sort(np.asarray(small_ids, dtype=np.int64))
 
     @staticmethod
     def small_triangulation_angle_mask(point3D_ids, small_ids: np.ndarray) -> np.ndarray:
         return np.isin(np.asarray(point3D_ids, dtype=np.int64), small_ids)
 
-    def estimate_truncation_multiplier(self) -> float:
+    def estimate_truncation_multiplier(self, points: Point3DTable) -> float:
         whitened_residuals = []
-        points = self.point3D_table()
         for image_id in self.reconstruction.reg_image_ids():
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
             if point2D_indices.size == 0:
                 continue
-            solve_image = self.solve_state.image(image_id)
+            solve_image = self.solve_state.image_data(image_id)
             valid = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             valid_indices = point2D_indices[valid]
             if valid_indices.size == 0:
@@ -445,6 +416,7 @@ class BundleAdjuster:
         *,
         policy: BASolvePolicy,
         param_multiplier: float,
+        points: Point3DTable | None = None,
     ) -> bool:
         depth_options = self.options.depth
         refinement_options = self.options.annealing
@@ -462,15 +434,16 @@ class BundleAdjuster:
             refinement_options.depth_cutoff_cauchy_scales if policy.refinement else depth_options.cutoff_cauchy_scales
         )
 
-        self.solve_state.import_scene()
-        depth_loss_type = native_loss_type(depth_options.reg_loss_name)
+        depth_loss_type = getattr(pycolmap.LossFunctionType, depth_options.reg_loss_name.upper())
         optimized_image_ids = list(self.reconstruction.reg_image_ids())
-        points = self.point3D_table()
+        if points is None:
+            points = self.point3D_table()
         camera_ids = [self.reconstruction.images[image_id].camera_id for image_id in optimized_image_ids]
         variable_point3D_ids = points.ids[
             points.track_lengths < self.options.variable_point_track_length_threshold
         ].tolist()
-        options = build_bundle_adjustment_options(
+        options, config = build_bundle_adjustment_options(
+            reconstruction=self.reconstruction,
             image_order=optimized_image_ids,
             camera_ids=camera_ids,
             variable_point3D_ids=variable_point3D_ids,
@@ -498,7 +471,7 @@ class BundleAdjuster:
                 weight=prior_options.weight_multiplier * self.point_budget_scale,
             )
 
-        depth_constraints = []
+        depth_batches = []
         depth_scales = []
         images_without_residuals = []
         small_angle_ids = self.small_triangulation_angle_ids(depth_options.risky_triangulation_angle_deg)
@@ -508,7 +481,7 @@ class BundleAdjuster:
             if point2D_indices.size == 0:
                 images_without_residuals.append(image_id)
                 continue
-            solve_image = self.solve_state.image(image_id)
+            solve_image = self.solve_state.image_data(image_id)
             valid = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             depths = np.asarray(solve_image.depth_values)[point2D_indices]
             point2D_indices = point2D_indices[valid]
@@ -549,54 +522,45 @@ class BundleAdjuster:
                 continue
             params = param_multiplier * variances**0.5 / depths
             magnitudes = depth_magnitude_multiplier * depths**2 * inverse_uncertainty
-            loss_types = (
-                [depth_loss_type for _ in risky_mask]
-                if robust_risky_depth
-                else [native_loss_type("trivial") if risky else depth_loss_type for risky in risky_mask]
-            )
-            for point3D_id, depth, magnitude, param, constraint_loss_type in zip(
-                point3D_ids,
-                depths,
-                magnitudes,
-                params,
-                loss_types,
-            ):
-                depth_constraints.append(
-                    make_depth_constraint_record(
-                        image_id,
-                        point3D_id,
-                        depth,
-                        constraint_loss_type,
-                        param,
-                        magnitude,
-                    )
+            depth_batches.append(
+                DepthObservationBatch(
+                    image_id=image_id,
+                    point_ids=point3D_ids,
+                    depths=depths,
+                    robust_scales=params,
+                    weights=magnitudes,
+                    robust_mask=np.ones(len(depths), dtype=bool) if robust_risky_depth else ~risky_mask,
+                    loss_type=depth_loss_type,
                 )
+            )
 
             depth_scales.append(
-                make_depth_scale_record(
+                DepthScale(
                     image_id=image_id,
-                    shift_scale=self.shift_scale[image_id],
+                    log_scale=self.log_depth_scales[image_id],
                     fix_scale=policy.fix_scale,
                     use_scale_prior=policy.regularize_scale,
                     scale_prior_stddev=depth_options.scale_std,
-                    scale_prior_loss=depth_options.scale_reg_loss_name,
-                    scale_prior_weight=np.sum(mask),
+                    scale_prior_loss=LossConfig(name=depth_options.scale_reg_loss_name, weight=float(np.sum(mask))),
                 )
             )
 
         logger.debug("Solving bundle-adjustment problem")
         playback_sink = None
+        playback_options = SolverPlaybackOptions()
         if self.playback_trace is not None:
-            playback_sink = self.playback_trace.attach_bundle_adjustment(options, self.reconstruction)
-        result = native.run_bundle_adjustment(
+            playback_sink = self.playback_trace.attach_bundle_adjustment(playback_options, self.reconstruction)
+        result = run_bundle_adjustment(
             options,
-            depth_constraints,
+            config,
+            depth_batches,
             depth_scales,
             intrinsics_priors,
-            self.solve_state.native_problem,
+            self.solve_state,
+            playback_callback=playback_sink,
+            playback_options=playback_options,
         )
         if not result.success:
-            self.solve_state.import_scene()
             diagnostics = result.diagnostics
             if playback_sink is not None:
                 playback_sink.finish_recovered(
@@ -610,16 +574,10 @@ class BundleAdjuster:
                 "and continuing"
             )
             return False
-        for image_id, values in result.depth_shift_scales.items():
-            self.shift_scale[int(image_id)] = np.asarray(values).copy()
+        self.log_depth_scales.update(result.log_depth_scales)
         if not policy.fix_all_poses:
             for image_id in images_without_residuals:
-                image_record = self.solve_state.image(image_id)
-                image_record.pose.has_pose = False
-                self.solve_state.update_image(image_record)
-        self.solve_state.export_cameras()
-        self.solve_state.export_poses()
-        self.solve_state.export_track_values()
+                self.reconstruction.deregister_frame(self.reconstruction.image(image_id).frame_id)
         logger.debug(
             "BA solved: residuals=%d, initial_cost=%.8g, final_cost=%.8g",
             result.diagnostics.num_residual_blocks,
@@ -628,15 +586,15 @@ class BundleAdjuster:
         )
         return True
 
-    def estimate_depth_scales(self) -> dict:
-        shift_scale = {}
+    def estimate_log_depth_scales(self) -> dict[int, float]:
+        log_depth_scales = {}
         points = self.point3D_table()
         for image_id in self.reconstruction.reg_image_ids():
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
             if point2D_indices.size == 0:
                 continue
-            solve_image = self.solve_state.image(image_id)
+            solve_image = self.solve_state.image_data(image_id)
             valid_prior = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             if not np.any(valid_prior):
                 continue
@@ -645,14 +603,14 @@ class BundleAdjuster:
             point3D_ids = self.image_point3D_ids(image)[point2D_indices].astype(np.int64)
             mask = observed_depths > 0
             if mask.sum() == 0:
-                logger.debug("No valid points for shift/scale estimation in image %d", image_id)
+                logger.debug("No valid points for depth-scale estimation in image %d", image_id)
                 continue
             points3D = points.xyz[points.indices(point3D_ids)]
             projected_depths = (image.cam_from_world() * points3D)[:, -1][mask]
             observed_depths = observed_depths[mask]
             proposed = np.median(np.log(projected_depths.clip(1e-6, None) / observed_depths.clip(1e-6, None)))
-            shift_scale[image_id] = np.array([0.0, proposed])
-        return shift_scale
+            log_depth_scales[image_id] = float(proposed)
+        return log_depth_scales
 
     def reset_and_retriangulate(self, *, max_error_multiplier: float) -> dict:
         triangulation = self.options.triangulation
@@ -680,11 +638,10 @@ class BundleAdjuster:
             completed,
             merged,
         )
-        return self.estimate_depth_scales()
+        return self.estimate_log_depth_scales()
 
     def retriangulate(self, options: pycolmap.IncrementalTriangulatorOptions):
         output = self.triangulator.retriangulate(options)
-        self.solve_state.import_scene()
         point3D_ids = np.array(list(self.reconstruction.points3D.keys()))
         risky_mask = self.small_triangulation_angle_mask(
             point3D_ids,
@@ -698,13 +655,13 @@ class BundleAdjuster:
             cameras_from_world = [self.reconstruction.images[image_id].cam_from_world() for image_id in image_ids]
             self.observations.delete_point3D(point3D_id)
             for lift_index, image_id in enumerate(image_ids):
-                lift_image = self.solve_state.image(image_id)
+                lift_image = self.solve_state.image_data(image_id)
                 point2D_index = point2D_indices[lift_index]
                 if not lift_image.depth_validity[point2D_index]:
                     continue
-                xy = lift_image.keypoints[point2D_index]
-                depth = lift_image.depth_values[point2D_index] * np.exp(self.shift_scale[image_id][1])
-                camera = self.reconstruction.cameras[lift_image.camera_id]
+                xy = self.reconstruction.image(image_id).point2D(point2D_index).xy
+                depth = lift_image.depth_values[point2D_index] * np.exp(self.log_depth_scales[image_id])
+                camera = self.reconstruction.image(image_id).camera
                 xyz = self.reconstruction.image(image_id).cam_from_world().inverse() * (
                     np.concatenate([camera.cam_from_img(xy[None]), np.ones((1, 1))], -1) * depth
                 )

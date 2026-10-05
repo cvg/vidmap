@@ -15,7 +15,8 @@ import yaml
 
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.inputs.database import remove_database_sidecars
-from vidmap.mapper.inputs.loader import MappingProblemLoader
+from vidmap.mapper.inputs.loader import MappingInputLoader
+from vidmap.mapper.native.extension import native
 from vidmap.mapper.options import ReplayCacheOptions
 from vidmap.mapper.options.mapper import SetupOptions
 from vidmap.mapper.options.refinement import BAOptions
@@ -158,7 +159,7 @@ def refine_run_points(
     staging = Path(tempfile.mkdtemp(prefix=f".{source.name}.point-refinement.", dir=source.parent))
     working_database = staging / "database_complete.db"
     try:
-        stage_inputs = MappingProblemLoader(
+        stage_inputs = MappingInputLoader(
             options=config.setup,
             inputs=inputs,
             sfm_outputs_dir=staging,
@@ -170,7 +171,14 @@ def refine_run_points(
         points_before = checkpoint.num_points3D()
         observations_before = checkpoint.compute_num_observations()
 
-        stage_inputs.solve_state.import_checkpoint(checkpoint)
+        state = stage_inputs.solve_state
+        state.import_checkpoint(checkpoint)
+        state.retriangulation_graph = native.create_correspondence_graph(
+            state.reconstruction,
+            state.sidecars,
+            state.pair_order,
+        )
+        state.sidecars.clear_pairs()
         adjuster = BundleAdjuster(
             solve_state=stage_inputs.solve_state,
             options=config.ba,

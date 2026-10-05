@@ -39,6 +39,19 @@ class PlaybackTraceOptions:
             raise ValueError(f"playback trace point cap cannot exceed {_NATIVE_POINT_LIMIT}")
 
 
+@dataclass
+class SolverPlaybackOptions:
+    snapshot_every_n_iterations: int = 1
+    image_ids: list[int] = field(default_factory=list)
+    point3D_ids: list[int] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.snapshot_every_n_iterations <= 0:
+            raise ValueError("playback snapshot interval must be positive")
+        if len(set(self.image_ids)) != len(self.image_ids) or len(set(self.point3D_ids)) != len(self.point3D_ids):
+            raise ValueError("duplicate ID in playback selection")
+
+
 @dataclass(kw_only=True)
 class PlaybackTraceRecorder:
     """Capture only the solver state needed by Rerun playback."""
@@ -52,8 +65,6 @@ class PlaybackTraceRecorder:
 
     @classmethod
     def preflight(cls, output_dir: Path, *, replace: bool = False) -> None:
-        _validate_global_positioning_playback_capabilities()
-        _validate_bundle_adjustment_playback_capabilities()
         destination = Path(output_dir) / "playback_trace"
         if os.path.lexists(destination):
             if replace and destination.is_dir() and not destination.is_symlink():
@@ -92,7 +103,7 @@ class PlaybackTraceRecorder:
             _started_at=time.monotonic(),
         )
 
-    def attach_global_positioning(self, options: Any, stage: str) -> None:
+    def attach_global_positioning(self, options: Any, stage: str) -> Callable[[dict[str, Any]], None]:
         subsolve = self._next_subsolve(stage)
         sink = _GlobalPositioningTraceSink(
             self.writer,
@@ -102,9 +113,9 @@ class PlaybackTraceRecorder:
             self.options,
             self._elapsed_seconds,
         )
-        options.playback.snapshot_every_n_iterations = self.options.iteration_stride
-        options.playback.callback = sink
+        options.snapshot_every_n_iterations = self.options.iteration_stride
         self._callbacks.append(sink)
+        return sink
 
     def attach_bundle_adjustment(self, options: Any, reconstruction: Any) -> BundleAdjustmentTraceSink:
         subsolve = self._next_subsolve("ba1")
@@ -115,10 +126,9 @@ class PlaybackTraceRecorder:
             self.options,
             self._elapsed_seconds,
         )
-        options.playback.snapshot_every_n_iterations = self.options.iteration_stride
-        options.playback.image_ids = [int(value) for value in sink.image_ids]
-        options.playback.point3D_ids = [int(value) for value in sink.point_ids]
-        options.playback.callback = sink
+        options.snapshot_every_n_iterations = self.options.iteration_stride
+        options.image_ids = [int(value) for value in sink.image_ids]
+        options.point3D_ids = [int(value) for value in sink.point_ids]
         self._callbacks.append(sink)
         return sink
 
@@ -542,19 +552,3 @@ def _normalized_pairs(value: Any) -> np.ndarray:
 
 def _natural_key(value: str) -> tuple[tuple[int, object], ...]:
     return tuple((0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"(\d+)", value) if part)
-
-
-def _validate_global_positioning_playback_capabilities() -> None:
-    from vidmap.mapper.native.extension import native as native_extension
-
-    options = native_extension.GlobalPositioningOptions()
-    if "playback" not in dir(options) or "callback" not in dir(options.playback):
-        raise RuntimeError("playback_trace requires vidmap_native global positioning callbacks")
-
-
-def _validate_bundle_adjustment_playback_capabilities() -> None:
-    from vidmap.mapper.native.extension import native as native_extension
-
-    options = native_extension.BundleAdjustmentOptions()
-    if "playback" not in dir(options) or "callback" not in dir(options.playback):
-        raise RuntimeError("playback_trace requires vidmap_native bundle-adjustment callbacks")

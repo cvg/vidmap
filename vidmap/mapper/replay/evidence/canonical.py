@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,10 +30,61 @@ class ReplayImageSnapshot:
     depth_priors: np.ndarray
     depth_prior_stddevs: np.ndarray
     depth_prior_validity: np.ndarray
-    angular_stddevs: np.ndarray
-    is_inlier: np.ndarray
-    is_track_anchor: np.ndarray
     is_depth_outlier: np.ndarray
+
+
+@dataclass(frozen=True)
+class ReplayTrackSnapshot:
+    xyz: np.ndarray
+    observations: np.ndarray
+    loop_closure_observations: np.ndarray
+
+
+def snapshot_images(state, *, reconstruction=None) -> dict[int, ReplayImageSnapshot]:
+    from vidmap.mapper.native.extension import native
+
+    rec = state.reconstruction if reconstruction is None else reconstruction
+    snapshots = {}
+    for image_id in state.image_order:
+        if not rec.exists_image(image_id):
+            continue
+        image = rec.image(image_id)
+        data = state.image_data(image_id)
+        snapshots[image_id] = ReplayImageSnapshot(
+            image_id=image_id,
+            camera_id=image.camera_id,
+            frame_id=image.frame_id,
+            name=image.name,
+            has_pose=image.has_pose,
+            cam_from_world=deepcopy(image.cam_from_world()) if image.has_pose else None,
+            features=native.point2D_coords(image),
+            features_undist=np.asarray(data.bearings).copy(),
+            depth_priors=np.asarray(data.depth_values).copy(),
+            depth_prior_stddevs=np.asarray(data.depth_stddevs).copy(),
+            depth_prior_validity=np.asarray(data.depth_validity, dtype=bool),
+            is_depth_outlier=np.asarray(data.is_depth_outlier, dtype=bool),
+        )
+    return snapshots
+
+
+def snapshot_tracks(state, *, reconstruction=None) -> dict[int, ReplayTrackSnapshot]:
+    rec = state.reconstruction if reconstruction is None else reconstruction
+    sidecar_ids = set(state.sidecars.track_ids)
+    snapshots = {}
+    for point_id, point in rec.points3D.items():
+        data = state.sidecars.track(point_id) if point_id in sidecar_ids else None
+        snapshots[point_id] = ReplayTrackSnapshot(
+            xyz=point.xyz.copy(),
+            observations=np.asarray(
+                [(el.image_id, el.point2D_idx) for el in point.track.elements], dtype=np.uint32
+            ).reshape((-1, 2)),
+            loop_closure_observations=(
+                np.asarray(data.loop_closure_observations).copy()
+                if data is not None
+                else np.empty((0, 2), dtype=np.uint32)
+            ),
+        )
+    return snapshots
 
 
 def file_hash(path: Path) -> str:
@@ -81,10 +133,6 @@ def stable_tuple_json_hash(rows: list[tuple]) -> str:
     return hashlib.sha1(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-def int_sort_key(value: Any) -> tuple[int, Any]:
-    return (0, int(value))
-
-
 def update_intish_hash(h: Any, value: Any) -> None:
     h.update(str(int(value)).encode())
     h.update(b"\x00")
@@ -103,92 +151,16 @@ def count_content_hash(*values: Any) -> str:
     return hashlib.sha1(json.dumps(values, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-def pair_cam2_from_cam1(pair: Any) -> Any:
-    pose = pair.geometry.cam2_from_cam1
-    return pose if pose.has_pose else None
+def pose_rotation(pose: pycolmap.Rigid3d | None):
+    return None if pose is None else pose.rotation
 
 
-def image_value(image: Any, output_name: str) -> Any:
-    if isinstance(image, ReplayImageSnapshot):
-        values = {
-            "features": image.features,
-            "features_undist": image.features_undist,
-            "angular_stddevs": image.angular_stddevs,
-            "depth_priors": image.depth_priors,
-            "depth_prior_stddevs": image.depth_prior_stddevs,
-            "depth_prior_validity": image.depth_prior_validity,
-            "is_inlier": image.is_inlier,
-            "is_depth_outlier": image.is_depth_outlier,
-            "is_track_anchor": image.is_track_anchor,
-        }
-    else:
-        values = {
-            "features": image.keypoints,
-            "features_undist": image.bearings,
-            "angular_stddevs": image.angular_stddevs,
-            "depth_priors": image.depth_values,
-            "depth_prior_stddevs": image.depth_stddevs,
-            "depth_prior_validity": image.depth_validity,
-            "is_inlier": image.is_inlier,
-            "is_depth_outlier": image.is_depth_outlier,
-            "is_track_anchor": image.is_track_anchor,
-        }
-    value = values[output_name]
-    if output_name in {
-        "depth_prior_validity",
-        "is_inlier",
-        "is_depth_outlier",
-        "is_track_anchor",
-    }:
-        return np.asarray(value, dtype=bool)
-    return value
+def rotation_matrix(rotation) -> np.ndarray | None:
+    return None if rotation is None else np.asarray(rotation.matrix(), dtype=np.float64)
 
 
-def image_has_pose(image: Any) -> bool:
-    if isinstance(image, ReplayImageSnapshot):
-        return image.has_pose
-    return bool(image.pose.has_pose)
-
-
-def pose_rotation(pose: Any) -> Any:
-    if pose is None:
-        return None
-    if isinstance(pose, pycolmap.Rigid3d):
-        return pose.rotation
-    return pycolmap.Rotation3d(np.asarray(pose.rotation_xyzw, dtype=np.float64))
-
-
-def rotation_matrix(rotation: Any) -> np.ndarray | None:
-    if rotation is None:
-        return None
-    if isinstance(rotation, pycolmap.Rotation3d):
-        return np.asarray(rotation.matrix(), dtype=np.float64)
-    q = np.asarray(rotation.rotation_xyzw, dtype=np.float64).reshape(-1)
-    if q.size != 4:
-        return None
-    norm = np.linalg.norm(q)
-    if not np.isfinite(norm) or norm == 0.0:
-        return None
-    x, y, z, w = q / norm
-    xx, yy, zz = x * x, y * y, z * z
-    xy, xz, yz = x * y, x * z, y * z
-    wx, wy, wz = w * x, w * y, w * z
-    return np.array(
-        [
-            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
-            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
-            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
-        ],
-        dtype=np.float64,
-    )
-
-
-def rotation_quaternion(rotation: Any) -> np.ndarray | None:
-    if rotation is None:
-        return None
-    quaternion = rotation.quat if isinstance(rotation, pycolmap.Rotation3d) else rotation.rotation_xyzw
-    q = np.asarray(quaternion, dtype=np.float64).reshape(-1)
-    return q if q.size == 4 else None
+def rotation_quaternion(rotation) -> np.ndarray | None:
+    return None if rotation is None else np.asarray(rotation.quat, dtype=np.float64)
 
 
 def canonical_rotation_quaternion(quat: np.ndarray | None) -> np.ndarray | None:
@@ -233,10 +205,8 @@ def json_safe_matrix(value: np.ndarray | None) -> list[list[float | None]] | Non
     return [[json_safe_float(x) for x in row] for row in arr]
 
 
-def image_pose(image):
-    if isinstance(image, ReplayImageSnapshot):
-        return image.cam_from_world if image.has_pose else None
-    return image.pose if image.pose.has_pose else None
+def image_pose(image: ReplayImageSnapshot):
+    return image.cam_from_world if image.has_pose else None
 
 
 def rotation_artifact(images: dict) -> dict:
@@ -252,7 +222,7 @@ def rotation_artifact(images: dict) -> dict:
         row = {
             "image_id": int(image_id),
             "name": str(image.name),
-            "has_pose": image_has_pose(image),
+            "has_pose": image.has_pose,
             "raw_quaternion_xyzw": json_safe_vector(raw_quat),
             "canonical_quaternion_xyzw": json_safe_vector(canonical_quat),
             "canonical_rotation_matrix": canonical_matrix,

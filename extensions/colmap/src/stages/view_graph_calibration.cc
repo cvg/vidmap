@@ -8,9 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "vidmap_native/conversion.h"
-#include "vidmap_native/view_graph.h"
 #include "stages/intrinsics_prior.h"
+#include "vidmap_native/view_graph.h"
 #include <ceres/ceres.h>
 
 namespace vidmap {
@@ -18,33 +17,36 @@ namespace {
 
 constexpr double kFocalLengthLowerBound = 1e-3;
 
-}  // namespace
-
-void ViewGraphCalibrationOptions::Validate() const {
-  if (min_focal_length_ratio <= 0.0 ||
-      max_focal_length_ratio < min_focal_length_ratio ||
-      max_calibration_error < 0.0 || loss_function_scale < 0.0 ||
-      max_num_iterations <= 0 || function_tolerance < 0.0 || num_threads == 0) {
+void ValidateCalibrationOptions(
+    const colmap::ViewGraphCalibrationOptions& options) {
+  if (options.min_focal_length_ratio <= 0.0 ||
+      options.max_focal_length_ratio < options.min_focal_length_ratio ||
+      options.max_calibration_error < 0.0 ||
+      options.loss_function_scale < 0.0 ||
+      options.solver_options.max_num_iterations <= 0 ||
+      options.solver_options.function_tolerance < 0.0 ||
+      options.solver_options.num_threads == 0) {
     throw std::invalid_argument("invalid focal calibration options");
-  }
-  std::unordered_set<CameraId> camera_ids;
-  for (const auto& prior : focal_priors) {
-    prior.Validate();
-    if (!camera_ids.insert(prior.camera_id).second) {
-      throw std::invalid_argument("VGC focal priors require unique cameras");
-    }
   }
 }
 
-FocalLengthCalibResult CalibrateFocalLengths(
-    const ViewGraphCalibrationOptions& options,
-    const MappingProblem& mapping_problem) {
-  options.Validate();
-  mapping_problem.Validate();
-  struct FocalLengthState {
-    double optimized = 0.0;
-    double initial = 0.0;
-  };
+}  // namespace
+
+std::size_t CalibrateFocalLengths(
+    const colmap::ViewGraphCalibrationOptions& options,
+    colmap::Reconstruction& reconstruction,
+    colmap::PoseGraph& graph,
+    const MappingSidecars& sidecars,
+    const std::vector<LogFocalPriorRecord>& focal_priors) {
+  ValidateCalibrationOptions(options);
+  sidecars.Validate(reconstruction);
+  std::unordered_set<CameraId> prior_camera_ids;
+  for (const auto& prior : focal_priors) {
+    prior.Validate();
+    if (!prior_camera_ids.insert(prior.camera_id).second) {
+      throw std::invalid_argument("VGC focal priors require unique cameras");
+    }
+  }
   struct FocalLengthCalibInput {
     PairId pair_id;
     CameraId camera_id1;
@@ -52,44 +54,33 @@ FocalLengthCalibResult CalibrateFocalLengths(
     Eigen::Matrix3d F;
   };
 
-  std::unordered_map<CameraId, colmap::Camera> cameras;
-  std::unordered_map<CameraId, FocalLengthState> focal_lengths;
-  cameras.reserve(mapping_problem.NumCameras());
-  focal_lengths.reserve(mapping_problem.NumCameras());
-  for (const CameraId camera_id : mapping_problem.CameraIds()) {
-    colmap::Camera camera = ToColmapCamera(mapping_problem.Camera(camera_id));
-    const double focal = camera.MeanFocalLength();
-    cameras.emplace(camera_id, std::move(camera));
-    focal_lengths.emplace(camera_id, FocalLengthState{focal, focal});
+  const auto& cameras = reconstruction.Cameras();
+  std::unordered_map<CameraId, double> focal_lengths;
+  focal_lengths.reserve(reconstruction.NumCameras());
+  for (const auto& [camera_id, camera] : cameras) {
+    focal_lengths.emplace(camera_id, camera.MeanFocalLength());
   }
-  for (const auto& prior : options.focal_priors) {
-    mapping_problem.Camera(prior.camera_id);
+  for (const auto& prior : focal_priors) {
+    reconstruction.Camera(prior.camera_id);
   }
 
   std::vector<FocalLengthCalibInput> inputs;
-  for (const PairId pair_id : mapping_problem.PairIds()) {
-    const PairRecord& pair = mapping_problem.Pair(pair_id);
-    if (!pair.is_valid || !pair.geometry.has_fundamental ||
-        (pair.geometry.configuration != colmap::TwoViewGeometry::CALIBRATED &&
-         pair.geometry.configuration !=
-             colmap::TwoViewGeometry::UNCALIBRATED)) {
+  for (const auto& [pair_id, pair] : sidecars.pairs) {
+    const auto [id1, id2] = colmap::PairIdToImagePair(pair_id);
+    if (!graph.IsValid(pair_id) || !pair.geometry.F ||
+        (pair.geometry.config != colmap::TwoViewGeometry::CALIBRATED &&
+         pair.geometry.config != colmap::TwoViewGeometry::UNCALIBRATED)) {
       continue;
     }
     inputs.push_back({pair_id,
-                      mapping_problem.Image(pair.image_id1).camera_id,
-                      mapping_problem.Image(pair.image_id2).camera_id,
-                      pair.geometry.fundamental});
+                      reconstruction.Image(id1).CameraId(),
+                      reconstruction.Image(id2).CameraId(),
+                      *pair.geometry.F});
   }
 
-  FocalLengthCalibResult result;
-  if (inputs.empty()) {
-    result.success = true;
-    return result;
-  }
+  if (inputs.empty()) return 0;
 
-  auto loss_function =
-      std::make_unique<ceres::CauchyLoss>(options.loss_function_scale);
-  std::vector<std::unique_ptr<ceres::LossFunction>> focal_observation_losses;
+  auto loss_function = options.CreateLossFunction();
   ceres::Problem::Options problem_options;
   problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
   ceres::Problem problem(problem_options);
@@ -102,7 +93,7 @@ FocalLengthCalibResult CalibrateFocalLengths(
           colmap::FetzerFocalLengthSameCameraCostFunctor::Create(
               input.F, cameras.at(input.camera_id1).PrincipalPoint()),
           loss_function.get(),
-          &focal_lengths.at(input.camera_id1).optimized);
+          &focal_lengths.at(input.camera_id1));
     } else {
       block = problem.AddResidualBlock(
           colmap::FetzerFocalLengthCostFunctor::Create(
@@ -110,35 +101,26 @@ FocalLengthCalibResult CalibrateFocalLengths(
               cameras.at(input.camera_id1).PrincipalPoint(),
               cameras.at(input.camera_id2).PrincipalPoint()),
           loss_function.get(),
-          &focal_lengths.at(input.camera_id1).optimized,
-          &focal_lengths.at(input.camera_id2).optimized);
+          &focal_lengths.at(input.camera_id1),
+          &focal_lengths.at(input.camera_id2));
     }
     fetzer_blocks.push_back(block);
   }
 
-  std::size_t num_prior_observations = 0;
-  for (const auto& prior : options.focal_priors) {
-    num_prior_observations += prior.observations.rows();
-  }
-  for (const auto& prior : options.focal_priors) {
-    auto loss = prior.loss;
-    if (options.normalize_weight_by_pair_count) {
-      loss.weight = loss.weight * inputs.size() / num_prior_observations;
-    }
-    focal_observation_losses.push_back(loss.Create());
-    double* focal = &focal_lengths.at(prior.camera_id).optimized;
+  for (const auto& prior : focal_priors) {
+    double* focal = &focal_lengths.at(prior.camera_id);
     for (Eigen::Index row = 0; row < prior.observations.rows(); ++row) {
       problem.AddResidualBlock(
           new LogMeanFocalPriorCostFunction(
               1, {0}, prior.observations(row, 0), prior.observations(row, 1)),
-          focal_observation_losses.back().get(),
+          prior.loss.get(),
           focal);
     }
   }
 
   std::size_t num_cameras = 0;
   for (auto& [camera_id, camera] : cameras) {
-    double* focal = &focal_lengths.at(camera_id).optimized;
+    double* focal = &focal_lengths.at(camera_id);
     if (!problem.HasParameterBlock(focal)) continue;
     problem.SetParameterLowerBound(focal, 0, kFocalLengthLowerBound);
     if (camera.has_prior_focal_length) {
@@ -149,76 +131,58 @@ FocalLengthCalibResult CalibrateFocalLengths(
   }
 
   if (num_cameras > 0) {
-    ceres::Solver::Options solver_options;
-    solver_options.max_num_iterations = options.max_num_iterations;
-    solver_options.function_tolerance = options.function_tolerance;
+    ceres::Solver::Options solver_options = options.solver_options;
     solver_options.num_threads =
-        colmap::GetEffectiveNumThreads(options.num_threads);
+        colmap::GetEffectiveNumThreads(options.solver_options.num_threads);
     solver_options.linear_solver_type = cameras.size() < 50
                                             ? ceres::DENSE_NORMAL_CHOLESKY
                                             : ceres::SPARSE_NORMAL_CHOLESKY;
     ceres::Solver::Summary summary;
     ceres::Solve(solver_options, &problem, &summary);
     if (!summary.IsSolutionUsable()) {
-      return result;
+      throw std::runtime_error("View graph calibration failed");
     }
   }
 
   for (auto& [camera_id, focal] : focal_lengths) {
-    if (problem.HasParameterBlock(&focal.optimized)) {
-      const double ratio = focal.optimized / focal.initial;
+    if (problem.HasParameterBlock(&focal)) {
+      const double initial = cameras.at(camera_id).MeanFocalLength();
+      const double ratio = focal / initial;
       if (ratio < options.min_focal_length_ratio ||
           ratio > options.max_focal_length_ratio) {
-        focal.optimized = focal.initial;
+        focal = initial;
       }
     }
-    result.focal_lengths[camera_id] = focal.optimized;
   }
 
   ceres::Problem::EvaluateOptions evaluate_options;
   evaluate_options.num_threads =
-      colmap::GetEffectiveNumThreads(options.num_threads);
+      colmap::GetEffectiveNumThreads(options.solver_options.num_threads);
   evaluate_options.apply_loss_function = false;
   evaluate_options.residual_blocks = fetzer_blocks;
   std::vector<double> residuals;
-  problem.Evaluate(evaluate_options, nullptr, &residuals, nullptr, nullptr);
-  std::size_t residual_index = 0;
-  for (const FocalLengthCalibInput& input : inputs) {
-    result.calibration_errors_sq[input.pair_id] =
-        residuals[residual_index] * residuals[residual_index] +
-        residuals[residual_index + 1] * residuals[residual_index + 1];
-    residual_index += 2;
+  if (!problem.Evaluate(
+          evaluate_options, nullptr, &residuals, nullptr, nullptr)) {
+    throw std::runtime_error("View graph calibration evaluation failed");
   }
-  result.success = true;
-  return result;
-}
-
-std::size_t ApplyFocalCalibration(const ViewGraphCalibrationOptions& options,
-                                  const FocalLengthCalibResult& result,
-                                  MappingProblem* problem) {
-  options.Validate();
-  if (!result.success) {
-    throw std::invalid_argument("cannot apply unsuccessful calibration");
-  }
-  for (const auto& [camera_id, focal] : result.focal_lengths) {
-    CameraRecord camera = problem->Camera(camera_id);
-    if (camera.has_prior_focal_length) continue;
-    colmap::Camera converted = ToColmapCamera(camera);
-    converted.SetFocalLength(focal);
-    camera.params = Eigen::Map<const VectorXd>(converted.params.data(),
-                                               converted.params.size());
-    problem->UpdateCamera(camera);
+  for (const auto& [camera_id, focal] : focal_lengths) {
+    auto& camera = reconstruction.Camera(camera_id);
+    if (!camera.has_prior_focal_length) camera.SetFocalLength(focal);
   }
 
   const double max_error_sq =
       options.max_calibration_error * options.max_calibration_error;
   std::size_t invalidated = 0;
-  for (const auto& [pair_id, error_sq] : result.calibration_errors_sq) {
+  std::size_t residual_index = 0;
+  for (const auto& input : inputs) {
+    const double error_sq =
+        residuals[residual_index] * residuals[residual_index] +
+        residuals[residual_index + 1] * residuals[residual_index + 1];
+    residual_index += 2;
+    const PairId pair_id = input.pair_id;
     if (error_sq <= max_error_sq) continue;
-    PairRecord pair = problem->Pair(pair_id);
-    if (pair.is_valid) {
-      pair.is_valid = false;
-      problem->UpdatePair(pair);
+    if (graph.IsValid(pair_id)) {
+      graph.SetInvalidEdge(pair_id);
       ++invalidated;
     }
   }
