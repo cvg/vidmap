@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "vidmap_native/ceres_loss.h"
+#include "vidmap_native/imu_types.h"
 #include "vidmap_native/mapping_problem.h"
 #include "vidmap_native/solver_backend.h"
 #include "vidmap_native/solver_playback.h"
@@ -84,6 +85,24 @@ struct GlobalPositionerOptions {
   double temporal_acceleration_prior_loss_dead_zone = 0.0;
   double temporal_acceleration_prior_loss_huber_width = 1.0;
 
+  // Inertial Global Positioning (I-GP) options.
+  bool use_imu = true;
+  bool replace_temporal_acceleration_with_imu = true;
+  // Option GP-B (true, default): unconstrained R^3 gravity warm-start before
+  // SphereManifold<3> refinement. Option GP-A (false): direct single-stage
+  // nonlinear solve on SphereManifold<3>.
+  bool use_linear_gravity_warm_start = true;
+  bool apply_imu_scale_to_problem = true;
+  PoseRecord imu_from_cam;
+  double gravity_magnitude = 9.81;
+  Eigen::Vector3d initial_gravity_direction = Eigen::Vector3d(0.0, 0.0, -1.0);
+  double initial_scale = 1.0;
+  double imu_cost_weight = 2.5e-3;
+  double reintegration_bias_threshold = 1e-2;
+  bool enable_low_acceleration_safeguard = true;
+  double low_acceleration_min_singular_value_thres = 1e-2;
+  double low_acceleration_accel_bias_prior_stddev = 1e-2;
+
   LossConfig loss_normal_geometry;
   LossConfig loss_normal_depth;
   LossConfig loss_lc_geometry;
@@ -111,6 +130,10 @@ struct GlobalPositioningDiagnostics {
   int num_metric_depth_residuals = 0;
   int num_scale_prior_residuals = 0;
   int num_temporal_acceleration_residuals = 0;
+  int num_imu_residuals = 0;
+  int num_imu_accel_bias_prior_residuals = 0;
+  bool low_acceleration_safeguard_triggered = false;
+  double observability_min_singular_value = 0.0;
   int num_regular_observations_used = 0;
   int num_loop_closure_observations_used = 0;
   int num_bata_scales = 0;
@@ -133,10 +156,18 @@ struct GlobalPositioningResult {
   std::map<Point3DId, Eigen::Vector3d> initial_point3D_xyz;
   std::map<std::string, double> initial_bata_scales;
   std::map<std::string, double> final_bata_scales;
+  double log_scale = 0.0;
+  double scale = 1.0;
+  Eigen::Vector3d gravity_direction = Eigen::Vector3d(0.0, 0.0, -1.0);
+  Eigen::Vector3d gravity_in_world = Eigen::Vector3d(0.0, 0.0, -9.81);
+  std::map<ImageId, ImuStateRecord> imu_states;
   GlobalPositioningDiagnostics diagnostics;
 };
 
 GlobalPositioningResult RunGlobalPositioning(
-    const GlobalPositionerOptions& options, MappingProblem* problem);
+    const GlobalPositionerOptions& options,
+    MappingProblem* problem,
+    const std::vector<ImuEdgeRecord>& imu_edges = {},
+    const std::vector<ImuStateRecord>& imu_states = {});
 
 }  // namespace vidmap

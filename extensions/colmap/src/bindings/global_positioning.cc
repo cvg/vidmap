@@ -143,6 +143,33 @@ void BindGlobalPositioning(py::module_& m) {
       .def_readwrite("temporal_acceleration_prior_loss_huber_width",
                      &GlobalPositionerOptions::
                          temporal_acceleration_prior_loss_huber_width)
+      .def_readwrite("use_imu", &GlobalPositionerOptions::use_imu)
+      .def_readwrite(
+          "replace_temporal_acceleration_with_imu",
+          &GlobalPositionerOptions::replace_temporal_acceleration_with_imu)
+      .def_readwrite("use_linear_gravity_warm_start",
+                     &GlobalPositionerOptions::use_linear_gravity_warm_start)
+      .def_readwrite("apply_imu_scale_to_problem",
+                     &GlobalPositionerOptions::apply_imu_scale_to_problem)
+      .def_readwrite("imu_from_cam", &GlobalPositionerOptions::imu_from_cam)
+      .def_readwrite("gravity_magnitude",
+                     &GlobalPositionerOptions::gravity_magnitude)
+      .def_readwrite("initial_gravity_direction",
+                     &GlobalPositionerOptions::initial_gravity_direction)
+      .def_readwrite("initial_scale", &GlobalPositionerOptions::initial_scale)
+      .def_readwrite("imu_cost_weight",
+                     &GlobalPositionerOptions::imu_cost_weight)
+      .def_readwrite("reintegration_bias_threshold",
+                     &GlobalPositionerOptions::reintegration_bias_threshold)
+      .def_readwrite(
+          "enable_low_acceleration_safeguard",
+          &GlobalPositionerOptions::enable_low_acceleration_safeguard)
+      .def_readwrite(
+          "low_acceleration_min_singular_value_thres",
+          &GlobalPositionerOptions::low_acceleration_min_singular_value_thres)
+      .def_readwrite(
+          "low_acceleration_accel_bias_prior_stddev",
+          &GlobalPositionerOptions::low_acceleration_accel_bias_prior_stddev)
       .def_readwrite("loss_normal_geometry",
                      &GlobalPositionerOptions::loss_normal_geometry)
       .def_readwrite("loss_normal_depth",
@@ -178,6 +205,17 @@ void BindGlobalPositioning(py::module_& m) {
       .def_readonly(
           "num_temporal_acceleration_residuals",
           &GlobalPositioningDiagnostics::num_temporal_acceleration_residuals)
+      .def_readonly("num_imu_residuals",
+                    &GlobalPositioningDiagnostics::num_imu_residuals)
+      .def_readonly(
+          "num_imu_accel_bias_prior_residuals",
+          &GlobalPositioningDiagnostics::num_imu_accel_bias_prior_residuals)
+      .def_readonly(
+          "low_acceleration_safeguard_triggered",
+          &GlobalPositioningDiagnostics::low_acceleration_safeguard_triggered)
+      .def_readonly(
+          "observability_min_singular_value",
+          &GlobalPositioningDiagnostics::observability_min_singular_value)
       .def_readonly(
           "num_regular_observations_used",
           &GlobalPositioningDiagnostics::num_regular_observations_used)
@@ -217,16 +255,28 @@ void BindGlobalPositioning(py::module_& m) {
                     &GlobalPositioningResult::initial_bata_scales)
       .def_readonly("final_bata_scales",
                     &GlobalPositioningResult::final_bata_scales)
+      .def_readonly("log_scale", &GlobalPositioningResult::log_scale)
+      .def_readonly("scale", &GlobalPositioningResult::scale)
+      .def_readonly("gravity_direction",
+                    &GlobalPositioningResult::gravity_direction)
+      .def_readonly("gravity_in_world",
+                    &GlobalPositioningResult::gravity_in_world)
+      .def_readonly("imu_states", &GlobalPositioningResult::imu_states)
       .def_readonly("diagnostics", &GlobalPositioningResult::diagnostics);
 
   m.def(
       "run_global_positioning",
-      [](const GlobalPositionerOptions& options, MappingProblem* problem) {
+      [](const GlobalPositionerOptions& options,
+         MappingProblem* problem,
+         const std::vector<ImuEdgeRecord>& imu_edges,
+         const std::vector<ImuStateRecord>& imu_states) {
         py::gil_scoped_release release;
-        return RunGlobalPositioning(options, problem);
+        return RunGlobalPositioning(options, problem, imu_edges, imu_states);
       },
       py::arg("options"),
-      py::arg("problem"));
+      py::arg("problem"),
+      py::arg("imu_edges") = std::vector<ImuEdgeRecord>{},
+      py::arg("imu_states") = std::vector<ImuStateRecord>{});
 }
 
 }  // namespace vidmap

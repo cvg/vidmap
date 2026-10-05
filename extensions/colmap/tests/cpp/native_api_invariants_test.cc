@@ -43,6 +43,8 @@ void TestSolverDefaults() {
       "global positioning ordering default changed");
   Check(options.center_mode == vidmap::GlobalPositioningCenterMode::kFrame,
         "global positioning center default changed");
+  Check(options.use_imu && options.use_linear_gravity_warm_start,
+        "global positioning inertial defaults changed");
   options.Validate();
 }
 
@@ -79,6 +81,15 @@ void TestOptionValidation() {
   imu_ra_options.imu_gyro_bias_stddev_rad_s = -1.0;
   CheckInvalidArgument([&] { imu_ra_options.Validate(); },
                        "negative imu_gyro_bias_stddev_rad_s was accepted");
+
+  vidmap::GlobalPositionerOptions imu_gp_options;
+  imu_gp_options.initial_scale = 0.0;
+  CheckInvalidArgument([&] { imu_gp_options.Validate(); },
+                       "non-positive initial_scale was accepted");
+  imu_gp_options.initial_scale = 1.0;
+  imu_gp_options.initial_gravity_direction.setZero();
+  CheckInvalidArgument([&] { imu_gp_options.Validate(); },
+                       "zero initial_gravity_direction in GP was accepted");
 
   vidmap::BundleAdjustmentOptions bundle_options;
   bundle_options.max_num_iterations = 0;
