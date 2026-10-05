@@ -95,7 +95,7 @@ void TestOptionValidation() {
   edge_record.image_id1 = 1;
   edge_record.image_id2 = 1;
   edge_record.data.delta_t = 0.1;
-  edge_record.data.sqrt_information.setIdentity();
+  edge_record.data.sqrt_info.setIdentity();
   CheckInvalidArgument([&] { edge_record.Validate(); },
                        "self-loop ImuEdgeRecord was accepted");
   edge_record.image_id2 = 2;
