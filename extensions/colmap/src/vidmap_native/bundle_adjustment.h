@@ -117,14 +117,6 @@ struct BundleAdjustmentOptions {
   Eigen::Vector3d initial_gravity_direction = Eigen::Vector3d(0.0, 0.0, -1.0);
   PoseRecord imu_from_cam;
 
-  bool use_gyro_bias_prior = true;
-  Eigen::Vector3d gyro_bias_prior = Eigen::Vector3d::Zero();
-  double gyro_bias_prior_stddev = 0.1;
-  bool use_accel_bias_prior = true;
-  Eigen::Vector3d accel_bias_prior = Eigen::Vector3d::Zero();
-  double accel_bias_prior_stddev = 0.5;
-  bool apply_bias_prior_to_all_frames = false;
-
   bool use_imu_from_cam_prior = true;
   double imu_from_cam_rotation_prior_stddev_deg = 0.5;
   double imu_from_cam_translation_prior_stddev = 0.02;
@@ -141,7 +133,6 @@ struct BundleAdjustmentDiagnostics {
   int num_intrinsics_prior_residuals = 0;
   int num_scale_prior_residuals = 0;
   int num_imu_residuals = 0;
-  int num_imu_bias_prior_residuals = 0;
   int num_imu_extrinsics_prior_residuals = 0;
   int num_residual_blocks = 0;
   int num_parameter_blocks = 0;

@@ -150,20 +150,6 @@ void BindBundleAdjustment(py::module_& m) {
       .def_readwrite("initial_gravity_direction",
                      &BundleAdjustmentOptions::initial_gravity_direction)
       .def_readwrite("imu_from_cam", &BundleAdjustmentOptions::imu_from_cam)
-      .def_readwrite("use_gyro_bias_prior",
-                     &BundleAdjustmentOptions::use_gyro_bias_prior)
-      .def_readwrite("gyro_bias_prior",
-                     &BundleAdjustmentOptions::gyro_bias_prior)
-      .def_readwrite("gyro_bias_prior_stddev",
-                     &BundleAdjustmentOptions::gyro_bias_prior_stddev)
-      .def_readwrite("use_accel_bias_prior",
-                     &BundleAdjustmentOptions::use_accel_bias_prior)
-      .def_readwrite("accel_bias_prior",
-                     &BundleAdjustmentOptions::accel_bias_prior)
-      .def_readwrite("accel_bias_prior_stddev",
-                     &BundleAdjustmentOptions::accel_bias_prior_stddev)
-      .def_readwrite("apply_bias_prior_to_all_frames",
-                     &BundleAdjustmentOptions::apply_bias_prior_to_all_frames)
       .def_readwrite("use_imu_from_cam_prior",
                      &BundleAdjustmentOptions::use_imu_from_cam_prior)
       .def_readwrite(
@@ -190,8 +176,6 @@ void BindBundleAdjustment(py::module_& m) {
                     &BundleAdjustmentDiagnostics::num_scale_prior_residuals)
       .def_readonly("num_imu_residuals",
                     &BundleAdjustmentDiagnostics::num_imu_residuals)
-      .def_readonly("num_imu_bias_prior_residuals",
-                    &BundleAdjustmentDiagnostics::num_imu_bias_prior_residuals)
       .def_readonly(
           "num_imu_extrinsics_prior_residuals",
           &BundleAdjustmentDiagnostics::num_imu_extrinsics_prior_residuals)
