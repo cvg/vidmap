@@ -161,15 +161,6 @@ void BindGlobalPositioning(py::module_& m) {
                      &GlobalPositionerOptions::imu_cost_weight)
       .def_readwrite("reintegration_bias_threshold",
                      &GlobalPositionerOptions::reintegration_bias_threshold)
-      .def_readwrite(
-          "enable_low_acceleration_safeguard",
-          &GlobalPositionerOptions::enable_low_acceleration_safeguard)
-      .def_readwrite(
-          "low_acceleration_min_singular_value_thres",
-          &GlobalPositionerOptions::low_acceleration_min_singular_value_thres)
-      .def_readwrite(
-          "low_acceleration_accel_bias_prior_stddev",
-          &GlobalPositionerOptions::low_acceleration_accel_bias_prior_stddev)
       .def_readwrite("loss_normal_geometry",
                      &GlobalPositionerOptions::loss_normal_geometry)
       .def_readwrite("loss_normal_depth",
@@ -207,15 +198,6 @@ void BindGlobalPositioning(py::module_& m) {
           &GlobalPositioningDiagnostics::num_temporal_acceleration_residuals)
       .def_readonly("num_imu_residuals",
                     &GlobalPositioningDiagnostics::num_imu_residuals)
-      .def_readonly(
-          "num_imu_accel_bias_prior_residuals",
-          &GlobalPositioningDiagnostics::num_imu_accel_bias_prior_residuals)
-      .def_readonly(
-          "low_acceleration_safeguard_triggered",
-          &GlobalPositioningDiagnostics::low_acceleration_safeguard_triggered)
-      .def_readonly(
-          "observability_min_singular_value",
-          &GlobalPositioningDiagnostics::observability_min_singular_value)
       .def_readonly(
           "num_regular_observations_used",
           &GlobalPositioningDiagnostics::num_regular_observations_used)

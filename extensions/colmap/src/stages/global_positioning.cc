@@ -32,176 +32,6 @@
 namespace vidmap {
 namespace {
 
-class DelegatingManifold final : public ceres::Manifold {
- public:
-  explicit DelegatingManifold(std::unique_ptr<ceres::Manifold> manifold)
-      : manifold_(std::move(manifold)) {}
-
-  bool Plus(const double* x,
-            const double* delta,
-            double* x_plus_delta) const override {
-    return manifold_->Plus(x, delta, x_plus_delta);
-  }
-
-  bool PlusJacobian(const double* x, double* jacobian) const override {
-    return manifold_->PlusJacobian(x, jacobian);
-  }
-
-  bool Minus(const double* y,
-             const double* x,
-             double* y_minus_x) const override {
-    return manifold_->Minus(y, x, y_minus_x);
-  }
-
-  bool MinusJacobian(const double* x, double* jacobian) const override {
-    return manifold_->MinusJacobian(x, jacobian);
-  }
-
-  int AmbientSize() const override { return manifold_->AmbientSize(); }
-  int TangentSize() const override { return manifold_->TangentSize(); }
-
- private:
-  std::unique_ptr<ceres::Manifold> manifold_;
-};
-
-std::unique_ptr<ceres::Manifold> WrapSubsetManifold(
-    int size, const std::vector<int>& constant_indices) {
-  return std::make_unique<DelegatingManifold>(
-      colmap::CreateSubsetManifold(size, constant_indices));
-}
-
-struct ImuStateAccelBiasPriorCostFunctor {
-  ImuStateAccelBiasPriorCostFunctor(const Eigen::Vector3d& prior_accel_bias,
-                                    const double stddev)
-      : prior_accel_bias_(prior_accel_bias), inv_stddev_(1.0 / stddev) {}
-
-  static ceres::CostFunction* Create(const Eigen::Vector3d& prior_accel_bias,
-                                     const double stddev) {
-    return new ceres::
-        AutoDiffCostFunction<ImuStateAccelBiasPriorCostFunctor, 3, 9>(
-            new ImuStateAccelBiasPriorCostFunctor(prior_accel_bias, stddev));
-  }
-
-  template <typename T>
-  bool operator()(const T* const imu_state, T* residuals) const {
-    Eigen::Map<Eigen::Matrix<T, 3, 1>> r(residuals);
-    const Eigen::Map<const Eigen::Matrix<T, 3, 1>> ba(imu_state + 6);
-    r = (ba - prior_accel_bias_.cast<T>()) * T(inv_stddev_);
-    return true;
-  }
-
- private:
-  const Eigen::Vector3d prior_accel_bias_;
-  const double inv_stddev_;
-};
-
-// Strictly affine-linear inertial alignment cost functor for Option GP-B
-// warm-start over linear scale s in R, unconstrained gravity_direction in R^3,
-// metric velocities v_i in R^3, and metric blackout camera centers in R^3.
-struct LinearInertialAlignmentCostFunctor {
-  LinearInertialAlignmentCostFunctor(
-      const colmap::PreintegratedImuData* data,
-      const colmap::Rigid3d& imu_from_cam,
-      const Eigen::Quaterniond& i_from_world_q,
-      const Eigen::Quaterniond& j_from_world_q,
-      const Eigen::Matrix<double, 9, 9>& sqrt_info_9x9,
-      const bool scale_i_center,
-      const bool scale_j_center)
-      : data_(data),
-        sqrt_info_9x9_(sqrt_info_9x9),
-        scale_i_center_(scale_i_center),
-        scale_j_center_(scale_j_center) {
-    const Eigen::Quaterniond cam_from_imu_q =
-        imu_from_cam.rotation().conjugate();
-    const Eigen::Vector3d cam_from_imu_t =
-        -(cam_from_imu_q * imu_from_cam.translation());
-    const Eigen::Quaterniond world_from_i_q = i_from_world_q.conjugate();
-    const Eigen::Quaterniond world_from_j_q = j_from_world_q.conjugate();
-    world_from_i_imu_q_ = world_from_i_q * cam_from_imu_q;
-    d_W_i_ = world_from_i_q * cam_from_imu_t;
-    d_W_j_ = world_from_j_q * cam_from_imu_t;
-  }
-
-  static ceres::CostFunction* Create(
-      const colmap::PreintegratedImuData* data,
-      const colmap::Rigid3d& imu_from_cam,
-      const Eigen::Quaterniond& i_from_world_q,
-      const Eigen::Quaterniond& j_from_world_q,
-      const Eigen::Matrix<double, 9, 9>& sqrt_info_9x9,
-      const bool scale_i_center,
-      const bool scale_j_center) {
-    return new ceres::AutoDiffCostFunction<LinearInertialAlignmentCostFunctor,
-                                           9,
-                                           1,
-                                           3,
-                                           3,
-                                           3,
-                                           9,
-                                           3,
-                                           9>(
-        new LinearInertialAlignmentCostFunctor(data,
-                                               imu_from_cam,
-                                               i_from_world_q,
-                                               j_from_world_q,
-                                               sqrt_info_9x9,
-                                               scale_i_center,
-                                               scale_j_center));
-  }
-
-  template <typename T>
-  bool operator()(const T* const linear_scale,
-                  const T* const seg_translation,
-                  const T* const gravity_direction,
-                  const T* const i_center_in_world,
-                  const T* const i_imu_state,
-                  const T* const j_center_in_world,
-                  const T* const j_imu_state,
-                  T* residuals) const {
-    Eigen::Matrix<T, 3, 1> c_i = colmap::EigenVector3Map<T>(i_center_in_world);
-    if (scale_i_center_) {
-      c_i = c_i * linear_scale[0] + colmap::EigenVector3Map<T>(seg_translation);
-    }
-    Eigen::Matrix<T, 3, 1> c_j = colmap::EigenVector3Map<T>(j_center_in_world);
-    if (scale_j_center_) {
-      c_j = c_j * linear_scale[0] + colmap::EigenVector3Map<T>(seg_translation);
-    }
-    const Eigen::Matrix<T, 3, 1> p_i = c_i + d_W_i_.cast<T>();
-    const Eigen::Matrix<T, 3, 1> p_j = c_j + d_W_j_.cast<T>();
-    const Eigen::Matrix<T, 3, 1> v_i = colmap::EigenVector3Map<T>(i_imu_state);
-    const Eigen::Matrix<T, 3, 1> v_j = colmap::EigenVector3Map<T>(j_imu_state);
-    const Eigen::Matrix<T, 3, 1> gravity =
-        colmap::EigenVector3Map<T>(gravity_direction) *
-        T(data_->gravity_magnitude);
-
-    colmap::ComputeInertialPositionVelocityResiduals(
-        *data_,
-        world_from_i_imu_q_.cast<T>(),
-        p_i,
-        p_j,
-        v_i,
-        v_j,
-        gravity,
-        i_imu_state,
-        j_imu_state,
-        residuals,
-        residuals + 3,
-        residuals + 6);
-
-    Eigen::Map<Eigen::Matrix<T, 9, 1>> r_map(residuals);
-    r_map.applyOnTheLeft(sqrt_info_9x9_.cast<T>());
-    return true;
-  }
-
- private:
-  const colmap::PreintegratedImuData* data_;
-  Eigen::Quaterniond world_from_i_imu_q_;
-  Eigen::Vector3d d_W_i_;
-  Eigen::Vector3d d_W_j_;
-  Eigen::Matrix<double, 9, 9> sqrt_info_9x9_;
-  bool scale_i_center_;
-  bool scale_j_center_;
-};
-
 std::string GpObservationKey(Point3DId point3D_id,
                              ImageId image_id,
                              std::uint32_t point2D_idx,
@@ -327,7 +157,6 @@ class GlobalPositioner {
     bool has_reint = false;
     if (has_imu_) {
       AddImuConstraints(&reint_callback, &has_reint);
-      EvaluateObservabilityAndAddSafeguard();
     }
 
     if (options_.use_parameter_block_ordering) {
@@ -361,7 +190,6 @@ class GlobalPositioner {
       throw;
     }
     if (has_imu_) {
-      RefineImuScaleAndStates();
       if (gravity_direction_.norm() > 1e-6) {
         gravity_direction_.normalize();
       }
@@ -494,9 +322,8 @@ class GlobalPositioner {
     temporal_acceleration_losses_.clear();
     imu_losses_.clear();
     imu_state_params_.clear();
+    warm_start_scale_ = 1.0;
     log_scale_ = std::log(options_.initial_scale);
-    cumulative_scale_ = 1.0;
-    scale_fixed_in_main_solve_ = false;
     gravity_direction_ = options_.initial_gravity_direction.normalized();
     has_sequential_support_candidate_ = false;
     result_ = GlobalPositioningResult();
@@ -733,535 +560,11 @@ class GlobalPositioner {
     }
   }
 
-  std::size_t ComputeVisualConnectedComponents(
-      const bool allow_multi_segment,
-      const std::unordered_set<FrameId>& active_visual_frames,
-      std::unordered_map<FrameId, std::size_t>* frame_to_seg) const {
-    frame_to_seg->clear();
-    if (!allow_multi_segment || !options_.optimize_positions) {
-      for (const ImageId image_id : imu_image_ids_) {
-        const ImageRecord& img = mapping_problem_->Image(image_id);
-        if (!HasActiveCenter(img)) continue;
-        if (!options_.optimize_positions ||
-            active_visual_frames.count(img.frame_id) != 0) {
-          (*frame_to_seg)[img.frame_id] = 0;
-        }
-      }
-      return 1;
-    }
-
-    std::unordered_map<FrameId, std::vector<FrameId>> adj;
-    auto link_track_obs = [&](const MatrixX2u& obs,
-                              std::optional<FrameId>* anchor_fid) {
-      for (Eigen::Index r = 0; r < obs.rows(); ++r) {
-        const ImageId iid = obs(r, 0);
-        if (image_ids_.count(iid) == 0) continue;
-        const FrameId fid = mapping_problem_->Image(iid).frame_id;
-        if (active_visual_frames.count(fid) == 0) continue;
-        if (!anchor_fid->has_value()) {
-          *anchor_fid = fid;
-        } else if (**anchor_fid != fid) {
-          adj[**anchor_fid].push_back(fid);
-          adj[fid].push_back(**anchor_fid);
-        }
-      }
-    };
-    for (const Point3DId point3D_id : mapping_problem_->Point3DIds()) {
-      const TrackRecord& track = mapping_problem_->Track(point3D_id);
-      if (track.observations.rows() < options_.min_num_view_per_track) {
-        continue;
-      }
-      std::optional<FrameId> anchor_fid;
-      link_track_obs(track.observations, &anchor_fid);
-      if (options_.use_lc_observations) {
-        link_track_obs(track.loop_closure_observations, &anchor_fid);
-      }
-    }
-    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
-      const FrameId f1 = mapping_problem_->Image(edge.image_id1).frame_id;
-      const FrameId f2 = mapping_problem_->Image(edge.image_id2).frame_id;
-      if (active_visual_frames.count(f1) != 0 &&
-          active_visual_frames.count(f2) != 0 && f1 != f2) {
-        adj[f1].push_back(f2);
-        adj[f2].push_back(f1);
-      }
-    }
-
-    std::size_t num_segs = 0;
-    std::vector<FrameId> queue;
-    for (const ImageId image_id : imu_image_ids_) {
-      const ImageRecord& img = mapping_problem_->Image(image_id);
-      if (!HasActiveCenter(img)) continue;
-      const FrameId start_fid = img.frame_id;
-      if (active_visual_frames.count(start_fid) == 0 ||
-          frame_to_seg->count(start_fid) != 0) {
-        continue;
-      }
-      const std::size_t seg_idx = num_segs++;
-      (*frame_to_seg)[start_fid] = seg_idx;
-      queue.clear();
-      queue.push_back(start_fid);
-      for (std::size_t q_idx = 0; q_idx < queue.size(); ++q_idx) {
-        const FrameId cur = queue[q_idx];
-        const auto adj_it = adj.find(cur);
-        if (adj_it == adj.end()) continue;
-        for (const FrameId nxt : adj_it->second) {
-          if (frame_to_seg->emplace(nxt, seg_idx).second) {
-            queue.push_back(nxt);
-          }
-        }
-      }
-    }
-    return std::max<std::size_t>(1, num_segs);
-  }
-
-  void SolveLinearInertialAlignment(const bool allow_multi_segment,
-                                    const bool optimize_gravity,
-                                    const double init_seg_scale) {
-    std::unordered_set<FrameId> active_visual_frames =
-        visually_constrained_frames_;
-    if (!optimize_gravity) {
-      for (const ImageId image_id : imu_image_ids_) {
-        const ImageRecord& img = mapping_problem_->Image(image_id);
-        if (HasActiveCenter(img)) {
-          active_visual_frames.insert(img.frame_id);
-        }
-      }
-    }
-    std::unordered_map<FrameId, std::size_t> frame_to_seg;
-    const std::size_t num_segs = ComputeVisualConnectedComponents(
-        allow_multi_segment, active_visual_frames, &frame_to_seg);
-    std::vector<double> seg_scales(num_segs, init_seg_scale);
-    std::vector<Eigen::Vector3d> seg_translations(num_segs,
-                                                  Eigen::Vector3d::Zero());
-
-    constexpr double kVisualPositionJitterVariance = 0.02 * 0.02;
-
-    bool has_blackout_edges = false;
-    int num_interior_edges = 0;
-    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
-      const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-      const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-      if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
-      const bool scale_i_center =
-          !options_.optimize_positions ||
-          active_visual_frames.count(image1.frame_id) != 0;
-      const bool scale_j_center =
-          !options_.optimize_positions ||
-          active_visual_frames.count(image2.frame_id) != 0;
-      if (!scale_i_center || !scale_j_center ||
-          frame_to_seg.at(image1.frame_id) !=
-              frame_to_seg.at(image2.frame_id)) {
-        has_blackout_edges = true;
-        continue;
-      }
-      ++num_interior_edges;
-      const double dt = std::max(edge.data.delta_t, 1e-3);
-      const Eigen::Vector3d v_fd =
-          init_seg_scale * (CenterForImage(image2) - CenterForImage(image1)) /
-          dt;
-      imu_state_params_.at(edge.image_id1).head<3>() = v_fd;
-      imu_state_params_.at(edge.image_id2).head<3>() = v_fd;
-    }
-
-    // Pass 1: Solve for per-segment scales, gravity direction, and velocities
-    // using strictly interior visual-to-visual IMU edges so blackout boundary
-    // edges cannot introduce absolute-position Jacobian bias on seg_scales.
-    if (num_interior_edges > 0) {
-      ceres::Problem align_problem;
-      for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
-        const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-        const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-        if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
-        const bool scale_i_center =
-            !options_.optimize_positions ||
-            active_visual_frames.count(image1.frame_id) != 0;
-        const bool scale_j_center =
-            !options_.optimize_positions ||
-            active_visual_frames.count(image2.frame_id) != 0;
-        if (!scale_i_center || !scale_j_center) continue;
-        const std::size_t seg_idx = frame_to_seg.at(image1.frame_id);
-        if (seg_idx != frame_to_seg.at(image2.frame_id)) continue;
-        const Eigen::Quaterniond q_cw_phys_1 =
-            (edge.q_iori_1_xyzw.conjugate() * ImageRotation(image1))
-                .normalized();
-        const Eigen::Quaterniond q_cw_phys_2 =
-            (edge.q_iori_2_xyzw.conjugate() * ImageRotation(image2))
-                .normalized();
-        auto aligned_data = edge.data;
-        if (optimize_gravity) {
-          aligned_data.covariance.block<3, 3>(3, 3).diagonal().array() +=
-              kVisualPositionJitterVariance;
-        }
-        const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
-            colmap::ExtractPositionVelocityAccelBiasSqrtInformation(
-                aligned_data);
-        ceres::CostFunction* cost =
-            LinearInertialAlignmentCostFunctor::Create(&edge.data,
-                                                       imu_from_cam_metric_,
-                                                       q_cw_phys_1,
-                                                       q_cw_phys_2,
-                                                       sqrt_info_9x9,
-                                                       /*scale_i_center=*/true,
-                                                       /*scale_j_center=*/true);
-        align_problem.AddResidualBlock(
-            cost,
-            nullptr,
-            &seg_scales[seg_idx],
-            seg_translations[seg_idx].data(),
-            gravity_direction_.data(),
-            CenterForImage(image1).data(),
-            imu_state_params_.at(edge.image_id1).data(),
-            CenterForImage(image2).data(),
-            imu_state_params_.at(edge.image_id2).data());
-      }
-      for (std::size_t m = 0; m < num_segs; ++m) {
-        if (align_problem.HasParameterBlock(seg_translations[m].data())) {
-          align_problem.SetParameterBlockConstant(seg_translations[m].data());
-        }
-      }
-      if (!optimize_gravity &&
-          align_problem.HasParameterBlock(gravity_direction_.data())) {
-        align_problem.SetParameterBlockConstant(gravity_direction_.data());
-      }
-      for (const ImageId image_id : imu_image_ids_) {
-        const ImageRecord& image = mapping_problem_->Image(image_id);
-        if (!HasActiveCenter(image)) continue;
-        double* c_ptr = CenterForImage(image).data();
-        if (align_problem.HasParameterBlock(c_ptr)) {
-          align_problem.SetParameterBlockConstant(c_ptr);
-        }
-        double* state_ptr = imu_state_params_.at(image_id).data();
-        if (align_problem.HasParameterBlock(state_ptr)) {
-          colmap::SetManifold(&align_problem,
-                              state_ptr,
-                              WrapSubsetManifold(9, {3, 4, 5, 6, 7, 8}));
-        }
-      }
-      ceres::Solver::Options align_opts;
-      options_.solver_backend.Apply(&align_opts);
-      align_opts.minimizer_progress_to_stdout = false;
-      align_opts.max_num_iterations = 25;
-      align_opts.num_threads =
-          colmap::GetEffectiveNumThreads(options_.num_threads);
-      ceres::Solver::Summary align_summary;
-      ceres::Solve(align_opts, &align_problem, &align_summary);
-
-      if (optimize_gravity) {
-        if (gravity_direction_.norm() > 1e-6) {
-          gravity_direction_.normalize();
-        } else {
-          gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
-        }
-      }
-    }
-
-    const double s_warm = std::max(1e-4, seg_scales[0]);
-    const bool starts_from_random_positions =
-        options_.optimize_positions && options_.generate_random_positions &&
-        !options_.use_init;
-    if (options_.optimize_positions && !options_.use_metric_depth_constraint) {
-      if (std::isfinite(s_warm) && s_warm < 1e5) {
-        for (auto& [image_id, center] : image_centers_) {
-          const ImageRecord& img = mapping_problem_->Image(image_id);
-          const auto seg_it = frame_to_seg.find(img.frame_id);
-          if (seg_it != frame_to_seg.end()) {
-            const std::size_t m = seg_it->second;
-            const double s_m = std::clamp(seg_scales[m], 1e-4, 1e5);
-            center = s_m * center;
-          }
-        }
-        for (auto& [frame_id, center] : frame_centers_) {
-          const auto seg_it = frame_to_seg.find(frame_id);
-          if (seg_it != frame_to_seg.end()) {
-            const std::size_t m = seg_it->second;
-            const double s_m = std::clamp(seg_scales[m], 1e-4, 1e5);
-            center = s_m * center;
-          }
-        }
-        for (auto& [point3D_id, xyz] : point_xyz_) {
-          std::size_t best_seg = 0;
-          if (num_segs > 1) {
-            std::vector<int> counts(num_segs, 0);
-            const TrackRecord& track = mapping_problem_->Track(point3D_id);
-            for (Eigen::Index r = 0; r < track.observations.rows(); ++r) {
-              const ImageId obs_iid = track.observations(r, 0);
-              if (image_ids_.count(obs_iid) == 0) continue;
-              const FrameId fid = mapping_problem_->Image(obs_iid).frame_id;
-              const auto seg_it = frame_to_seg.find(fid);
-              if (seg_it != frame_to_seg.end()) {
-                ++counts[seg_it->second];
-              }
-            }
-            best_seg = static_cast<std::size_t>(
-                std::distance(counts.begin(),
-                              std::max_element(counts.begin(), counts.end())));
-          }
-          const double s_m = std::clamp(seg_scales[best_seg], 1e-4, 1e5);
-          xyz = s_m * xyz;
-        }
-
-        // Pass 2: During initial warm-start, if there are blackout frames or
-        // multiple disconnected visual components, solve for blackout camera
-        // centers and inter-segment translations at metric scale.
-        if (optimize_gravity && (has_blackout_edges || num_segs > 1)) {
-          int prev_vis_idx = -1;
-          for (int i = 0; i < static_cast<int>(imu_image_ids_.size()); ++i) {
-            const ImageRecord& img = mapping_problem_->Image(imu_image_ids_[i]);
-            if (!HasActiveCenter(img)) continue;
-            if (active_visual_frames.count(img.frame_id) != 0) {
-              if (prev_vis_idx >= 0 && i - prev_vis_idx > 1) {
-                const ImageRecord& prev_img =
-                    mapping_problem_->Image(imu_image_ids_[prev_vis_idx]);
-                const Eigen::Vector3d& c_start = CenterForImage(prev_img);
-                const Eigen::Vector3d& c_end = CenterForImage(img);
-                const bool same_seg = frame_to_seg.at(prev_img.frame_id) ==
-                                      frame_to_seg.at(img.frame_id);
-                for (int k = prev_vis_idx + 1; k < i; ++k) {
-                  const ImageRecord& blk_img =
-                      mapping_problem_->Image(imu_image_ids_[k]);
-                  if (!HasActiveCenter(blk_img)) continue;
-                  if (same_seg) {
-                    const double alpha = static_cast<double>(k - prev_vis_idx) /
-                                         static_cast<double>(i - prev_vis_idx);
-                    CenterForImage(blk_img) =
-                        (1.0 - alpha) * c_start + alpha * c_end;
-                  } else {
-                    CenterForImage(blk_img) = c_start;
-                  }
-                }
-              } else if (prev_vis_idx < 0 && i > 0) {
-                const Eigen::Vector3d& c_end = CenterForImage(img);
-                for (int k = 0; k < i; ++k) {
-                  const ImageRecord& blk_img =
-                      mapping_problem_->Image(imu_image_ids_[k]);
-                  if (HasActiveCenter(blk_img)) CenterForImage(blk_img) = c_end;
-                }
-              }
-              prev_vis_idx = i;
-            }
-          }
-          if (prev_vis_idx >= 0 &&
-              prev_vis_idx + 1 < static_cast<int>(imu_image_ids_.size())) {
-            const Eigen::Vector3d& c_start = CenterForImage(
-                mapping_problem_->Image(imu_image_ids_[prev_vis_idx]));
-            for (int k = prev_vis_idx + 1;
-                 k < static_cast<int>(imu_image_ids_.size());
-                 ++k) {
-              const ImageRecord& blk_img =
-                  mapping_problem_->Image(imu_image_ids_[k]);
-              if (HasActiveCenter(blk_img)) CenterForImage(blk_img) = c_start;
-            }
-          }
-
-          std::vector<double> unit_scales(num_segs, 1.0);
-          ceres::Problem bridge_problem;
-          for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
-            const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-            const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-            if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
-            const bool scale_i_center =
-                active_visual_frames.count(image1.frame_id) != 0;
-            const bool scale_j_center =
-                active_visual_frames.count(image2.frame_id) != 0;
-            const Eigen::Quaterniond q_cw_phys_1 =
-                (edge.q_iori_1_xyzw.conjugate() * ImageRotation(image1))
-                    .normalized();
-            const Eigen::Quaterniond q_cw_phys_2 =
-                (edge.q_iori_2_xyzw.conjugate() * ImageRotation(image2))
-                    .normalized();
-            const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
-                colmap::ExtractPositionVelocityAccelBiasSqrtInformation(
-                    edge.data);
-            std::size_t seg_idx = 0;
-            if (scale_i_center) {
-              seg_idx = frame_to_seg.at(image1.frame_id);
-            } else if (scale_j_center) {
-              seg_idx = frame_to_seg.at(image2.frame_id);
-            }
-            ceres::CostFunction* cost =
-                LinearInertialAlignmentCostFunctor::Create(&edge.data,
-                                                           imu_from_cam_metric_,
-                                                           q_cw_phys_1,
-                                                           q_cw_phys_2,
-                                                           sqrt_info_9x9,
-                                                           scale_i_center,
-                                                           scale_j_center);
-            bridge_problem.AddResidualBlock(
-                cost,
-                nullptr,
-                &unit_scales[seg_idx],
-                seg_translations[seg_idx].data(),
-                gravity_direction_.data(),
-                CenterForImage(image1).data(),
-                imu_state_params_.at(edge.image_id1).data(),
-                CenterForImage(image2).data(),
-                imu_state_params_.at(edge.image_id2).data());
-          }
-          for (std::size_t m = 0; m < num_segs; ++m) {
-            if (bridge_problem.HasParameterBlock(&unit_scales[m])) {
-              bridge_problem.SetParameterBlockConstant(&unit_scales[m]);
-            }
-          }
-          if (bridge_problem.HasParameterBlock(seg_translations[0].data())) {
-            bridge_problem.SetParameterBlockConstant(
-                seg_translations[0].data());
-          }
-          if (bridge_problem.HasParameterBlock(gravity_direction_.data())) {
-            bridge_problem.SetParameterBlockConstant(gravity_direction_.data());
-          }
-          for (const ImageId image_id : imu_image_ids_) {
-            const ImageRecord& image = mapping_problem_->Image(image_id);
-            if (!HasActiveCenter(image)) continue;
-            double* c_ptr = CenterForImage(image).data();
-            if (bridge_problem.HasParameterBlock(c_ptr) &&
-                active_visual_frames.count(image.frame_id) != 0) {
-              bridge_problem.SetParameterBlockConstant(c_ptr);
-            }
-            double* state_ptr = imu_state_params_.at(image_id).data();
-            if (bridge_problem.HasParameterBlock(state_ptr)) {
-              colmap::SetManifold(&bridge_problem,
-                                  state_ptr,
-                                  WrapSubsetManifold(9, {3, 4, 5, 6, 7, 8}));
-            }
-          }
-          ceres::Solver::Options bridge_opts;
-          options_.solver_backend.Apply(&bridge_opts);
-          bridge_opts.minimizer_progress_to_stdout = false;
-          bridge_opts.max_num_iterations = 25;
-          bridge_opts.initial_trust_region_radius = 1e12;
-          bridge_opts.max_trust_region_radius = 1e16;
-          bridge_opts.num_threads =
-              colmap::GetEffectiveNumThreads(options_.num_threads);
-          ceres::Solver::Summary bridge_summary;
-          ceres::Solve(bridge_opts, &bridge_problem, &bridge_summary);
-
-          if (num_segs > 1) {
-            for (auto& [image_id, center] : image_centers_) {
-              const ImageRecord& img = mapping_problem_->Image(image_id);
-              const auto seg_it = frame_to_seg.find(img.frame_id);
-              if (seg_it != frame_to_seg.end()) {
-                center += seg_translations[seg_it->second];
-              }
-            }
-            for (auto& [frame_id, center] : frame_centers_) {
-              const auto seg_it = frame_to_seg.find(frame_id);
-              if (seg_it != frame_to_seg.end()) {
-                center += seg_translations[seg_it->second];
-              }
-            }
-            for (auto& [point3D_id, xyz] : point_xyz_) {
-              std::vector<int> counts(num_segs, 0);
-              const TrackRecord& track = mapping_problem_->Track(point3D_id);
-              for (Eigen::Index r = 0; r < track.observations.rows(); ++r) {
-                const ImageId obs_iid = track.observations(r, 0);
-                if (image_ids_.count(obs_iid) == 0) continue;
-                const FrameId fid = mapping_problem_->Image(obs_iid).frame_id;
-                const auto seg_it = frame_to_seg.find(fid);
-                if (seg_it != frame_to_seg.end()) {
-                  ++counts[seg_it->second];
-                }
-              }
-              const std::size_t best_seg =
-                  static_cast<std::size_t>(std::distance(
-                      counts.begin(),
-                      std::max_element(counts.begin(), counts.end())));
-              xyz += seg_translations[best_seg];
-            }
-          }
-        }
-
-        for (double& scale : scales_) {
-          scale /= std::max(s_warm, 1e-9);
-        }
-        if (!starts_from_random_positions) {
-          cumulative_scale_ *= s_warm;
-        }
-        log_scale_ = 0.0;
-        scale_fixed_in_main_solve_ = true;
-      }
-    } else {
-      log_scale_ = std::log(s_warm);
-      for (auto& [image_id, state] : imu_state_params_) {
-        state.head<3>() /= s_warm;
-      }
-    }
-  }
-
-  void RunLinearGravityWarmStart() {
-    const bool starts_from_random_positions =
-        options_.optimize_positions && options_.generate_random_positions &&
-        !options_.use_init;
-    if (starts_from_random_positions) {
-      SeedTelescopicGravityDirection();
-      // Step 1a: Solve pure visual BATA from random camera centers and 3D
-      // points, holding one BATA scale per connected visual component constant.
-      log_scale_ = 0.0;
-      ceres::Problem::Options warm_prob_opts;
-      warm_prob_opts.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
-      problem_ = std::make_unique<ceres::Problem>(warm_prob_opts);
-      scales_.clear();
-      scale_frame_ids_.clear();
-      scale_indices_.clear();
-      result_.initial_bata_scales.clear();
-      result_.initial_point3D_xyz.clear();
-      result_.diagnostics = GlobalPositioningDiagnostics();
-
-      AddPointToCameraConstraints();
-      if (!options_.use_metric_depth_constraint && !scales_.empty()) {
-        std::unordered_map<FrameId, std::size_t> frame_to_seg;
-        const std::size_t num_segs = ComputeVisualConnectedComponents(
-            /*allow_multi_segment=*/true,
-            visually_constrained_frames_,
-            &frame_to_seg);
-        std::vector<bool> seg_anchored(num_segs, false);
-        for (std::size_t idx = 0; idx < scales_.size(); ++idx) {
-          if (!problem_->HasParameterBlock(&scales_[idx])) continue;
-          const auto seg_it = frame_to_seg.find(scale_frame_ids_[idx]);
-          const std::size_t seg =
-              (seg_it != frame_to_seg.end()) ? seg_it->second : 0;
-          if (!seg_anchored[seg]) {
-            problem_->SetParameterBlockConstant(&scales_[idx]);
-            seg_anchored[seg] = true;
-          }
-        }
-      }
-      if (options_.use_parameter_block_ordering) {
-        AddCamerasAndPointsToParameterGroups();
-      }
-      ceres::Solver::Options warm_solver_opts = solver_options_;
-      options_.solver_backend.Apply(&warm_solver_opts);
-      warm_solver_opts.num_threads =
-          colmap::GetEffectiveNumThreads(options_.num_threads);
-      warm_solver_opts.max_num_iterations =
-          std::min(options_.max_num_iterations, 100);
-      ceres::Solver::Summary warm_summary;
-      ceres::Solve(warm_solver_opts, problem_.get(), &warm_summary);
-      for (const ImageId image_id : imu_image_ids_) {
-        const ImageRecord& image = mapping_problem_->Image(image_id);
-        if (!HasActiveCenter(image)) continue;
-        if (visually_constrained_frames_.count(image.frame_id) == 0) {
-          CenterForImage(image).setZero();
-        }
-      }
-    }
-
-    // Step 1b: Solve the strictly affine-linear unconstrained-R^3-gravity &
-    // linear-scale alignment holding visually-constrained camera centers fixed
-    // and solving for any blackout frames in metric coordinates.
-    const double init_seg_scale =
-        starts_from_random_positions ? 1.0 : options_.initial_scale;
-    SolveLinearInertialAlignment(starts_from_random_positions,
-                                 /*optimize_gravity=*/true,
-                                 init_seg_scale);
-
-    // Reset main problem state so AddPointToCameraConstraints builds the final
-    // problem cleanly from the warm-started centers and 3D points.
+  void ResetProblemForMainSolve(const bool switch_huber_to_cauchy) {
     ceres::Problem::Options problem_options;
     problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
     problem_ = std::make_unique<ceres::Problem>(problem_options);
     scales_.clear();
-    scale_frame_ids_.clear();
     scale_indices_.clear();
     dmap_scales_.clear();
     dmap_scale_observation_counts_.clear();
@@ -1271,14 +574,14 @@ class GlobalPositioner {
     result_.initial_bata_scales.clear();
     result_.initial_point3D_xyz.clear();
     result_.diagnostics = GlobalPositioningDiagnostics();
-    if (starts_from_random_positions &&
+    if (switch_huber_to_cauchy &&
         options_.loss.type == LossFunctionType::kHuber) {
-      // Once camera centers and 3D points are warm-started at metric scale,
-      // switch from the convex Huber loss to a redescending Cauchy loss so
-      // gross visual outliers cannot pull camera centers and 3D points inward
-      // against the soft IMU factors.
+      // Two-stage Graduated Non-Convexity (GNC): once camera centers and 3D
+      // points are warm-started at metric scale, switch from the convex Huber
+      // loss to a redescending Cauchy loss so gross directional outliers
+      // cannot bias camera centers against the metric IMU constraints.
       const LossConfig post_warm_loss{LossFunctionType::kCauchy,
-                                      std::min(options_.loss.scale, 0.015),
+                                      std::min(options_.loss.scale, 0.02),
                                       options_.loss.weight};
       loss_ = SharedLoss(post_warm_loss);
       calibrated_loss_ = loss_;
@@ -1291,6 +594,239 @@ class GlobalPositioner {
         uncalibrated_loss_ = loss_;
       }
     }
+  }
+
+  void RunVisualPositionWarmStart() {
+    log_scale_ = 0.0;
+    ResetProblemForMainSolve(/*switch_huber_to_cauchy=*/false);
+    warm_started_positions_ = false;
+
+    AddPointToCameraConstraints();
+    if (!options_.use_metric_depth_constraint) {
+      for (double& scale : scales_) {
+        if (problem_->HasParameterBlock(&scale)) {
+          problem_->SetParameterBlockConstant(&scale);
+          break;
+        }
+      }
+    }
+    if (options_.use_parameter_block_ordering) {
+      AddCamerasAndPointsToParameterGroups();
+    }
+    ceres::Solver::Options warm_solver_opts = solver_options_;
+    options_.solver_backend.Apply(&warm_solver_opts);
+    warm_solver_opts.num_threads =
+        colmap::GetEffectiveNumThreads(options_.num_threads);
+    warm_solver_opts.max_num_iterations =
+        std::min(options_.max_num_iterations, 100);
+    ceres::Solver::Summary warm_summary;
+    ceres::Solve(warm_solver_opts, problem_.get(), &warm_summary);
+    for (const ImageId image_id : imu_image_ids_) {
+      const ImageRecord& image = mapping_problem_->Image(image_id);
+      if (!HasActiveCenter(image)) continue;
+      if (visually_constrained_frames_.count(image.frame_id) == 0) {
+        CenterForImage(image).setZero();
+      }
+    }
+  }
+
+  void InterpolateUnconstrainedFrameCenters() {
+    if (visually_constrained_frames_.empty()) return;
+    int prev_vis_idx = -1;
+    const int num_imu_imgs = static_cast<int>(imu_image_ids_.size());
+    for (int i = 0; i < num_imu_imgs; ++i) {
+      const ImageRecord& img = mapping_problem_->Image(imu_image_ids_[i]);
+      if (!HasActiveCenter(img) ||
+          visually_constrained_frames_.count(img.frame_id) == 0) {
+        continue;
+      }
+      const Eigen::Vector3d& c_end = CenterForImage(img);
+      if (prev_vis_idx >= 0 && i - prev_vis_idx > 1) {
+        const Eigen::Vector3d& c_start = CenterForImage(
+            mapping_problem_->Image(imu_image_ids_[prev_vis_idx]));
+        for (int k = prev_vis_idx + 1; k < i; ++k) {
+          const ImageRecord& blk_img =
+              mapping_problem_->Image(imu_image_ids_[k]);
+          if (!HasActiveCenter(blk_img)) continue;
+          const double alpha = static_cast<double>(k - prev_vis_idx) /
+                               static_cast<double>(i - prev_vis_idx);
+          CenterForImage(blk_img) = (1.0 - alpha) * c_start + alpha * c_end;
+        }
+      } else if (prev_vis_idx < 0 && i > 0) {
+        for (int k = 0; k < i; ++k) {
+          const ImageRecord& blk_img =
+              mapping_problem_->Image(imu_image_ids_[k]);
+          if (HasActiveCenter(blk_img)) CenterForImage(blk_img) = c_end;
+        }
+      }
+      prev_vis_idx = i;
+    }
+    if (prev_vis_idx >= 0 && prev_vis_idx + 1 < num_imu_imgs) {
+      const Eigen::Vector3d& c_start =
+          CenterForImage(mapping_problem_->Image(imu_image_ids_[prev_vis_idx]));
+      for (int k = prev_vis_idx + 1; k < num_imu_imgs; ++k) {
+        const ImageRecord& blk_img = mapping_problem_->Image(imu_image_ids_[k]);
+        if (HasActiveCenter(blk_img)) CenterForImage(blk_img) = c_start;
+      }
+    }
+  }
+
+  void InitializeVelocitiesFromFiniteDifferences() {
+    std::unordered_map<ImageId, int> counts;
+    for (const ImageId image_id : imu_image_ids_) {
+      imu_state_params_.at(image_id).head<3>().setZero();
+    }
+    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
+      const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
+      const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
+      if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
+      const double dt = std::max(edge.data.delta_t, 1e-3);
+      const Eigen::Vector3d v_fd =
+          (CenterForImage(image2) - CenterForImage(image1)) / dt;
+      imu_state_params_.at(edge.image_id1).head<3>() += v_fd;
+      imu_state_params_.at(edge.image_id2).head<3>() += v_fd;
+      ++counts[edge.image_id1];
+      ++counts[edge.image_id2];
+    }
+    for (const auto& [image_id, count] : counts) {
+      if (count > 1) {
+        imu_state_params_.at(image_id).head<3>() /= static_cast<double>(count);
+      }
+    }
+  }
+
+  bool AddImuResidualBlock(ceres::Problem* problem,
+                           ImuEdgeRecord& edge,
+                           ceres::LossFunction* loss_function,
+                           const double weight_scale = 1.0) {
+    const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
+    const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
+    if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) return false;
+
+    const Eigen::Quaterniond q_cw_phys_1 =
+        (edge.q_iori_1_xyzw.conjugate() * ImageRotation(image1)).normalized();
+    const Eigen::Quaterniond q_cw_phys_2 =
+        (edge.q_iori_2_xyzw.conjugate() * ImageRotation(image2)).normalized();
+    const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
+        (weight_scale * options_.imu_cost_weight) *
+        colmap::ExtractPositionVelocityAccelBiasSqrtInformation(edge.data);
+    ceres::CostFunction* cost =
+        colmap::InertialGlobalPositioningCostFunctor::Create(
+            &edge.data,
+            imu_from_cam_metric_,
+            q_cw_phys_1,
+            q_cw_phys_2,
+            sqrt_info_9x9,
+            /*metric_imu_from_cam=*/true);
+    problem->AddResidualBlock(cost,
+                              loss_function,
+                              &log_scale_,
+                              gravity_direction_.data(),
+                              CenterForImage(image1).data(),
+                              imu_state_params_.at(edge.image_id1).data(),
+                              CenterForImage(image2).data(),
+                              imu_state_params_.at(edge.image_id2).data());
+    return true;
+  }
+
+  void SolveInertialAlignmentWarmStart() {
+    ceres::Problem align_problem;
+    int num_edges = 0;
+    for (ImuEdgeRecord& edge : mutable_imu_edges_) {
+      if (AddImuResidualBlock(&align_problem, edge, nullptr, 1.0)) {
+        ++num_edges;
+      }
+    }
+    if (num_edges == 0) return;
+
+    for (const ImageId image_id : imu_image_ids_) {
+      const ImageRecord& image = mapping_problem_->Image(image_id);
+      if (!HasActiveCenter(image)) continue;
+      double* c_ptr = CenterForImage(image).data();
+      if (align_problem.HasParameterBlock(c_ptr)) {
+        align_problem.SetParameterBlockConstant(c_ptr);
+      }
+      double* state_ptr = imu_state_params_.at(image_id).data();
+      if (align_problem.HasParameterBlock(state_ptr)) {
+        colmap::SetManifold(
+            &align_problem,
+            state_ptr,
+            colmap::CreateSubsetManifold(9, {3, 4, 5, 6, 7, 8}));
+        align_problem.SetParameterBlockConstant(state_ptr);
+      }
+    }
+
+    ceres::Solver::Options align_opts;
+    options_.solver_backend.Apply(&align_opts);
+    align_opts.minimizer_progress_to_stdout = false;
+    align_opts.num_threads =
+        colmap::GetEffectiveNumThreads(options_.num_threads);
+    align_opts.max_num_iterations = 15;
+    ceres::Solver::Summary align_summary;
+    ceres::Solve(align_opts, &align_problem, &align_summary);
+
+    for (const ImageId image_id : imu_image_ids_) {
+      const ImageRecord& image = mapping_problem_->Image(image_id);
+      if (!HasActiveCenter(image)) continue;
+      double* state_ptr = imu_state_params_.at(image_id).data();
+      if (align_problem.HasParameterBlock(state_ptr)) {
+        align_problem.SetParameterBlockVariable(state_ptr);
+      }
+      if (options_.optimize_positions &&
+          !visually_constrained_frames_.empty() &&
+          visually_constrained_frames_.count(image.frame_id) == 0) {
+        double* c_ptr = CenterForImage(image).data();
+        if (align_problem.HasParameterBlock(c_ptr)) {
+          align_problem.SetParameterBlockVariable(c_ptr);
+        }
+      }
+    }
+    align_opts.max_num_iterations = 25;
+    ceres::Solve(align_opts, &align_problem, &align_summary);
+
+    if (gravity_direction_.norm() > 1e-6) {
+      gravity_direction_.normalize();
+    } else {
+      gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
+    }
+  }
+
+  void ApplyWarmStartScaleToProblem() {
+    const double s_warm = std::clamp(std::exp(log_scale_), 1e-4, 1e5);
+    if (!std::isfinite(s_warm)) return;
+    for (auto& [image_id, center] : image_centers_) {
+      center *= s_warm;
+    }
+    for (auto& [frame_id, center] : frame_centers_) {
+      center *= s_warm;
+    }
+    for (auto& [point3D_id, xyz] : point_xyz_) {
+      xyz *= s_warm;
+    }
+    for (auto& [image_id, state] : imu_state_params_) {
+      state.head<3>() *= s_warm;
+    }
+    warm_start_scale_ = s_warm;
+    log_scale_ = 0.0;
+  }
+
+  void RunLinearGravityWarmStart() {
+    log_scale_ = 0.0;
+    SeedTelescopicGravityDirection();
+    const bool starts_from_random_positions =
+        options_.optimize_positions && options_.generate_random_positions &&
+        !options_.use_init;
+    if (starts_from_random_positions) {
+      RunVisualPositionWarmStart();
+      InterpolateUnconstrainedFrameCenters();
+    }
+    InitializeVelocitiesFromFiniteDifferences();
+    SolveInertialAlignmentWarmStart();
+    if (options_.optimize_positions && !options_.use_metric_depth_constraint &&
+        options_.apply_imu_scale_to_problem) {
+      ApplyWarmStartScaleToProblem();
+      ResetProblemForMainSolve(/*switch_huber_to_cauchy=*/true);
+    }
     warm_started_positions_ = true;
   }
 
@@ -1298,162 +834,18 @@ class GlobalPositioner {
                          bool* has_reint,
                          double weight_scale = 1.0) {
     for (ImuEdgeRecord& edge : mutable_imu_edges_) {
-      const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-      const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-      if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
-
-      const Eigen::Quaterniond q_cw_phys_1 =
-          (edge.q_iori_1_xyzw.conjugate() * ImageRotation(image1)).normalized();
-      const Eigen::Quaterniond q_cw_phys_2 =
-          (edge.q_iori_2_xyzw.conjugate() * ImageRotation(image2)).normalized();
-      const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
-          (weight_scale * options_.imu_cost_weight) *
-          colmap::ExtractPositionVelocityAccelBiasSqrtInformation(edge.data);
-      ceres::CostFunction* cost =
-          colmap::InertialGlobalPositioningCostFunctor::Create(
-              &edge.data,
-              imu_from_cam_metric_,
-              q_cw_phys_1,
-              q_cw_phys_2,
-              sqrt_info_9x9,
-              /*metric_imu_from_cam=*/true);
       imu_losses_.push_back(edge.loss.Create());
-      problem_->AddResidualBlock(cost,
-                                 imu_losses_.back().get(),
-                                 &log_scale_,
-                                 gravity_direction_.data(),
-                                 CenterForImage(image1).data(),
-                                 imu_state_params_.at(edge.image_id1).data(),
-                                 CenterForImage(image2).data(),
-                                 imu_state_params_.at(edge.image_id2).data());
+      if (!AddImuResidualBlock(
+              problem_.get(), edge, imu_losses_.back().get(), weight_scale)) {
+        imu_losses_.pop_back();
+        continue;
+      }
       ++result_.diagnostics.num_imu_residuals;
       if (reint_callback != nullptr && edge.integrator != nullptr) {
         reint_callback->AddEdge(edge.integrator,
                                 &edge.data,
                                 imu_state_params_.at(edge.image_id1).data());
         *has_reint = true;
-      }
-    }
-  }
-
-  void RefineImuScaleAndStates() {
-    if (!has_imu_ || !options_.use_linear_gravity_warm_start ||
-        !options_.optimize_positions || options_.use_metric_depth_constraint ||
-        !scale_fixed_in_main_solve_ || visually_constrained_frames_.empty() ||
-        result_.diagnostics.low_acceleration_safeguard_triggered) {
-      return;
-    }
-    SolveLinearInertialAlignment(/*allow_multi_segment=*/false,
-                                 /*optimize_gravity=*/false,
-                                 /*init_seg_scale=*/1.0);
-  }
-
-  void EvaluateObservabilityAndAddSafeguard() {
-    if (mutable_imu_edges_.empty() || imu_image_ids_.empty()) return;
-
-    Eigen::Vector3d g_hat = gravity_direction_;
-    if (g_hat.norm() <= 1e-6) {
-      g_hat = Eigen::Vector3d(0.0, 0.0, -1.0);
-    } else {
-      g_hat.normalize();
-    }
-    int min_axis = 0;
-    g_hat.cwiseAbs().minCoeff(&min_axis);
-    Eigen::Vector3d ref_axis = Eigen::Vector3d::Zero();
-    ref_axis(min_axis) = 1.0;
-    const Eigen::Vector3d b1 = g_hat.cross(ref_axis).normalized();
-    const Eigen::Vector3d b2 = g_hat.cross(b1).normalized();
-    Eigen::Matrix<double, 3, 2> B_g;
-    B_g.col(0) = b1;
-    B_g.col(1) = b2;
-
-    std::unordered_map<ImageId, int> img_to_v_idx;
-    img_to_v_idx.reserve(imu_image_ids_.size());
-    for (std::size_t idx = 0; idx < imu_image_ids_.size(); ++idx) {
-      img_to_v_idx.emplace(imu_image_ids_[idx], static_cast<int>(idx));
-    }
-
-    const int num_v_params = 3 * static_cast<int>(imu_image_ids_.size());
-    Eigen::Matrix<double, 6, 6> H_tt = Eigen::Matrix<double, 6, 6>::Zero();
-    Eigen::MatrixXd H_tv = Eigen::MatrixXd::Zero(6, num_v_params);
-    Eigen::MatrixXd H_vv = Eigen::MatrixXd::Zero(num_v_params, num_v_params);
-
-    const Eigen::Quaterniond q_CI = imu_from_cam_metric_.rotation().conjugate();
-    const double s_cur = std::exp(log_scale_);
-    int num_valid_edges = 0;
-
-    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
-      const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-      const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-      if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
-      const double dt = std::max(edge.data.delta_t, 1e-3);
-      const double inv_dt = 1.0 / dt;
-      const double two_inv_dt2 = 2.0 / (dt * dt);
-
-      const Eigen::Quaterniond q_cw_phys_1 =
-          (edge.q_iori_1_xyzw.conjugate() * ImageRotation(image1)).normalized();
-      const Eigen::Matrix3d R_WB_1 =
-          (q_cw_phys_1.conjugate() * q_CI).toRotationMatrix();
-      const Eigen::Vector3d dc_metric =
-          s_cur * (CenterForImage(image2) - CenterForImage(image1));
-
-      Eigen::Matrix<double, 6, 6> J_t = Eigen::Matrix<double, 6, 6>::Zero();
-      J_t.block<3, 2>(0, 0) = -B_g;
-      J_t.block<3, 1>(0, 2) = two_inv_dt2 * dc_metric;
-      J_t.block<3, 3>(0, 3) = -R_WB_1 * (two_inv_dt2 * edge.data.dp_dba);
-      J_t.block<3, 2>(3, 0) = -B_g;
-      J_t.block<3, 1>(3, 2).setZero();
-      J_t.block<3, 3>(3, 3) = -R_WB_1 * (inv_dt * edge.data.dv_dba);
-
-      Eigen::Matrix<double, 6, 3> J_vi = Eigen::Matrix<double, 6, 3>::Zero();
-      J_vi.topRows<3>() = (-2.0 * inv_dt) * Eigen::Matrix3d::Identity();
-      J_vi.bottomRows<3>() = (-inv_dt) * Eigen::Matrix3d::Identity();
-
-      Eigen::Matrix<double, 6, 3> J_vj = Eigen::Matrix<double, 6, 3>::Zero();
-      J_vj.bottomRows<3>() = inv_dt * Eigen::Matrix3d::Identity();
-
-      const int vi_col = 3 * img_to_v_idx.at(edge.image_id1);
-      const int vj_col = 3 * img_to_v_idx.at(edge.image_id2);
-
-      H_tt.noalias() += J_t.transpose() * J_t;
-      H_tv.block<6, 3>(0, vi_col).noalias() += J_t.transpose() * J_vi;
-      H_tv.block<6, 3>(0, vj_col).noalias() += J_t.transpose() * J_vj;
-      H_vv.block<3, 3>(vi_col, vi_col).noalias() += J_vi.transpose() * J_vi;
-      H_vv.block<3, 3>(vi_col, vj_col).noalias() += J_vi.transpose() * J_vj;
-      H_vv.block<3, 3>(vj_col, vi_col).noalias() += J_vj.transpose() * J_vi;
-      H_vv.block<3, 3>(vj_col, vj_col).noalias() += J_vj.transpose() * J_vj;
-      ++num_valid_edges;
-    }
-
-    if (num_valid_edges == 0) return;
-    const double inv_m = 1.0 / static_cast<double>(num_valid_edges);
-    H_tt *= inv_m;
-    H_tv *= inv_m;
-    H_vv *= inv_m;
-    H_vv.diagonal().array() += 1e-9;
-
-    const Eigen::MatrixXd V_inv_Ht = H_vv.ldlt().solve(H_tv.transpose());
-    Eigen::Matrix<double, 6, 6> H_red = H_tt - H_tv * V_inv_Ht;
-    H_red = 0.5 * (H_red + H_red.transpose());
-
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(
-        H_red, Eigen::EigenvaluesOnly);
-    const double min_eig =
-        eig.info() == Eigen::Success ? eig.eigenvalues()(0) : 0.0;
-    const double sigma_min = std::sqrt(std::max(0.0, min_eig));
-    result_.diagnostics.observability_min_singular_value = sigma_min;
-
-    if (options_.enable_low_acceleration_safeguard &&
-        sigma_min < options_.low_acceleration_min_singular_value_thres) {
-      result_.diagnostics.low_acceleration_safeguard_triggered = true;
-      for (const ImageId image_id : imu_image_ids_) {
-        double* state_ptr = imu_state_params_.at(image_id).data();
-        ceres::CostFunction* prior_cost =
-            ImuStateAccelBiasPriorCostFunctor::Create(
-                Eigen::Vector3d::Zero(),
-                options_.low_acceleration_accel_bias_prior_stddev);
-        problem_->AddResidualBlock(prior_cost, nullptr, state_ptr);
-        ++result_.diagnostics.num_imu_accel_bias_prior_residuals;
       }
     }
   }
@@ -1640,7 +1032,6 @@ class GlobalPositioner {
         ImageRotation(image).inverse() * bearing;
 
     scales_.emplace_back(1.0);
-    scale_frame_ids_.push_back(image.frame_id);
     double& scale = scales_.back();
     Eigen::Vector3d& point_xyz = point_xyz_.at(point3D_id);
     if (warm_started_positions_ ||
@@ -2095,12 +1486,7 @@ class GlobalPositioner {
         }
       }
     }
-    const bool fix_log_scale =
-        options_.optimize_positions && !options_.use_metric_depth_constraint &&
-        (scale_fixed_in_main_solve_ ||
-         (options_.generate_random_positions && !options_.use_init));
-    if (!options_.use_metric_depth_constraint &&
-        (!has_imu_ || (!fix_log_scale && options_.optimize_positions))) {
+    if (!options_.use_metric_depth_constraint) {
       for (double& scale : scales_) {
         if (problem_->HasParameterBlock(&scale)) {
           problem_->SetParameterBlockConstant(&scale);
@@ -2119,16 +1505,12 @@ class GlobalPositioner {
                             gravity_direction_.data(),
                             colmap::CreateSphereManifold<3>());
       }
-      if (fix_log_scale && problem_->HasParameterBlock(&log_scale_)) {
-        problem_->SetParameterBlockConstant(&log_scale_);
-      }
       for (const ImageId image_id : imu_image_ids_) {
         double* state_ptr = imu_state_params_.at(image_id).data();
         if (!problem_->HasParameterBlock(state_ptr)) continue;
         colmap::SetManifold(problem_.get(),
                             state_ptr,
-                            std::make_unique<DelegatingManifold>(
-                                colmap::CreateImuStateVelAccelBiasManifold()));
+                            colmap::CreateImuStateVelAccelBiasManifold());
       }
     }
     options_.solver_backend.Apply(&solver_options_);
@@ -2141,51 +1523,9 @@ class GlobalPositioner {
     imu_scale_finalized_ = true;
 
     const double s_ceres = std::exp(log_scale_);
-    double total_scale = cumulative_scale_ * s_ceres;
-
+    double total_scale = warm_start_scale_ * s_ceres;
     const bool has_input_positions =
         !options_.generate_random_positions || options_.use_init;
-    if (options_.optimize_positions && has_input_positions &&
-        imu_image_ids_.size() >= 2) {
-      std::vector<ImageId> valid_imgs;
-      valid_imgs.reserve(imu_image_ids_.size());
-      for (const ImageId image_id : imu_image_ids_) {
-        const ImageRecord& image = mapping_problem_->Image(image_id);
-        if (HasActiveCenter(image) &&
-            result_.initial_frame_centers.count(image.frame_id) != 0 &&
-            (visually_constrained_frames_.empty() ||
-             visually_constrained_frames_.count(image.frame_id) != 0)) {
-          valid_imgs.push_back(image_id);
-        }
-      }
-      const int chord_len =
-          std::clamp<int>(static_cast<int>(valid_imgs.size()) / 2, 1, 15);
-      std::vector<double> chord_ratios;
-      for (std::size_t idx = 0;
-           idx + static_cast<std::size_t>(chord_len) < valid_imgs.size();
-           ++idx) {
-        const ImageRecord& img1 = mapping_problem_->Image(valid_imgs[idx]);
-        const ImageRecord& img2 = mapping_problem_->Image(
-            valid_imgs[idx + static_cast<std::size_t>(chord_len)]);
-        const Eigen::Vector3d d_in =
-            result_.initial_frame_centers.at(img2.frame_id) -
-            result_.initial_frame_centers.at(img1.frame_id);
-        const Eigen::Vector3d d_metric =
-            s_ceres * (CenterForImage(img2) - CenterForImage(img1));
-        const double in_norm = d_in.norm();
-        const double metric_norm = d_metric.norm();
-        if (in_norm > 1e-4 && metric_norm > 1e-4) {
-          chord_ratios.push_back(metric_norm / in_norm);
-        }
-      }
-      if (!chord_ratios.empty()) {
-        const std::size_t mid = chord_ratios.size() / 2;
-        std::nth_element(chord_ratios.begin(),
-                         chord_ratios.begin() + mid,
-                         chord_ratios.end());
-        total_scale = chord_ratios[mid];
-      }
-    }
 
     if (options_.optimize_positions && options_.apply_imu_scale_to_problem) {
       for (auto& [image_id, center] : image_centers_) {
@@ -2314,10 +1654,9 @@ class GlobalPositioner {
   const std::vector<ImuStateRecord>& imu_states_;
   bool has_imu_ = false;
   bool warm_started_positions_ = false;
-  bool scale_fixed_in_main_solve_ = false;
   bool imu_scale_finalized_ = false;
+  double warm_start_scale_ = 1.0;
   double log_scale_ = 0.0;
-  double cumulative_scale_ = 1.0;
   Eigen::Vector3d gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
   colmap::Rigid3d imu_from_cam_metric_;
   std::vector<ImuEdgeRecord> mutable_imu_edges_;
@@ -2333,7 +1672,6 @@ class GlobalPositioner {
   std::unordered_map<FrameId, Eigen::Vector3d> frame_centers_;
   std::unordered_set<FrameId> visually_constrained_frames_;
   std::vector<double> scales_;
-  std::vector<FrameId> scale_frame_ids_;
   std::map<std::string, std::size_t> scale_indices_;
   std::map<ImageId, double> dmap_scales_;
   std::unordered_map<ImageId, int> dmap_scale_observation_counts_;
@@ -2399,11 +1737,7 @@ void GlobalPositionerOptions::Validate() const {
       !std::isfinite(initial_scale) || initial_scale <= 0.0 ||
       !std::isfinite(imu_cost_weight) || imu_cost_weight <= 0.0 ||
       !std::isfinite(reintegration_bias_threshold) ||
-      reintegration_bias_threshold < 0.0 ||
-      !std::isfinite(low_acceleration_min_singular_value_thres) ||
-      low_acceleration_min_singular_value_thres < 0.0 ||
-      !std::isfinite(low_acceleration_accel_bias_prior_stddev) ||
-      low_acceleration_accel_bias_prior_stddev <= 0.0 || num_threads == 0 ||
+      reintegration_bias_threshold < 0.0 || num_threads == 0 ||
       max_num_iterations <= 0 || !std::isfinite(function_tolerance) ||
       function_tolerance < 0.0 || !std::isfinite(gradient_tolerance) ||
       gradient_tolerance < 0.0 || !std::isfinite(parameter_tolerance) ||
