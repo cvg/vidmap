@@ -143,10 +143,11 @@ class GlobalPositioner {
     SetupProblem();
     InitializeRandomPositions();
     InitializeImuParameters();
+    AddPointToCameraConstraints();
+    ParameterizeVariables();
     if (has_imu_ && options_.use_linear_gravity_warm_start) {
       RunLinearGravityWarmStart();
     }
-    AddPointToCameraConstraints();
 
     colmap::ImuReintegrationOptions reint_options;
     reint_options.reintegrate_angle_norm_thres =
@@ -156,13 +157,13 @@ class GlobalPositioner {
     colmap::ImuReintegrationCallback reint_callback(reint_options);
     bool has_reint = false;
     if (has_imu_) {
-      AddImuConstraints(&reint_callback, &has_reint);
+      AddImuConstraints(problem_.get(), &reint_callback, &has_reint);
+      ParameterizeImuVariables(problem_.get(), /*fix_gravity_norm=*/true);
     }
 
     if (options_.use_parameter_block_ordering) {
       AddCamerasAndPointsToParameterGroups();
     }
-    ParameterizeVariables();
     if (has_reint) {
       solver_options_.callbacks.push_back(&reint_callback);
       solver_options_.update_state_every_iteration = true;
@@ -568,63 +569,11 @@ class GlobalPositioner {
     }
   }
 
-  void ResetProblemForMainSolve(const bool switch_huber_to_cauchy) {
-    ceres::Problem::Options problem_options;
-    problem_options.loss_function_ownership = ceres::DO_NOT_TAKE_OWNERSHIP;
-    problem_ = std::make_unique<ceres::Problem>(problem_options);
-    scales_.clear();
-    scale_indices_.clear();
-    dmap_scales_.clear();
-    dmap_scale_observation_counts_.clear();
-    per_image_scale_prior_losses_.clear();
-    temporal_acceleration_losses_.clear();
-    imu_losses_.clear();
-    result_.initial_bata_scales.clear();
-    result_.initial_point3D_xyz.clear();
-    result_.diagnostics = GlobalPositioningDiagnostics();
-    if (switch_huber_to_cauchy &&
-        options_.loss.type == LossFunctionType::kHuber) {
-      // Two-stage Graduated Non-Convexity (GNC): once camera centers and 3D
-      // points are warm-started, switch from the convex Huber loss to a
-      // redescending Cauchy loss so gross directional outliers cannot bias
-      // camera centers against the metric IMU constraints.
-      const LossConfig post_warm_loss{LossFunctionType::kCauchy,
-                                      std::min(options_.loss.scale, 0.02),
-                                      options_.loss.weight};
-      loss_ = SharedLoss(post_warm_loss);
-      calibrated_loss_ = loss_;
-      if (options_.apply_uncalibrated_loss_downweight) {
-        uncalibrated_loss_ = std::make_shared<ceres::ScaledLoss>(
-            loss_.get(),
-            options_.uncalibrated_loss_downweight,
-            ceres::DO_NOT_TAKE_OWNERSHIP);
-      } else {
-        uncalibrated_loss_ = loss_;
-      }
-    }
-  }
-
   void RunVisualPositionWarmStart() {
-    log_scale_ = 0.0;
-    ResetProblemForMainSolve(/*switch_huber_to_cauchy=*/false);
-    warm_started_positions_ = false;
-
-    AddPointToCameraConstraints();
-    if (!options_.use_metric_depth_constraint) {
-      for (double& scale : scales_) {
-        if (problem_->HasParameterBlock(&scale)) {
-          problem_->SetParameterBlockConstant(&scale);
-          break;
-        }
-      }
-    }
     if (options_.use_parameter_block_ordering) {
       AddCamerasAndPointsToParameterGroups();
     }
     ceres::Solver::Options warm_solver_opts = solver_options_;
-    options_.solver_backend.Apply(&warm_solver_opts);
-    warm_solver_opts.num_threads =
-        colmap::GetEffectiveNumThreads(options_.num_threads);
     warm_solver_opts.max_num_iterations =
         std::min(options_.max_num_iterations, 100);
     ceres::Solver::Summary warm_summary;
@@ -640,8 +589,7 @@ class GlobalPositioner {
 
   bool AddImuResidualBlock(ceres::Problem* problem,
                            ImuEdgeRecord& edge,
-                           ceres::LossFunction* loss_function,
-                           const double weight_scale = 1.0) {
+                           ceres::LossFunction* loss_function) {
     const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
     const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
     if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) return false;
@@ -651,7 +599,7 @@ class GlobalPositioner {
     const Eigen::Quaterniond q_cw_phys_2 =
         (edge.q_iori_2_xyzw.conjugate() * ImageRotation(image2)).normalized();
     const Eigen::Matrix<double, 9, 9> sqrt_info_9x9 =
-        (weight_scale * options_.imu_cost_weight) *
+        options_.imu_cost_weight *
         colmap::ExtractPositionVelocityAccelBiasSqrtInformation(edge.data);
     ceres::CostFunction* cost =
         colmap::InertialGlobalPositioningCostFunctor::Create(
@@ -672,16 +620,68 @@ class GlobalPositioner {
     return true;
   }
 
-  void SolveInertialAlignmentWarmStart() {
-    ceres::Problem align_problem;
-    int num_edges = 0;
+  void AddImuConstraints(
+      ceres::Problem* problem,
+      colmap::ImuReintegrationCallback* reint_callback = nullptr,
+      bool* has_reint = nullptr) {
     for (ImuEdgeRecord& edge : mutable_imu_edges_) {
-      if (AddImuResidualBlock(&align_problem, edge, nullptr, 1.0)) {
-        ++num_edges;
+      ceres::LossFunction* loss_fn = nullptr;
+      if (problem == problem_.get()) {
+        imu_losses_.push_back(edge.loss.Create());
+        loss_fn = imu_losses_.back().get();
+      }
+      if (!AddImuResidualBlock(problem, edge, loss_fn)) {
+        if (problem == problem_.get()) {
+          imu_losses_.pop_back();
+        }
+        continue;
+      }
+      if (problem == problem_.get()) {
+        ++result_.diagnostics.num_imu_residuals;
+      }
+      if (reint_callback != nullptr && edge.integrator != nullptr) {
+        reint_callback->AddEdge(edge.integrator,
+                                &edge.data,
+                                imu_state_params_.at(edge.image_id1).data());
+        if (has_reint != nullptr) {
+          *has_reint = true;
+        }
       }
     }
-    if (num_edges == 0) return;
+  }
 
+  void ParameterizeImuVariables(ceres::Problem* problem,
+                                const bool fix_gravity_norm) {
+    if (fix_gravity_norm) {
+      if (gravity_direction_.norm() <= 1e-6) {
+        gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
+      } else {
+        gravity_direction_.normalize();
+      }
+      if (problem->HasParameterBlock(gravity_direction_.data())) {
+        colmap::SetManifold(problem,
+                            gravity_direction_.data(),
+                            colmap::CreateSphereManifold<3>());
+      }
+    }
+    for (const ImageId image_id : imu_image_ids_) {
+      double* state_ptr = imu_state_params_.at(image_id).data();
+      if (!problem->HasParameterBlock(state_ptr)) continue;
+      colmap::SetManifold(
+          problem,
+          state_ptr,
+          fix_gravity_norm
+              ? colmap::CreateImuStateVelAccelBiasManifold()
+              : colmap::CreateSubsetManifold(9, {3, 4, 5, 6, 7, 8}));
+    }
+  }
+
+  void SolveInertialAlignmentWarmStart() {
+    ceres::Problem align_problem;
+    AddImuConstraints(&align_problem);
+    if (align_problem.NumResidualBlocks() == 0) return;
+
+    ParameterizeImuVariables(&align_problem, /*fix_gravity_norm=*/false);
     for (const ImageId image_id : imu_image_ids_) {
       const ImageRecord& image = mapping_problem_->Image(image_id);
       if (!HasActiveCenter(image)) continue;
@@ -693,24 +693,12 @@ class GlobalPositioner {
       if (is_visually_constrained && align_problem.HasParameterBlock(c_ptr)) {
         align_problem.SetParameterBlockConstant(c_ptr);
       }
-      double* state_ptr = imu_state_params_.at(image_id).data();
-      if (align_problem.HasParameterBlock(state_ptr)) {
-        colmap::SetManifold(
-            &align_problem,
-            state_ptr,
-            colmap::CreateSubsetManifold(9, {3, 4, 5, 6, 7, 8}));
-      }
     }
 
-    ceres::Solver::Options align_opts;
-    options_.solver_backend.Apply(&align_opts);
-    align_opts.minimizer_progress_to_stdout = false;
-    align_opts.num_threads =
-        colmap::GetEffectiveNumThreads(options_.num_threads);
+    ceres::Solver::Options align_opts = solver_options_;
     align_opts.max_num_iterations = 40;
     ceres::Solver::Summary align_summary;
     ceres::Solve(align_opts, &align_problem, &align_summary);
-
     if (gravity_direction_.norm() > 1e-6) {
       gravity_direction_.normalize();
     } else {
@@ -728,31 +716,6 @@ class GlobalPositioner {
       RunVisualPositionWarmStart();
     }
     SolveInertialAlignmentWarmStart();
-    if (starts_from_random_positions) {
-      ResetProblemForMainSolve(
-          /*switch_huber_to_cauchy=*/!options_.use_metric_depth_constraint);
-      warm_started_positions_ = true;
-    }
-  }
-
-  void AddImuConstraints(colmap::ImuReintegrationCallback* reint_callback,
-                         bool* has_reint,
-                         double weight_scale = 1.0) {
-    for (ImuEdgeRecord& edge : mutable_imu_edges_) {
-      imu_losses_.push_back(edge.loss.Create());
-      if (!AddImuResidualBlock(
-              problem_.get(), edge, imu_losses_.back().get(), weight_scale)) {
-        imu_losses_.pop_back();
-        continue;
-      }
-      ++result_.diagnostics.num_imu_residuals;
-      if (reint_callback != nullptr && edge.integrator != nullptr) {
-        reint_callback->AddEdge(edge.integrator,
-                                &edge.data,
-                                imu_state_params_.at(edge.image_id1).data());
-        *has_reint = true;
-      }
-    }
   }
 
   void AddPointToCameraConstraints() {
@@ -869,9 +832,9 @@ class GlobalPositioner {
   }
 
   void AddPoint3DToProblem(Point3DId point3D_id) {
-    const bool random_initialization =
-        options_.optimize_points && options_.generate_random_points &&
-        !options_.use_init && !warm_started_positions_;
+    const bool random_initialization = options_.optimize_points &&
+                                       options_.generate_random_points &&
+                                       !options_.use_init;
     Eigen::Vector3d& xyz = point_xyz_.at(point3D_id);
     if (random_initialization) {
       xyz = options_.random_init_scale * RandVector3d(-1.0, 1.0);
@@ -939,9 +902,8 @@ class GlobalPositioner {
     scales_.emplace_back(1.0);
     double& scale = scales_.back();
     Eigen::Vector3d& point_xyz = point_xyz_.at(point3D_id);
-    if (warm_started_positions_ ||
-        (!options_.generate_scales &&
-         (random_initialization || options_.initialize_warm_start_scales))) {
+    if (!options_.generate_scales &&
+        (random_initialization || options_.initialize_warm_start_scales)) {
       const Eigen::Vector3d delta = point_xyz - center;
       const double delta_sq = delta.squaredNorm();
       if (delta_sq > 1e-12) {
@@ -1399,25 +1361,6 @@ class GlobalPositioner {
         }
       }
     }
-    if (has_imu_) {
-      if (gravity_direction_.norm() <= 1e-6) {
-        gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
-      } else {
-        gravity_direction_.normalize();
-      }
-      if (problem_->HasParameterBlock(gravity_direction_.data())) {
-        colmap::SetManifold(problem_.get(),
-                            gravity_direction_.data(),
-                            colmap::CreateSphereManifold<3>());
-      }
-      for (const ImageId image_id : imu_image_ids_) {
-        double* state_ptr = imu_state_params_.at(image_id).data();
-        if (!problem_->HasParameterBlock(state_ptr)) continue;
-        colmap::SetManifold(problem_.get(),
-                            state_ptr,
-                            colmap::CreateImuStateVelAccelBiasManifold());
-      }
-    }
     options_.solver_backend.Apply(&solver_options_);
     solver_options_.num_threads =
         colmap::GetEffectiveNumThreads(solver_options_.num_threads);
@@ -1558,7 +1501,6 @@ class GlobalPositioner {
   const std::vector<ImuEdgeRecord>& imu_edges_;
   const std::vector<ImuStateRecord>& imu_states_;
   bool has_imu_ = false;
-  bool warm_started_positions_ = false;
   bool imu_scale_finalized_ = false;
   double log_scale_ = 0.0;
   Eigen::Vector3d gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
