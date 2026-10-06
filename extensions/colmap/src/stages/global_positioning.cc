@@ -145,33 +145,35 @@ class GlobalPositioner {
     InitializeImuParameters();
     AddPointToCameraConstraints();
     ParameterizeVariables();
-    if (has_imu_ && options_.use_linear_gravity_warm_start) {
-      RunLinearGravityWarmStart();
-    }
-
-    colmap::ImuReintegrationOptions reint_options;
-    reint_options.reintegrate_angle_norm_thres =
-        options_.reintegration_bias_threshold;
-    reint_options.reintegrate_vel_norm_thres =
-        options_.reintegration_bias_threshold;
-    colmap::ImuReintegrationCallback reint_callback(reint_options);
-    bool has_reint = false;
-    if (has_imu_) {
-      AddImuConstraints(problem_.get(), &reint_callback, &has_reint);
-      ParameterizeImuVariables(problem_.get(), /*fix_gravity_norm=*/true);
-    }
-
     if (options_.use_parameter_block_ordering) {
       AddCamerasAndPointsToParameterGroups();
-    }
-    if (has_reint) {
-      solver_options_.callbacks.push_back(&reint_callback);
-      solver_options_.update_state_every_iteration = true;
     }
     const int support_rounds = options_.sequential_support_warmup_rounds;
 
     ceres::Solver::Summary summary;
     try {
+      if (has_imu_ && options_.use_linear_gravity_warm_start) {
+        RunLinearGravityWarmStart();
+      }
+
+      colmap::ImuReintegrationOptions reint_options;
+      reint_options.reintegrate_angle_norm_thres =
+          options_.reintegration_bias_threshold;
+      reint_options.reintegrate_vel_norm_thres =
+          options_.reintegration_bias_threshold;
+      colmap::ImuReintegrationCallback reint_callback(reint_options);
+      bool has_reint = false;
+      if (has_imu_) {
+        AddImuConstraints(problem_.get(), &reint_callback, &has_reint);
+        ParameterizeImuVariables(problem_.get(), /*fix_gravity_norm=*/true);
+        if (options_.use_parameter_block_ordering) {
+          AddCamerasAndPointsToParameterGroups();
+        }
+      }
+      if (has_reint) {
+        solver_options_.callbacks.push_back(&reint_callback);
+        solver_options_.update_state_every_iteration = true;
+      }
       if (support_rounds > 0 && options_.playback.IsEnabled()) {
         WritePlaybackCapture("initial", -1);
       }
@@ -320,7 +322,6 @@ class GlobalPositioner {
     image_centers_.reserve(mapping_problem_->NumImages());
     frame_centers_.clear();
     frame_centers_.reserve(mapping_problem_->NumImages());
-    visually_constrained_frames_.clear();
     dmap_scales_.clear();
     dmap_scale_observation_counts_.clear();
     per_image_scale_prior_losses_.clear();
@@ -393,9 +394,20 @@ class GlobalPositioner {
     solver_options_.minimizer_progress_to_stdout = false;
   }
 
+  void AddConstrainedFramesFromObservations(
+      const MatrixX2u& observations,
+      std::unordered_set<FrameId>* constrained_frames) const {
+    for (Eigen::Index row = 0; row < observations.rows(); ++row) {
+      const ImageId image_id = observations(row, 0);
+      if (image_ids_.count(image_id) == 0) continue;
+      const ImageRecord& image = mapping_problem_->Image(image_id);
+      if (image.pose.has_pose) {
+        constrained_frames->insert(image.frame_id);
+      }
+    }
+  }
+
   std::unordered_set<FrameId> FindConstrainedFrames() {
-    visually_constrained_frames_.clear();
-    visually_constrained_frames_.reserve(mapping_problem_->NumImages());
     std::unordered_set<FrameId> constrained_frames;
     for (const PairId pair_id : mapping_problem_->PairIds()) {
       const PairRecord& pair = mapping_problem_->Pair(pair_id);
@@ -403,29 +415,19 @@ class GlobalPositioner {
       const ImageRecord& image1 = mapping_problem_->Image(pair.image_id1);
       const ImageRecord& image2 = mapping_problem_->Image(pair.image_id2);
       if (!image1.pose.has_pose || !image2.pose.has_pose) continue;
-      visually_constrained_frames_.insert(image1.frame_id);
-      visually_constrained_frames_.insert(image2.frame_id);
       constrained_frames.insert(image1.frame_id);
       constrained_frames.insert(image2.frame_id);
     }
-    std::unordered_map<FrameId, int> visual_obs_count_per_frame;
     for (const Point3DId point3D_id : mapping_problem_->Point3DIds()) {
       const TrackRecord& track = mapping_problem_->Track(point3D_id);
       if (track.observations.rows() < options_.min_num_view_per_track) {
         continue;
       }
-      CountConstrainedFrameObservations(track.observations,
-                                        &visual_obs_count_per_frame);
+      AddConstrainedFramesFromObservations(track.observations,
+                                           &constrained_frames);
       if (options_.use_lc_observations) {
-        CountConstrainedFrameObservations(track.loop_closure_observations,
-                                          &visual_obs_count_per_frame);
-      }
-    }
-    const int min_visual_obs_for_frame = has_imu_ ? 3 : 1;
-    for (const auto& [frame_id, count] : visual_obs_count_per_frame) {
-      constrained_frames.insert(frame_id);
-      if (count >= min_visual_obs_for_frame) {
-        visually_constrained_frames_.insert(frame_id);
+        AddConstrainedFramesFromObservations(track.loop_closure_observations,
+                                             &constrained_frames);
       }
     }
     if (has_imu_) {
@@ -497,19 +499,6 @@ class GlobalPositioner {
     return frame_centers_.at(image.frame_id);
   }
 
-  void CountConstrainedFrameObservations(
-      const MatrixX2u& observations,
-      std::unordered_map<FrameId, int>* obs_counts) const {
-    for (Eigen::Index row = 0; row < observations.rows(); ++row) {
-      const ImageId image_id = observations(row, 0);
-      if (image_ids_.count(image_id) == 0) continue;
-      const ImageRecord& image = mapping_problem_->Image(image_id);
-      if (image.pose.has_pose) {
-        ++(*obs_counts)[image.frame_id];
-      }
-    }
-  }
-
   void InitializeImuParameters() {
     if (options_.imu_from_cam.has_pose) {
       imu_from_cam_metric_ = ToColmapPose(options_.imu_from_cam);
@@ -566,24 +555,6 @@ class GlobalPositioner {
       gravity_direction_ = (-dv_telescoping).normalized();
     } else {
       gravity_direction_ = Eigen::Vector3d::Zero();
-    }
-  }
-
-  void RunVisualPositionWarmStart() {
-    if (options_.use_parameter_block_ordering) {
-      AddCamerasAndPointsToParameterGroups();
-    }
-    ceres::Solver::Options warm_solver_opts = solver_options_;
-    warm_solver_opts.max_num_iterations =
-        std::min(options_.max_num_iterations, 100);
-    ceres::Solver::Summary warm_summary;
-    ceres::Solve(warm_solver_opts, problem_.get(), &warm_summary);
-    for (const ImageId image_id : imu_image_ids_) {
-      const ImageRecord& image = mapping_problem_->Image(image_id);
-      if (!HasActiveCenter(image)) continue;
-      if (visually_constrained_frames_.count(image.frame_id) == 0) {
-        CenterForImage(image).setZero();
-      }
     }
   }
 
@@ -652,6 +623,10 @@ class GlobalPositioner {
 
   void ParameterizeImuVariables(ceres::Problem* problem,
                                 const bool fix_gravity_norm) {
+    if (problem->HasParameterBlock(&log_scale_)) {
+      problem->SetParameterLowerBound(&log_scale_, 0, -5.0);
+      problem->SetParameterUpperBound(&log_scale_, 0, 5.0);
+    }
     if (fix_gravity_norm) {
       if (gravity_direction_.norm() <= 1e-6) {
         gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
@@ -685,17 +660,15 @@ class GlobalPositioner {
     for (const ImageId image_id : imu_image_ids_) {
       const ImageRecord& image = mapping_problem_->Image(image_id);
       if (!HasActiveCenter(image)) continue;
-      const bool is_visually_constrained =
-          !options_.optimize_positions ||
-          visually_constrained_frames_.empty() ||
-          visually_constrained_frames_.count(image.frame_id) > 0;
       double* c_ptr = CenterForImage(image).data();
-      if (is_visually_constrained && align_problem.HasParameterBlock(c_ptr)) {
+      if (align_problem.HasParameterBlock(c_ptr)) {
         align_problem.SetParameterBlockConstant(c_ptr);
       }
     }
 
     ceres::Solver::Options align_opts = solver_options_;
+    align_opts.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+    align_opts.linear_solver_ordering.reset();
     align_opts.max_num_iterations = 40;
     ceres::Solver::Summary align_summary;
     ceres::Solve(align_opts, &align_problem, &align_summary);
@@ -712,10 +685,9 @@ class GlobalPositioner {
     const bool starts_from_random_positions =
         options_.optimize_positions && options_.generate_random_positions &&
         !options_.use_init;
-    if (starts_from_random_positions) {
-      RunVisualPositionWarmStart();
+    if (!starts_from_random_positions) {
+      SolveInertialAlignmentWarmStart();
     }
-    SolveInertialAlignmentWarmStart();
   }
 
   void AddPointToCameraConstraints() {
@@ -902,8 +874,11 @@ class GlobalPositioner {
     scales_.emplace_back(1.0);
     double& scale = scales_.back();
     Eigen::Vector3d& point_xyz = point_xyz_.at(point3D_id);
-    if (!options_.generate_scales &&
-        (random_initialization || options_.initialize_warm_start_scales)) {
+    const bool has_input_positions =
+        !options_.generate_random_positions || options_.use_init;
+    if ((has_imu_ && has_input_positions) ||
+        (!options_.generate_scales &&
+         (random_initialization || options_.initialize_warm_start_scales))) {
       const Eigen::Vector3d delta = point_xyz - center;
       const double delta_sq = delta.squaredNorm();
       if (delta_sq > 1e-12) {
@@ -1388,6 +1363,13 @@ class GlobalPositioner {
       for (double& scale : scales_) {
         scale /= std::max(s_ceres, 1e-9);
       }
+      for (auto& [image_id, dmap_scale] : dmap_scales_) {
+        if (options_.use_log_scale_for_depth_map_scales) {
+          dmap_scale += log_scale_;
+        } else {
+          dmap_scale *= s_ceres;
+        }
+      }
       for (auto& [image_id, state] : imu_state_params_) {
         state.head<3>() *= s_ceres;
       }
@@ -1397,7 +1379,7 @@ class GlobalPositioner {
             ImuStateRecord::FromVector(
                 image_id, imu_state_params_.at(image_id), 1.0));
       }
-      if (!has_input_positions) {
+      if (!has_input_positions && !options_.use_metric_depth_constraint) {
         total_scale = 1.0;
       }
     } else {
@@ -1516,7 +1498,6 @@ class GlobalPositioner {
   std::map<Point3DId, Eigen::Vector3d> point_xyz_;
   std::unordered_map<ImageId, Eigen::Vector3d> image_centers_;
   std::unordered_map<FrameId, Eigen::Vector3d> frame_centers_;
-  std::unordered_set<FrameId> visually_constrained_frames_;
   std::vector<double> scales_;
   std::map<std::string, std::size_t> scale_indices_;
   std::map<ImageId, double> dmap_scales_;
