@@ -252,47 +252,51 @@ class GlobalPositioner {
       }
     }
 
+    ValidateImuInputs();
+  }
+
+  void ValidateImuInputs() {
     mutable_imu_edges_.clear();
     imu_image_ids_.clear();
     has_imu_ = false;
-    if (options_.use_imu && !imu_edges_.empty()) {
-      if (options_.imu_from_cam.has_pose) {
-        options_.imu_from_cam.Validate();
-      }
-      std::unordered_set<ImageId> edge_image_set;
-      for (const ImuEdgeRecord& edge : imu_edges_) {
-        edge.Validate();
-        if (image_ids_.count(edge.image_id1) == 0 ||
-            image_ids_.count(edge.image_id2) == 0) {
-          throw std::invalid_argument(
-              "global positioning IMU edge references an unknown image");
-        }
-        const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-        const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-        if (!image1.pose.has_pose || !image2.pose.has_pose) {
-          continue;
-        }
-        mutable_imu_edges_.push_back(edge);
-        edge_image_set.insert(edge.image_id1);
-        edge_image_set.insert(edge.image_id2);
-      }
-      imu_image_ids_.assign(edge_image_set.begin(), edge_image_set.end());
-      std::sort(imu_image_ids_.begin(), imu_image_ids_.end());
+    if (!options_.use_imu || imu_edges_.empty()) return;
 
-      std::unordered_set<ImageId> seen_imu_states;
-      for (const ImuStateRecord& state : imu_states_) {
-        state.Validate();
-        if (image_ids_.count(state.image_id) == 0) {
-          throw std::invalid_argument(
-              "global positioning IMU state references an unknown image");
-        }
-        if (!seen_imu_states.insert(state.image_id).second) {
-          throw std::invalid_argument(
-              "duplicate global positioning IMU state record");
-        }
-      }
-      has_imu_ = !mutable_imu_edges_.empty();
+    if (options_.imu_from_cam.has_pose) {
+      options_.imu_from_cam.Validate();
     }
+    std::unordered_set<ImageId> edge_image_set;
+    for (const ImuEdgeRecord& edge : imu_edges_) {
+      edge.Validate();
+      if (image_ids_.count(edge.image_id1) == 0 ||
+          image_ids_.count(edge.image_id2) == 0) {
+        throw std::invalid_argument(
+            "global positioning IMU edge references an unknown image");
+      }
+      const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
+      const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
+      if (!image1.pose.has_pose || !image2.pose.has_pose) {
+        continue;
+      }
+      mutable_imu_edges_.push_back(edge);
+      edge_image_set.insert(edge.image_id1);
+      edge_image_set.insert(edge.image_id2);
+    }
+    imu_image_ids_.assign(edge_image_set.begin(), edge_image_set.end());
+    std::sort(imu_image_ids_.begin(), imu_image_ids_.end());
+
+    std::unordered_set<ImageId> seen_imu_states;
+    for (const ImuStateRecord& state : imu_states_) {
+      state.Validate();
+      if (image_ids_.count(state.image_id) == 0) {
+        throw std::invalid_argument(
+            "global positioning IMU state references an unknown image");
+      }
+      if (!seen_imu_states.insert(state.image_id).second) {
+        throw std::invalid_argument(
+            "duplicate global positioning IMU state record");
+      }
+    }
+    has_imu_ = !mutable_imu_edges_.empty();
   }
 
   void SetupProblem() {
@@ -389,7 +393,7 @@ class GlobalPositioner {
     solver_options_.minimizer_progress_to_stdout = false;
   }
 
-  void InitializeRandomPositions() {
+  std::unordered_set<FrameId> FindConstrainedFrames() {
     visually_constrained_frames_.clear();
     visually_constrained_frames_.reserve(mapping_problem_->NumImages());
     std::unordered_set<FrameId> constrained_frames;
@@ -434,7 +438,12 @@ class GlobalPositioner {
         }
       }
     }
+    return constrained_frames;
+  }
 
+  void InitializeRandomPositions() {
+    const std::unordered_set<FrameId> constrained_frames =
+        FindConstrainedFrames();
     std::vector<ImageId> ordered_image_ids = mapping_problem_->ImageIds();
     if (options_.center_mode == GlobalPositioningCenterMode::kFrame) {
       std::sort(ordered_image_ids.begin(),
@@ -630,71 +639,6 @@ class GlobalPositioner {
     }
   }
 
-  void InterpolateUnconstrainedFrameCenters() {
-    if (visually_constrained_frames_.empty()) return;
-    int prev_vis_idx = -1;
-    const int num_imu_imgs = static_cast<int>(imu_image_ids_.size());
-    for (int i = 0; i < num_imu_imgs; ++i) {
-      const ImageRecord& img = mapping_problem_->Image(imu_image_ids_[i]);
-      if (!HasActiveCenter(img) ||
-          visually_constrained_frames_.count(img.frame_id) == 0) {
-        continue;
-      }
-      const Eigen::Vector3d& c_end = CenterForImage(img);
-      if (prev_vis_idx >= 0 && i - prev_vis_idx > 1) {
-        const Eigen::Vector3d& c_start = CenterForImage(
-            mapping_problem_->Image(imu_image_ids_[prev_vis_idx]));
-        for (int k = prev_vis_idx + 1; k < i; ++k) {
-          const ImageRecord& blk_img =
-              mapping_problem_->Image(imu_image_ids_[k]);
-          if (!HasActiveCenter(blk_img)) continue;
-          const double alpha = static_cast<double>(k - prev_vis_idx) /
-                               static_cast<double>(i - prev_vis_idx);
-          CenterForImage(blk_img) = (1.0 - alpha) * c_start + alpha * c_end;
-        }
-      } else if (prev_vis_idx < 0 && i > 0) {
-        for (int k = 0; k < i; ++k) {
-          const ImageRecord& blk_img =
-              mapping_problem_->Image(imu_image_ids_[k]);
-          if (HasActiveCenter(blk_img)) CenterForImage(blk_img) = c_end;
-        }
-      }
-      prev_vis_idx = i;
-    }
-    if (prev_vis_idx >= 0 && prev_vis_idx + 1 < num_imu_imgs) {
-      const Eigen::Vector3d& c_start =
-          CenterForImage(mapping_problem_->Image(imu_image_ids_[prev_vis_idx]));
-      for (int k = prev_vis_idx + 1; k < num_imu_imgs; ++k) {
-        const ImageRecord& blk_img = mapping_problem_->Image(imu_image_ids_[k]);
-        if (HasActiveCenter(blk_img)) CenterForImage(blk_img) = c_start;
-      }
-    }
-  }
-
-  void InitializeVelocitiesFromFiniteDifferences() {
-    std::unordered_map<ImageId, int> counts;
-    for (const ImageId image_id : imu_image_ids_) {
-      imu_state_params_.at(image_id).head<3>().setZero();
-    }
-    for (const ImuEdgeRecord& edge : mutable_imu_edges_) {
-      const ImageRecord& image1 = mapping_problem_->Image(edge.image_id1);
-      const ImageRecord& image2 = mapping_problem_->Image(edge.image_id2);
-      if (!HasActiveCenter(image1) || !HasActiveCenter(image2)) continue;
-      const double dt = std::max(edge.data.delta_t, 1e-3);
-      const Eigen::Vector3d v_fd =
-          (CenterForImage(image2) - CenterForImage(image1)) / dt;
-      imu_state_params_.at(edge.image_id1).head<3>() += v_fd;
-      imu_state_params_.at(edge.image_id2).head<3>() += v_fd;
-      ++counts[edge.image_id1];
-      ++counts[edge.image_id2];
-    }
-    for (const auto& [image_id, count] : counts) {
-      if (count > 1) {
-        imu_state_params_.at(image_id).head<3>() /= static_cast<double>(count);
-      }
-    }
-  }
-
   bool AddImuResidualBlock(ceres::Problem* problem,
                            ImuEdgeRecord& edge,
                            ceres::LossFunction* loss_function,
@@ -742,8 +686,12 @@ class GlobalPositioner {
     for (const ImageId image_id : imu_image_ids_) {
       const ImageRecord& image = mapping_problem_->Image(image_id);
       if (!HasActiveCenter(image)) continue;
+      const bool is_visually_constrained =
+          !options_.optimize_positions ||
+          visually_constrained_frames_.empty() ||
+          visually_constrained_frames_.count(image.frame_id) > 0;
       double* c_ptr = CenterForImage(image).data();
-      if (align_problem.HasParameterBlock(c_ptr)) {
+      if (is_visually_constrained && align_problem.HasParameterBlock(c_ptr)) {
         align_problem.SetParameterBlockConstant(c_ptr);
       }
       double* state_ptr = imu_state_params_.at(image_id).data();
@@ -752,7 +700,6 @@ class GlobalPositioner {
             &align_problem,
             state_ptr,
             colmap::CreateSubsetManifold(9, {3, 4, 5, 6, 7, 8}));
-        align_problem.SetParameterBlockConstant(state_ptr);
       }
     }
 
@@ -761,27 +708,8 @@ class GlobalPositioner {
     align_opts.minimizer_progress_to_stdout = false;
     align_opts.num_threads =
         colmap::GetEffectiveNumThreads(options_.num_threads);
-    align_opts.max_num_iterations = 15;
+    align_opts.max_num_iterations = 40;
     ceres::Solver::Summary align_summary;
-    ceres::Solve(align_opts, &align_problem, &align_summary);
-
-    for (const ImageId image_id : imu_image_ids_) {
-      const ImageRecord& image = mapping_problem_->Image(image_id);
-      if (!HasActiveCenter(image)) continue;
-      double* state_ptr = imu_state_params_.at(image_id).data();
-      if (align_problem.HasParameterBlock(state_ptr)) {
-        align_problem.SetParameterBlockVariable(state_ptr);
-      }
-      if (options_.optimize_positions &&
-          !visually_constrained_frames_.empty() &&
-          visually_constrained_frames_.count(image.frame_id) == 0) {
-        double* c_ptr = CenterForImage(image).data();
-        if (align_problem.HasParameterBlock(c_ptr)) {
-          align_problem.SetParameterBlockVariable(c_ptr);
-        }
-      }
-    }
-    align_opts.max_num_iterations = 25;
     ceres::Solve(align_opts, &align_problem, &align_summary);
 
     if (gravity_direction_.norm() > 1e-6) {
@@ -818,9 +746,7 @@ class GlobalPositioner {
         !options_.use_init;
     if (starts_from_random_positions) {
       RunVisualPositionWarmStart();
-      InterpolateUnconstrainedFrameCenters();
     }
-    InitializeVelocitiesFromFiniteDifferences();
     SolveInertialAlignmentWarmStart();
     if (options_.optimize_positions && !options_.use_metric_depth_constraint &&
         options_.apply_imu_scale_to_problem) {
