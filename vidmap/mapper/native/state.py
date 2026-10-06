@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pycolmap
@@ -31,6 +31,75 @@ class SolveState:
         self._validate_order(self.image_order, native_problem.image_ids, "image_order")
         self._validate_order(self.pair_order, native_problem.pair_ids, "pair_order")
         self.native_problem.validate()
+
+        self.imu_edges: list[native.ImuEdgeRecord] = []
+        self.imu_states: dict[int, native.ImuStateRecord] = {}
+        self.imu_from_cam: native.PoseRecord = native.PoseRecord()
+        self.initial_imu_from_cam: native.PoseRecord = native.PoseRecord()
+        self.gravity_direction: np.ndarray | None = None
+        self.gravity_in_world: np.ndarray | None = None
+        self.imu_scale: float | None = None
+        self.has_metric_imu_scale: bool = False
+
+    def set_imu_data(
+        self,
+        imu_edges: Sequence[native.ImuEdgeRecord],
+        *,
+        imu_from_cam: native.PoseRecord | pycolmap.Rigid3d | None = None,
+        imu_states: Sequence[native.ImuStateRecord] | Mapping[int, native.ImuStateRecord] | None = None,
+    ) -> None:
+        self.imu_edges = list(imu_edges)
+        if imu_from_cam is not None:
+            if isinstance(imu_from_cam, pycolmap.Rigid3d):
+                pose_rec = pose_record_from_pycolmap(imu_from_cam)
+            else:
+                pose_rec = native.PoseRecord()
+                pose_rec.has_pose = bool(imu_from_cam.has_pose)
+                pose_rec.rotation_xyzw = np.asarray(imu_from_cam.rotation_xyzw, dtype=np.float64).copy()
+                pose_rec.translation = np.asarray(imu_from_cam.translation, dtype=np.float64).copy()
+            self.imu_from_cam = pose_rec
+            init_rec = native.PoseRecord()
+            init_rec.has_pose = bool(pose_rec.has_pose)
+            init_rec.rotation_xyzw = np.asarray(pose_rec.rotation_xyzw, dtype=np.float64).copy()
+            init_rec.translation = np.asarray(pose_rec.translation, dtype=np.float64).copy()
+            self.initial_imu_from_cam = init_rec
+        if imu_states is not None:
+            self.update_imu_states(imu_states)
+
+    def imu_states_list(self) -> list[native.ImuStateRecord]:
+        return [self.imu_states[image_id] for image_id in self.image_order if image_id in self.imu_states]
+
+    def update_imu_states(
+        self,
+        states: Mapping[int, native.ImuStateRecord] | Sequence[native.ImuStateRecord],
+        *,
+        use_metric_velocity: bool = False,
+    ) -> None:
+        items = states.values() if isinstance(states, Mapping) else states
+        updated: dict[int, native.ImuStateRecord] = {}
+        for record in items:
+            cloned = native.ImuStateRecord()
+            cloned.image_id = int(record.image_id)
+            vel = record.metric_velocity if use_metric_velocity else record.velocity
+            cloned.velocity = np.asarray(vel, dtype=np.float64).copy()
+            cloned.metric_velocity = np.asarray(record.metric_velocity, dtype=np.float64).copy()
+            cloned.bias_gyro = np.asarray(record.bias_gyro, dtype=np.float64).copy()
+            cloned.bias_accel = np.asarray(record.bias_accel, dtype=np.float64).copy()
+            updated[int(record.image_id)] = cloned
+        self.imu_states = updated
+
+    def reintegrate_imu_edges(self) -> None:
+        if not self.imu_edges or not self.imu_states:
+            return
+        for edge in self.imu_edges:
+            if not edge.has_integrator:
+                continue
+            state = self.imu_states.get(int(edge.image_id1))
+            if state is None:
+                continue
+            biases = np.concatenate([state.bias_gyro, state.bias_accel]).astype(np.float64)
+            if np.linalg.norm(biases - np.asarray(edge.data.biases, dtype=np.float64)) > 1e-6:
+                edge.reintegrate(biases)
 
     @staticmethod
     def _validate_order(order: Sequence[int], identifiers: Sequence[int], label: str) -> None:

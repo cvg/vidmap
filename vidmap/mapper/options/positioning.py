@@ -47,6 +47,11 @@ class GPCommonOptions:
     camera_center_strategy: Literal["frame", "image"] = "frame"
     random_init_scale: float = 100.0
     zero_residuals_behind_camera: bool = False
+    use_imu: bool = False
+    use_linear_gravity_warm_start: bool = True
+    gravity_magnitude: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 9.81
+    imu_cost_weight: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 2.5e-3
+    apply_imu_scale_to_problem: bool = True
 
 
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))

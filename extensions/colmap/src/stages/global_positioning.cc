@@ -1328,7 +1328,7 @@ class GlobalPositioner {
         }
       }
     }
-    if (!options_.use_metric_depth_constraint) {
+    if (!options_.use_metric_depth_constraint || dmap_scales_.empty()) {
       for (double& scale : scales_) {
         if (problem_->HasParameterBlock(&scale)) {
           problem_->SetParameterBlockConstant(&scale);
@@ -1379,7 +1379,8 @@ class GlobalPositioner {
             ImuStateRecord::FromVector(
                 image_id, imu_state_params_.at(image_id), 1.0));
       }
-      if (!has_input_positions && !options_.use_metric_depth_constraint) {
+      if (!has_input_positions &&
+          (!options_.use_metric_depth_constraint || dmap_scales_.empty())) {
         total_scale = 1.0;
       }
     } else {

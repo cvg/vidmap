@@ -127,6 +127,21 @@ void BindRecords(py::module_& m) {
       .def_property_readonly(
           "has_integrator",
           [](const ImuEdgeRecord& self) { return self.integrator != nullptr; })
+      .def(
+          "reintegrate",
+          [](ImuEdgeRecord& self, const Eigen::Vector6d& biases) {
+            if (self.integrator == nullptr) {
+              return false;
+            }
+            const double orig_g = self.data.gravity_magnitude;
+            self.integrator->Reintegrate(biases);
+            self.integrator->Update(&self.data);
+            if (orig_g > 0.0) {
+              self.data.gravity_magnitude = orig_g;
+            }
+            return true;
+          },
+          py::arg("biases"))
       .def_property(
           "q_iori_1_xyzw",
           [](const ImuEdgeRecord& self) -> Eigen::Vector4d {
