@@ -326,7 +326,6 @@ class GlobalPositioner {
     temporal_acceleration_losses_.clear();
     imu_losses_.clear();
     imu_state_params_.clear();
-    warm_start_scale_ = 1.0;
     log_scale_ = std::log(options_.initial_scale);
     gravity_direction_ = options_.initial_gravity_direction.normalized();
     has_sequential_support_candidate_ = false;
@@ -586,9 +585,9 @@ class GlobalPositioner {
     if (switch_huber_to_cauchy &&
         options_.loss.type == LossFunctionType::kHuber) {
       // Two-stage Graduated Non-Convexity (GNC): once camera centers and 3D
-      // points are warm-started at metric scale, switch from the convex Huber
-      // loss to a redescending Cauchy loss so gross directional outliers
-      // cannot bias camera centers against the metric IMU constraints.
+      // points are warm-started, switch from the convex Huber loss to a
+      // redescending Cauchy loss so gross directional outliers cannot bias
+      // camera centers against the metric IMU constraints.
       const LossConfig post_warm_loss{LossFunctionType::kCauchy,
                                       std::min(options_.loss.scale, 0.02),
                                       options_.loss.weight};
@@ -719,25 +718,6 @@ class GlobalPositioner {
     }
   }
 
-  void ApplyWarmStartScaleToProblem() {
-    const double s_warm = std::clamp(std::exp(log_scale_), 1e-4, 1e5);
-    if (!std::isfinite(s_warm)) return;
-    for (auto& [image_id, center] : image_centers_) {
-      center *= s_warm;
-    }
-    for (auto& [frame_id, center] : frame_centers_) {
-      center *= s_warm;
-    }
-    for (auto& [point3D_id, xyz] : point_xyz_) {
-      xyz *= s_warm;
-    }
-    for (auto& [image_id, state] : imu_state_params_) {
-      state.head<3>() *= s_warm;
-    }
-    warm_start_scale_ = s_warm;
-    log_scale_ = 0.0;
-  }
-
   void RunLinearGravityWarmStart() {
     log_scale_ = 0.0;
     SeedTelescopicGravityDirection();
@@ -748,12 +728,11 @@ class GlobalPositioner {
       RunVisualPositionWarmStart();
     }
     SolveInertialAlignmentWarmStart();
-    if (options_.optimize_positions && !options_.use_metric_depth_constraint &&
-        options_.apply_imu_scale_to_problem) {
-      ApplyWarmStartScaleToProblem();
-      ResetProblemForMainSolve(/*switch_huber_to_cauchy=*/true);
+    if (starts_from_random_positions) {
+      ResetProblemForMainSolve(
+          /*switch_huber_to_cauchy=*/!options_.use_metric_depth_constraint);
+      warm_started_positions_ = true;
     }
-    warm_started_positions_ = true;
   }
 
   void AddImuConstraints(colmap::ImuReintegrationCallback* reint_callback,
@@ -1133,8 +1112,8 @@ class GlobalPositioner {
                                   lhs.image_id1,
                                   lhs.image_id2) <
                        std::tuple(-static_cast<std::int64_t>(rhs.support_count),
-                                  rhs.image_id1,
-                                  rhs.image_id2);
+                                  lhs.image_id1,
+                                  lhs.image_id2);
               });
     playback_topology_ready_ = true;
   }
@@ -1449,7 +1428,7 @@ class GlobalPositioner {
     imu_scale_finalized_ = true;
 
     const double s_ceres = std::exp(log_scale_);
-    double total_scale = warm_start_scale_ * s_ceres;
+    double total_scale = s_ceres;
     const bool has_input_positions =
         !options_.generate_random_positions || options_.use_init;
 
@@ -1581,7 +1560,6 @@ class GlobalPositioner {
   bool has_imu_ = false;
   bool warm_started_positions_ = false;
   bool imu_scale_finalized_ = false;
-  double warm_start_scale_ = 1.0;
   double log_scale_ = 0.0;
   Eigen::Vector3d gravity_direction_ = Eigen::Vector3d(0.0, 0.0, -1.0);
   colmap::Rigid3d imu_from_cam_metric_;
