@@ -486,14 +486,134 @@ void InitializeFromMaximumSpanningTree(
   }
 }
 
+double MedianOfVector(std::vector<double>* values) {
+  if (values->empty()) return 0.0;
+  std::sort(values->begin(), values->end());
+  const std::size_t mid = values->size() / 2;
+  if (values->size() % 2 == 1) {
+    return (*values)[mid];
+  }
+  return 0.5 * ((*values)[mid - 1] + (*values)[mid]);
+}
+
+// Closed-form SO(3) preintegrated rotation uncertainty propagation model for
+// dynamic pair rotation outlier thresholding:
+//   sigma_total,3D(dt) = sqrt(3 * (sigma_vis^2 + sigma_g^2 * dt
+//                                  + sigma_bg0^2 * dt^2
+//                                  + (1/3) * sigma_bg_rw^2 * dt^3))
+//   theta_max(dt) = min(theta_cap, k_sigma * sigma_total,3D(dt))
+class ImuDynamicRotationThresholdModel {
+ public:
+  ImuDynamicRotationThresholdModel(
+      const VideoRotationAveragingOptions& options,
+      const std::vector<ImuEdgeRecord>& imu_edges,
+      const double max_rotation_error_deg)
+      : theta_cap_rad_(colmap::DegToRad(max_rotation_error_deg)),
+        enabled_(options.use_imu &&
+                 options.use_dynamic_imu_rotation_threshold &&
+                 !imu_edges.empty() && max_rotation_error_deg > 0.0),
+        k_sigma_(options.imu_dynamic_rotation_threshold_multiplier),
+        sigma_vis_rad_(colmap::DegToRad(options.visual_rotation_stddev_deg)),
+        sigma_bg0_rad_s_(options.imu_gyro_bias_stddev_rad_s) {
+    if (!enabled_) return;
+
+    std::vector<double> sigma_g_sq_samples;
+    std::vector<double> sigma_bg_rw_sq_samples;
+    sigma_g_sq_samples.reserve(imu_edges.size());
+    sigma_bg_rw_sq_samples.reserve(imu_edges.size());
+
+    std::map<ImageId, std::vector<std::pair<ImageId, double>>> adj;
+    for (const ImuEdgeRecord& edge : imu_edges) {
+      const double dt = edge.data.delta_t;
+      if (!std::isfinite(dt) || dt <= 1e-6) continue;
+      adj[edge.image_id1].emplace_back(edge.image_id2, dt);
+      adj[edge.image_id2].emplace_back(edge.image_id1, -dt);
+
+      const double trace_cov_dR =
+          edge.data.covariance.block<3, 3>(0, 0).trace();
+      const double trace_cov_bg =
+          edge.data.covariance.block<3, 3>(9, 9).trace();
+      if (std::isfinite(trace_cov_dR) && trace_cov_dR >= 0.0 &&
+          std::isfinite(trace_cov_bg) && trace_cov_bg >= 0.0) {
+        const double sigma_bg_rw_sq =
+            std::max(0.0, trace_cov_bg / (3.0 * dt));
+        const double sigma_g_sq = std::max(
+            0.0,
+            trace_cov_dR / (3.0 * dt) -
+                (1.0 / 3.0) * sigma_bg_rw_sq * dt * dt);
+        sigma_g_sq_samples.push_back(sigma_g_sq);
+        sigma_bg_rw_sq_samples.push_back(sigma_bg_rw_sq);
+      }
+    }
+
+    sigma_g_sq_ = MedianOfVector(&sigma_g_sq_samples);
+    sigma_bg_rw_sq_ = MedianOfVector(&sigma_bg_rw_sq_samples);
+
+    int comp_id = 0;
+    for (const auto& [root_id, _] : adj) {
+      if (image_comp_.count(root_id) != 0) continue;
+      ++comp_id;
+      image_comp_[root_id] = comp_id;
+      image_time_s_[root_id] = 0.0;
+      std::queue<ImageId> q;
+      q.push(root_id);
+      while (!q.empty()) {
+        const ImageId u = q.front();
+        q.pop();
+        const double t_u = image_time_s_[u];
+        for (const auto& [v, signed_dt] : adj[u]) {
+          if (image_comp_.count(v) == 0) {
+            image_comp_[v] = comp_id;
+            image_time_s_[v] = t_u + signed_dt;
+            q.push(v);
+          }
+        }
+      }
+    }
+  }
+
+  double MaxRotationErrorRad(const ImageId image_id1,
+                             const ImageId image_id2) const {
+    if (!enabled_) return theta_cap_rad_;
+    const auto c1_it = image_comp_.find(image_id1);
+    const auto c2_it = image_comp_.find(image_id2);
+    if (c1_it == image_comp_.end() || c2_it == image_comp_.end() ||
+        c1_it->second != c2_it->second) {
+      return theta_cap_rad_;
+    }
+    const double dt =
+        std::abs(image_time_s_.at(image_id2) - image_time_s_.at(image_id1));
+    const double var_1d =
+        sigma_vis_rad_ * sigma_vis_rad_ + sigma_g_sq_ * dt +
+        (sigma_bg0_rad_s_ * sigma_bg0_rad_s_) * (dt * dt) +
+        (1.0 / 3.0) * sigma_bg_rw_sq_ * (dt * dt * dt);
+    const double sigma_total_3d_rad = std::sqrt(3.0 * std::max(0.0, var_1d));
+    return std::min(theta_cap_rad_, k_sigma_ * sigma_total_3d_rad);
+  }
+
+ private:
+  double theta_cap_rad_ = 0.0;
+  bool enabled_ = false;
+  double k_sigma_ = 3.5;
+  double sigma_vis_rad_ = 0.0;
+  double sigma_bg0_rad_s_ = 0.0;
+  double sigma_g_sq_ = 0.0;
+  double sigma_bg_rw_sq_ = 0.0;
+  std::unordered_map<ImageId, int> image_comp_;
+  std::unordered_map<ImageId, double> image_time_s_;
+};
+
 std::unordered_set<PairId> FindRotationOutlierPairs(
     const MappingProblem& problem,
     const std::vector<PairId>& pair_map_order,
     const std::unordered_set<ImageId>& active_images,
-    double max_rotation_error_deg) {
+    const double max_rotation_error_deg,
+    const VideoRotationAveragingOptions& options,
+    const std::vector<ImuEdgeRecord>& imu_edges) {
   std::unordered_set<PairId> outlier_pairs;
   if (max_rotation_error_deg <= 0.0) return outlier_pairs;
-  const double max_rotation_error = colmap::DegToRad(max_rotation_error_deg);
+  const ImuDynamicRotationThresholdModel threshold_model(
+      options, imu_edges, max_rotation_error_deg);
   for (const PairId pair_id : pair_map_order) {
     const PairRecord& pair = problem.Pair(pair_id);
     if (!IsPoseGraphPair(pair)) continue;
@@ -507,9 +627,11 @@ std::unordered_set<PairId> FindRotationOutlierPairs(
     const Eigen::Quaterniond estimated_relative_rotation =
         ToColmapPose(image2.pose).rotation() *
         ToColmapPose(image1.pose).rotation().inverse();
+    const double pair_max_rotation_error =
+        threshold_model.MaxRotationErrorRad(pair.image_id1, pair.image_id2);
     if (estimated_relative_rotation.angularDistance(
             ToColmapPose(pair.geometry.cam2_from_cam1).rotation()) >
-        max_rotation_error) {
+        pair_max_rotation_error) {
       outlier_pairs.insert(pair_id);
     }
   }
@@ -725,7 +847,11 @@ void VideoRotationAveragingOptions::Validate() const {
         !std::isfinite(imu_tracking_cauchy_scale_deg) ||
         imu_tracking_cauchy_scale_deg <= 0.0 ||
         !std::isfinite(reintegrate_angle_norm_thres) ||
-        reintegrate_angle_norm_thres < 0.0) {
+        reintegrate_angle_norm_thres < 0.0 ||
+        !std::isfinite(imu_dynamic_rotation_threshold_multiplier) ||
+        imu_dynamic_rotation_threshold_multiplier <= 0.0 ||
+        !std::isfinite(imu_gyro_bias_stddev_rad_s) ||
+        imu_gyro_bias_stddev_rad_s < 0.0) {
       throw std::invalid_argument("invalid I-RA options");
     }
   }
@@ -853,11 +979,15 @@ RotationAveragingResult RunVideoRotationAveraging(
     const double internal_outlier_thres_deg =
         options.max_rotation_error_deg > 0.0 ? options.max_rotation_error_deg
                                              : 3.0;
+    VideoRotationAveragingOptions pass1_filter_options = options;
+    pass1_filter_options.use_dynamic_imu_rotation_threshold = false;
     const std::unordered_set<PairId> pass1_outliers =
         FindRotationOutlierPairs(*problem,
                                  pair_map_order,
                                  initial_active_images,
-                                 internal_outlier_thres_deg);
+                                 internal_outlier_thres_deg,
+                                 pass1_filter_options,
+                                 mutable_imu_edges);
 
     if (!pass1_outliers.empty() && options.auto_initialize_gyro_bias &&
         imu_states.empty() &&
@@ -901,10 +1031,13 @@ RotationAveragingResult RunVideoRotationAveraging(
 
   if (options.max_rotation_error_deg > 0.0) {
     const std::unordered_set<PairId> outlier_pairs =
-        FindRotationOutlierPairs(*problem,
-                                 pair_map_order,
-                                 initial_active_images,
-                                 options.max_rotation_error_deg);
+        FindRotationOutlierPairs(
+            *problem,
+            pair_map_order,
+            initial_active_images,
+            options.max_rotation_error_deg,
+            options,
+            has_imu ? mutable_imu_edges : std::vector<ImuEdgeRecord>{});
     result.outlier_pair_ids.assign(outlier_pairs.begin(), outlier_pairs.end());
     std::sort(result.outlier_pair_ids.begin(), result.outlier_pair_ids.end());
 

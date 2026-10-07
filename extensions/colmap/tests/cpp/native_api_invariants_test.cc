@@ -64,10 +64,21 @@ void TestOptionValidation() {
 
   vidmap::VideoRotationAveragingOptions imu_ra_options;
   imu_ra_options.use_imu = true;
+  Check(imu_ra_options.use_dynamic_imu_rotation_threshold,
+        "dynamic IMU rotation threshold should default to true");
   imu_ra_options.Validate();
   imu_ra_options.visual_rotation_stddev_deg = 0.0;
   CheckInvalidArgument([&] { imu_ra_options.Validate(); },
                        "zero visual_rotation_stddev_deg was accepted");
+  imu_ra_options.visual_rotation_stddev_deg = 0.2;
+  imu_ra_options.imu_dynamic_rotation_threshold_multiplier = 0.0;
+  CheckInvalidArgument(
+      [&] { imu_ra_options.Validate(); },
+      "non-positive imu_dynamic_rotation_threshold_multiplier was accepted");
+  imu_ra_options.imu_dynamic_rotation_threshold_multiplier = 3.5;
+  imu_ra_options.imu_gyro_bias_stddev_rad_s = -1.0;
+  CheckInvalidArgument([&] { imu_ra_options.Validate(); },
+                       "negative imu_gyro_bias_stddev_rad_s was accepted");
 
   vidmap::BundleAdjustmentOptions bundle_options;
   bundle_options.max_num_iterations = 0;

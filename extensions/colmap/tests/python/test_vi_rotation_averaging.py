@@ -413,3 +413,67 @@ def test_vi_rotation_averaging_salvage_outlier_translations():
     t_21_est = np.asarray(salvaged_pair.geometry.cam2_from_cam1.translation)
     cos_angle = float(np.clip(np.dot(t_21_est, t_21_gt), -1.0, 1.0))
     assert np.degrees(np.arccos(cos_angle)) < 0.5
+
+
+def test_vi_rotation_averaging_dynamic_imu_rotation_threshold():
+    (
+        problem,
+        image_ids,
+        pair_ids,
+        corrupted_pair_ids,
+        imu_edges,
+        _integrators,
+        imu_from_cam,
+        gt_R_cw_list,
+        _true_bg,
+    ) = _simulate_sequence_with_contiguous_outliers(
+        num_frames=80,
+        corrupted_edge_range=(60, 66),
+        outlier_drift_deg_per_frame=3.0,
+    )
+
+    # Add a long-horizon loop-closure pair (1, 75) with dt = 7.4s and a 2.8 deg
+    # rotation residual (below the 5.0 deg cap and below the 7.4s dynamic bound,
+    # whereas the 0.1s consecutive pairs in (60, 66) have 3.0 deg error > 1.22 deg).
+    lc_id1, lc_id2 = image_ids[0], image_ids[74]
+    lc_pid = _pair_id(lc_id1, lc_id2)
+    pair_ids.append(lc_pid)
+    R_lc_gt = gt_R_cw_list[74] @ gt_R_cw_list[0].T
+    R_lc_pert = Rotation.from_euler("xyz", [2.8, 0.0, 0.0], degrees=True).as_matrix() @ R_lc_gt
+    lc_pair = native.PairRecord()
+    lc_pair.pair_id = lc_pid
+    lc_pair.image_id1 = lc_id1
+    lc_pair.image_id2 = lc_id2
+    lc_pair.is_valid = True
+    lc_pair.all_matches = np.column_stack((np.arange(20), np.arange(20))).astype(np.uint32)
+    lc_pair.inlier_indices = np.arange(20, dtype=np.int32)
+    lc_pair.are_loop_closure = np.ones(20, dtype=np.uint8)
+    lc_pair.geometry.cam2_from_cam1.has_pose = True
+    lc_pair.geometry.cam2_from_cam1.rotation_xyzw = Rotation.from_matrix(R_lc_pert).as_quat()
+    problem.add_pair(lc_pair)
+
+    # With a flat 5.0 deg threshold (use_dynamic_imu_rotation_threshold = False),
+    # the 3.0 deg consecutive outliers in (60, 66) are missed.
+    opt_flat = native.RotationAveragingOptions()
+    opt_flat.use_imu = True
+    opt_flat.imu_from_cam = imu_from_cam
+    opt_flat.max_rotation_error_deg = 5.0
+    opt_flat.use_dynamic_imu_rotation_threshold = False
+    res_flat = native.run_video_rotation_averaging(
+        opt_flat, image_ids, pair_ids, problem, imu_edges=imu_edges
+    )
+    assert len(res_flat.outlier_pair_ids) == 0
+
+    # With dynamic IMU uncertainty propagation (use_dynamic_imu_rotation_threshold = True),
+    # short-horizon consecutive pairs (dt = 0.1s, theta_max ~ 1.22 deg) with 3.0 deg
+    # error are rejected, while the long-horizon loop closure (dt = 7.4s, 2.8 deg) is kept.
+    opt_dyn = native.RotationAveragingOptions()
+    opt_dyn.use_imu = True
+    opt_dyn.imu_from_cam = imu_from_cam
+    opt_dyn.max_rotation_error_deg = 5.0
+    opt_dyn.use_dynamic_imu_rotation_threshold = True
+    res_dyn = native.run_video_rotation_averaging(
+        opt_dyn, image_ids, pair_ids, problem, imu_edges=imu_edges
+    )
+    assert set(res_dyn.outlier_pair_ids) == corrupted_pair_ids
+    assert lc_pid not in set(res_dyn.outlier_pair_ids)

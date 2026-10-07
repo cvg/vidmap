@@ -30,6 +30,9 @@ struct VideoRotationAveragingOptions {
   double visual_rotation_stddev_deg = 0.2;
   double imu_tracking_cauchy_scale_deg = 0.75;
   double reintegrate_angle_norm_thres = 1e-4;
+  bool use_dynamic_imu_rotation_threshold = true;
+  double imu_dynamic_rotation_threshold_multiplier = 3.5;
+  double imu_gyro_bias_stddev_rad_s = 0.002;
   bool invalidate_outlier_pairs = false;
   // Option RP-B: when invalidate_outlier_pairs is true, attempt to salvage
   // rotation-rejected pairs via known-rotation 2-point translation RANSAC on

@@ -42,6 +42,15 @@ void BindVideoRotationAveraging(py::module_& m) {
       .def_readwrite(
           "reintegrate_angle_norm_thres",
           &VideoRotationAveragingOptions::reintegrate_angle_norm_thres)
+      .def_readwrite(
+          "use_dynamic_imu_rotation_threshold",
+          &VideoRotationAveragingOptions::use_dynamic_imu_rotation_threshold)
+      .def_readwrite("imu_dynamic_rotation_threshold_multiplier",
+                     &VideoRotationAveragingOptions::
+                         imu_dynamic_rotation_threshold_multiplier)
+      .def_readwrite(
+          "imu_gyro_bias_stddev_rad_s",
+          &VideoRotationAveragingOptions::imu_gyro_bias_stddev_rad_s)
       .def_readwrite("invalidate_outlier_pairs",
                      &VideoRotationAveragingOptions::invalidate_outlier_pairs)
       .def_readwrite(
