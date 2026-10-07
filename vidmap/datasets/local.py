@@ -133,6 +133,7 @@ class LocalImageParser(PreparedSceneParser):
         intrinsics_path: str | Path | None = None,
         estimate_intrinsics: bool = False,
         time_varying_intrinsics: bool = False,
+        gt_reconstruction_path: str | Path | None = None,
     ) -> None:
         self.rgb_dir = Path(image_dir).expanduser()
         if not self.rgb_dir.is_dir():
@@ -161,6 +162,11 @@ class LocalImageParser(PreparedSceneParser):
             if not isinstance(intrinsics, Mapping) or not intrinsics:
                 raise ValueError(f"Intrinsics file {path} must define at least one camera mapping")
 
+        gt_poses_by_name: dict[str, pycolmap.Rigid3d] = {}
+        if gt_reconstruction_path is not None:
+            gt_rec = pycolmap.Reconstruction(Path(gt_reconstruction_path).expanduser())
+            gt_poses_by_name = {str(img.name): img.cam_from_world() for img in gt_rec.images.values() if img.has_pose}
+
         self.rec = pycolmap.Reconstruction()
         self.reconstruction_dir = None
         image_camera_ids = _add_cameras(self.rec, intrinsics, tuple(self.imnames), self.rgb_dir)
@@ -171,4 +177,7 @@ class LocalImageParser(PreparedSceneParser):
                 camera_id=image_camera_ids[image_name],
                 image_id=image_id,
             )
-            self.rec.add_image_with_trivial_frame(image)
+            if image_name in gt_poses_by_name:
+                self.rec.add_image_with_trivial_frame(image, gt_poses_by_name[image_name])
+            else:
+                self.rec.add_image_with_trivial_frame(image)

@@ -152,6 +152,23 @@ __RECONSTRUCTION_SCRIPT__
     let imageDirectory = null;
     let estimatedFrustaPositions = new Float32Array();
     let estimatedPathPositions = new Float32Array();
+    let gtPathPositions = new Float32Array();
+    let gtKeyframePathCounts = [];
+    let gtKeyframeFrustaCounts = [];
+    let gtKeyframeCenters = new Float32Array();
+    let gtFrustaPositions = new Float32Array();
+    let gtCovEllipsesPositions = new Float32Array();
+    let gtKeyframeConfidences = [];
+    let gtKeyframeNames = [];
+    let gtKeyframeInliers = [];
+    let gtKeyframePosStdMeters = [];
+    let gtKeyframeReprojRmsPx = [];
+    let gtMetadataByName = new Map();
+    let denseGtPathPositions = new Float32Array();
+    let denseGtKeyframePathCounts = [];
+    let denseGtKeyframeFrustaCounts = [];
+    let denseGtKeyframeCenters = new Float32Array();
+    let denseGtFrustaPositions = new Float32Array();
     let loopClosureSharedPoints = new Float32Array();
     let loopClosureKeyframeIndices = new Uint32Array();
 
@@ -489,6 +506,7 @@ __RECONSTRUCTION_SCRIPT__
       const empty = new Float32Array();
       replacePointGeometry(empty, null);
       replaceEstimatedGeometry(empty, empty);
+      replaceGtGeometry(null, null);
       replaceLoopClosureGeometry(new Uint32Array(), new Float32Array());
       error.style.display = "none";
       error.textContent = "";
@@ -588,6 +606,18 @@ __RECONSTRUCTION_SCRIPT__
     }
     const estimatedFrusta = wideLineSegments(estimatedFrustaPositions, 0xd62728, 0.45, 1);
     scene.add(estimatedFrusta);
+    const gtFrusta = wideLineSegments(gtFrustaPositions, 0x00c853, 0.85, 2);
+    gtFrusta.visible = false;
+    gtFrusta.renderOrder = 95;
+    scene.add(gtFrusta);
+    const gtCovEllipses = wideLineSegments(gtCovEllipsesPositions, 0x00897b, 0.78, 1.5);
+    gtCovEllipses.visible = false;
+    gtCovEllipses.renderOrder = 93;
+    scene.add(gtCovEllipses);
+    const denseGtFrusta = wideLineSegments(denseGtFrustaPositions, 0xeab308, 0.75, 1.5);
+    denseGtFrusta.visible = false;
+    denseGtFrusta.renderOrder = 90;
+    scene.add(denseGtFrusta);
     const initialLoopClosures = visibleLoopClosureData(keyframeTimeline.names.length - 1);
     const loopClosures = coloredWideLineSegments(
       initialLoopClosures.positions,
@@ -595,6 +625,7 @@ __RECONSTRUCTION_SCRIPT__
       3,
       __LOOP_CLOSURE_MIN_SHARED_POINTS__
     );
+    loopClosures.visible = false;
     let visibleLoopClosurePositions = initialLoopClosures.positions;
     let visibleLoopClosureIndices = initialLoopClosures.edgeIndices;
     scene.add(loopClosures);
@@ -687,30 +718,220 @@ __RECONSTRUCTION_SCRIPT__
       result.renderOrder = 100;
       return result;
     }
-    function updatePathPrefix(object, positions, pointCount) {
+    function updatePathPrefix(object, positions, pointCount, extraVisible = true) {
       const replacement = new THREE.LineGeometry();
       const hasSegments = pointCount >= 2;
       if (hasSegments) replacement.setPositions(positions.subarray(0, pointCount * 3));
       object.geometry.dispose();
       object.geometry = replacement;
-      object.visible = hasSegments && document.getElementById("paths-toggle").checked;
+      object.visible = hasSegments && document.getElementById("paths-toggle").checked && extraVisible;
       invalidateSceneRender();
     }
     const estimatedPath = path(estimatedPathPositions, 0x0064ff);
     scene.add(estimatedPath);
+    const gtPath = path(gtPathPositions, 0x00c853);
+    scene.add(gtPath);
+    const denseGtPath = path(denseGtPathPositions, 0xeab308);
+    denseGtPath.visible = false;
+    denseGtPath.renderOrder = 98;
+    scene.add(denseGtPath);
 
-    function updateFrustaPrefix(object, base, centers, pointCount, size) {
-      const scaled = scaledFrusta(base, centers, size, pointCount);
+    function priorConfidenceRgb(conf) {
+      const t = Math.max(0, Math.min(1, (Number(conf) - 0.95) / 0.05));
+      if (t < 0.5) {
+        const u = t * 2;
+        return [(235 - 15 * u) / 255, (45 + 115 * u) / 255, 0];
+      }
+      const u = (t - 0.5) * 2;
+      return [(220 * (1 - u)) / 255, (160 + 40 * u) / 255, (85 * u) / 255];
+    }
+    function perCameraVertexColors(confidences, cameraCount, verticesPerCamera) {
+      const colors = new Float32Array(cameraCount * verticesPerCamera * 3);
+      for (let c = 0; c < cameraCount; ++c) {
+        const conf = c < confidences.length ? confidences[c] : 1.0;
+        const rgb = priorConfidenceRgb(conf);
+        const base = c * verticesPerCamera * 3;
+        for (let v = 0; v < verticesPerCamera; ++v) {
+          colors[base + v * 3] = rgb[0];
+          colors[base + v * 3 + 1] = rgb[1];
+          colors[base + v * 3 + 2] = rgb[2];
+        }
+      }
+      return colors;
+    }
+    function updateCameraSegmentsPrefix(
+      object,
+      base,
+      centers,
+      pointCount,
+      scaleFactor,
+      verticesPerCamera,
+      confidences = null,
+      solidColorHex = null
+    ) {
+      const scaled = scaledCameraSegments(base, centers, scaleFactor, pointCount, verticesPerCamera);
       const replacement = new THREE.LineSegmentsGeometry();
-      if (scaled.length > 0) replacement.setPositions(scaled);
+      if (scaled.length > 0) {
+        replacement.setPositions(scaled);
+        if (confidences !== null && confidences.length > 0) {
+          const camCount = scaled.length / (verticesPerCamera * 3);
+          replacement.setColors(perCameraVertexColors(confidences, camCount, verticesPerCamera));
+          object.material.vertexColors = true;
+          object.material.color.set(0xffffff);
+          object.material.needsUpdate = true;
+        } else if (solidColorHex !== null) {
+          object.material.vertexColors = false;
+          object.material.color.set(solidColorHex);
+          object.material.needsUpdate = true;
+        }
+      }
       object.geometry.dispose();
       object.geometry = replacement;
       invalidateSceneRender();
+    }
+    function updateFrustaPrefix(object, base, centers, pointCount, size, confidences = null, solidColorHex = null) {
+      updateCameraSegmentsPrefix(object, base, centers, pointCount, size / 0.3, 16, confidences, solidColorHex);
+    }
+    function updateCovEllipsesPrefix(
+      object,
+      base,
+      centers,
+      pointCount,
+      sigmaScale,
+      confidences = null,
+      solidColorHex = null
+    ) {
+      updateCameraSegmentsPrefix(object, base, centers, pointCount, sigmaScale, 144, confidences, solidColorHex);
     }
     function replaceEstimatedGeometry(centers, frusta) {
       estimatedPathPositions = centers;
       estimatedFrustaPositions = frusta;
       updateLoopClosureGeometry(Number(document.getElementById("keyframe-slider").value));
+      fitScene();
+    }
+    function replaceGtGeometry(gtTrajectory, denseGtTrajectory = null) {
+      const hasGt = (
+        gtTrajectory !== null && typeof gtTrajectory === "object" &&
+        Array.isArray(gtTrajectory.centers) && gtTrajectory.centers.length >= 6
+      );
+      gtPathPositions = hasGt ? Float32Array.from(gtTrajectory.centers) : new Float32Array();
+      gtKeyframePathCounts = (
+        hasGt && Array.isArray(gtTrajectory.keyframePathCounts) ? gtTrajectory.keyframePathCounts : []
+      );
+      gtKeyframeFrustaCounts = (
+        hasGt && Array.isArray(gtTrajectory.keyframeFrustaCounts)
+          ? gtTrajectory.keyframeFrustaCounts
+          : gtKeyframePathCounts
+      );
+      gtKeyframeCenters = (
+        hasGt && Array.isArray(gtTrajectory.keyframeCenters)
+          ? Float32Array.from(gtTrajectory.keyframeCenters)
+          : new Float32Array()
+      );
+      gtFrustaPositions = (
+        hasGt && Array.isArray(gtTrajectory.keyframeFrusta)
+          ? Float32Array.from(gtTrajectory.keyframeFrusta)
+          : new Float32Array()
+      );
+      gtCovEllipsesPositions = (
+        hasGt && Array.isArray(gtTrajectory.keyframeCovEllipses)
+          ? Float32Array.from(gtTrajectory.keyframeCovEllipses)
+          : new Float32Array()
+      );
+      gtKeyframeConfidences = (
+        hasGt && Array.isArray(gtTrajectory.keyframeConfidences)
+          ? gtTrajectory.keyframeConfidences
+          : []
+      );
+      gtKeyframeNames = (
+        hasGt && Array.isArray(gtTrajectory.keyframeNames)
+          ? gtTrajectory.keyframeNames
+          : []
+      );
+      gtKeyframeInliers = (
+        hasGt && Array.isArray(gtTrajectory.keyframeInliers)
+          ? gtTrajectory.keyframeInliers
+          : []
+      );
+      gtKeyframePosStdMeters = (
+        hasGt && Array.isArray(gtTrajectory.keyframePosStdMeters)
+          ? gtTrajectory.keyframePosStdMeters
+          : []
+      );
+      gtKeyframeReprojRmsPx = (
+        hasGt && Array.isArray(gtTrajectory.keyframeReprojRmsPx)
+          ? gtTrajectory.keyframeReprojRmsPx
+          : []
+      );
+      gtMetadataByName = new Map();
+      for (let i = 0; i < gtKeyframeNames.length; ++i) {
+        gtMetadataByName.set(gtKeyframeNames[i], {
+          index: i,
+          name: gtKeyframeNames[i],
+          confidence: i < gtKeyframeConfidences.length ? gtKeyframeConfidences[i] : null,
+          inliers: i < gtKeyframeInliers.length ? gtKeyframeInliers[i] : null,
+          posStdMeters: i < gtKeyframePosStdMeters.length ? gtKeyframePosStdMeters[i] : null,
+          reprojRmsPx: i < gtKeyframeReprojRmsPx.length ? gtKeyframeReprojRmsPx[i] : null
+        });
+      }
+      const hasDenseGt = (
+        denseGtTrajectory !== null && typeof denseGtTrajectory === "object" &&
+        Array.isArray(denseGtTrajectory.centers) && denseGtTrajectory.centers.length >= 6
+      );
+      denseGtPathPositions = hasDenseGt ? Float32Array.from(denseGtTrajectory.centers) : new Float32Array();
+      denseGtKeyframePathCounts = (
+        hasDenseGt && Array.isArray(denseGtTrajectory.keyframePathCounts)
+          ? denseGtTrajectory.keyframePathCounts
+          : []
+      );
+      denseGtKeyframeFrustaCounts = (
+        hasDenseGt && Array.isArray(denseGtTrajectory.keyframeFrustaCounts)
+          ? denseGtTrajectory.keyframeFrustaCounts
+          : denseGtKeyframePathCounts
+      );
+      denseGtKeyframeCenters = (
+        hasDenseGt && Array.isArray(denseGtTrajectory.keyframeCenters)
+          ? Float32Array.from(denseGtTrajectory.keyframeCenters)
+          : new Float32Array()
+      );
+      denseGtFrustaPositions = (
+        hasDenseGt && Array.isArray(denseGtTrajectory.keyframeFrusta)
+          ? Float32Array.from(denseGtTrajectory.keyframeFrusta)
+          : new Float32Array()
+      );
+      const hasConf = hasGt && gtKeyframeConfidences.length > 0;
+      const hasCov = hasGt && gtCovEllipsesPositions.length > 0;
+      const gtFrustaLabel = document.getElementById("gt-frusta-label");
+      const gtPathLabel = document.getElementById("gt-path-label");
+      if (gtFrustaLabel !== null) gtFrustaLabel.textContent = (hasDenseGt || hasConf) ? "prior cameras" : "GT cameras";
+      if (gtPathLabel !== null) gtPathLabel.textContent = (hasDenseGt || hasConf) ? "prior" : "GT";
+      document.getElementById("gt-path-controls").hidden = !hasGt;
+      document.getElementById("gt-frusta-row").hidden = !(hasGt && gtFrustaPositions.length > 0);
+      const gtFrustaModeSetting = document.getElementById("gt-frusta-mode-setting");
+      if (gtFrustaModeSetting !== null) gtFrustaModeSetting.hidden = !hasConf;
+      const gtCovRow = document.getElementById("gt-cov-row");
+      if (gtCovRow !== null) gtCovRow.hidden = !hasCov;
+      document.getElementById("dense-gt-path-controls").hidden = !hasDenseGt;
+      document.getElementById("dense-gt-frusta-row").hidden = !(hasDenseGt && denseGtFrustaPositions.length > 0);
+      const gtFrustaColorInput = document.getElementById("gt-frusta-color");
+      const gtFrustaColorMode = document.getElementById("gt-frusta-color-mode");
+      if (gtFrustaColorInput !== null && gtFrustaColorMode !== null) {
+        gtFrustaColorInput.disabled = hasConf && gtFrustaColorMode.value === "confidence";
+      }
+      const gtCovColorInput = document.getElementById("gt-cov-color");
+      const gtCovColorMode = document.getElementById("gt-cov-color-mode");
+      if (gtCovColorInput !== null && gtCovColorMode !== null) {
+        gtCovColorInput.disabled = hasConf && gtCovColorMode.value === "confidence";
+      }
+      if (!hasGt) {
+        gtPath.visible = false;
+        gtFrusta.visible = false;
+        gtCovEllipses.visible = false;
+      }
+      if (!hasDenseGt) {
+        denseGtPath.visible = false;
+        denseGtFrusta.visible = false;
+      }
       fitScene();
     }
     function showKeyframe(index) {
@@ -727,11 +948,22 @@ __RECONSTRUCTION_SCRIPT__
       const timestampText = keyframeTimeline.timestampsSeconds === null
         ? ""
         : ` · ${keyframeTimeline.timestampsSeconds[bounded].toFixed(3)} s`;
+      const kfName = keyframeTimeline.names[bounded];
+      let priorStatusText = "";
+      if (gtMetadataByName.has(kfName)) {
+        const meta = gtMetadataByName.get(kfName);
+        if (meta.confidence !== null) {
+          priorStatusText += ` · prior conf=${Number(meta.confidence).toFixed(4)}`;
+        }
+        if (Array.isArray(meta.posStdMeters) && meta.posStdMeters.length >= 1) {
+          priorStatusText += ` · σ_pos=${Number(meta.posStdMeters[0]).toFixed(2)}m`;
+        }
+      }
       document.getElementById("keyframe-label").textContent =
-        `${bounded + 1}/${keyframeTimeline.names.length}${timestampText} · ${keyframeTimeline.names[bounded]} · ${pointCount.toLocaleString()} cumulative points`;
+        `${bounded + 1}/${keyframeTimeline.names.length}${timestampText} · ${kfName} · ${pointCount.toLocaleString()} cumulative points${priorStatusText}`;
       const preview = document.getElementById("keyframe-preview");
       if (imageDirectory !== null) {
-        loadImage(preview, imageDirectory, keyframeTimeline.names[bounded]);
+        loadImage(preview, imageDirectory, kfName);
       }
       preview.dataset.keyframeIndex = String(bounded);
       drawTrackedKeypoints(bounded);
@@ -740,6 +972,82 @@ __RECONSTRUCTION_SCRIPT__
       updateFrustaPrefix(
         estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, bounded + 1, estimatedSize
       );
+      const gtPointCount = bounded < gtKeyframePathCounts.length
+        ? gtKeyframePathCounts[bounded]
+        : Math.floor(gtPathPositions.length / 3);
+      if (gtPathPositions.length >= 6) {
+        updatePathPrefix(
+          gtPath,
+          gtPathPositions,
+          gtPointCount,
+          document.getElementById("gt-path-toggle").checked
+        );
+      } else {
+        gtPath.visible = false;
+      }
+      const gtFrustaCount = bounded < gtKeyframeFrustaCounts.length
+        ? gtKeyframeFrustaCounts[bounded]
+        : Math.floor(gtKeyframeCenters.length / 3);
+      if (gtFrustaPositions.length > 0) {
+        const gtSize = Number(document.getElementById("gt-frusta-size").value);
+        const gtColorMode = document.getElementById("gt-frusta-color-mode");
+        const useGtConf = gtKeyframeConfidences.length > 0 && gtColorMode !== null && gtColorMode.value === "confidence";
+        updateFrustaPrefix(
+          gtFrusta,
+          gtFrustaPositions,
+          gtKeyframeCenters,
+          gtFrustaCount,
+          gtSize,
+          useGtConf ? gtKeyframeConfidences : null,
+          document.getElementById("gt-frusta-color").value
+        );
+        gtFrusta.visible = gtFrustaCount > 0 && document.getElementById("gt-frusta-toggle").checked;
+      } else {
+        gtFrusta.visible = false;
+      }
+      if (gtCovEllipsesPositions.length > 0) {
+        const covScale = Number(document.getElementById("gt-cov-scale").value);
+        const covColorMode = document.getElementById("gt-cov-color-mode");
+        const useCovConf = gtKeyframeConfidences.length > 0 && covColorMode !== null && covColorMode.value === "confidence";
+        updateCovEllipsesPrefix(
+          gtCovEllipses,
+          gtCovEllipsesPositions,
+          gtKeyframeCenters,
+          gtFrustaCount,
+          covScale,
+          useCovConf ? gtKeyframeConfidences : null,
+          document.getElementById("gt-cov-color").value
+        );
+        const covToggle = document.getElementById("gt-cov-toggle");
+        gtCovEllipses.visible = gtFrustaCount > 0 && covToggle !== null && covToggle.checked;
+      } else {
+        gtCovEllipses.visible = false;
+      }
+      const denseGtPointCount = bounded < denseGtKeyframePathCounts.length
+        ? denseGtKeyframePathCounts[bounded]
+        : Math.floor(denseGtPathPositions.length / 3);
+      if (denseGtPathPositions.length >= 6) {
+        updatePathPrefix(
+          denseGtPath,
+          denseGtPathPositions,
+          denseGtPointCount,
+          document.getElementById("dense-gt-path-toggle").checked
+        );
+      } else {
+        denseGtPath.visible = false;
+      }
+      if (denseGtFrustaPositions.length > 0) {
+        const denseGtSize = Number(document.getElementById("dense-gt-frusta-size").value);
+        const denseGtFrustaCount = bounded < denseGtKeyframeFrustaCounts.length
+          ? denseGtKeyframeFrustaCounts[bounded]
+          : Math.floor(denseGtKeyframeCenters.length / 3);
+        updateFrustaPrefix(
+          denseGtFrusta, denseGtFrustaPositions, denseGtKeyframeCenters, denseGtFrustaCount, denseGtSize
+        );
+        denseGtFrusta.visible = denseGtFrustaCount > 0 && document.getElementById("dense-gt-frusta-toggle").checked;
+      } else {
+        denseGtFrusta.visible = false;
+      }
       updateLoopClosureGeometry(bounded);
     }
     const keyframePreview = document.getElementById("keyframe-preview");
@@ -784,6 +1092,8 @@ __RECONSTRUCTION_SCRIPT__
     function fitScene() {
       bounds.makeEmpty();
       const fitPositions = estimatedPathPositions.length > 0 ? [estimatedPathPositions] : [pointPositions];
+      if (gtPathPositions.length > 0) fitPositions.push(gtPathPositions);
+      else if (denseGtPathPositions.length > 0) fitPositions.push(denseGtPathPositions);
       for (const positions of fitPositions) {
         for (let index = 0; index < positions.length; index += 3) {
           fitPoint.set(positions[index], positions[index + 1], positions[index + 2]);
@@ -886,7 +1196,17 @@ __RECONSTRUCTION_SCRIPT__
     trackedKeypointsToggle.onchange = () => drawTrackedKeypoints(Number(keyframeSlider.value));
     const estimatedFrustaToggle = document.getElementById("estimated-frusta-toggle");
     estimatedFrustaToggle.onchange = event => estimatedFrusta.visible = event.target.checked;
+    const gtFrustaToggle = document.getElementById("gt-frusta-toggle");
+    gtFrustaToggle.onchange = () => showKeyframe(Number(keyframeSlider.value));
+    const gtCovToggle = document.getElementById("gt-cov-toggle");
+    if (gtCovToggle !== null) {
+      gtCovToggle.onchange = () => showKeyframe(Number(keyframeSlider.value));
+    }
+    const denseGtFrustaToggle = document.getElementById("dense-gt-frusta-toggle");
+    denseGtFrustaToggle.onchange = () => showKeyframe(Number(keyframeSlider.value));
     document.getElementById("paths-toggle").onchange = () => showKeyframe(Number(keyframeSlider.value));
+    document.getElementById("gt-path-toggle").onchange = () => showKeyframe(Number(keyframeSlider.value));
+    document.getElementById("dense-gt-path-toggle").onchange = () => showKeyframe(Number(keyframeSlider.value));
     const loopClosuresToggle = document.getElementById("loop-closures-toggle");
     loopClosuresToggle.onchange = () => updateLoopClosureGeometry(Number(keyframeSlider.value));
     bindNumber("loop-closures-width", value => loopClosures.material.linewidth = value);
@@ -898,19 +1218,24 @@ __RECONSTRUCTION_SCRIPT__
 
     function bindNumber(id, update) {
       const input = document.getElementById(id);
+      if (input === null) return;
       input.oninput = () => {
         const value = Number(input.value);
         if (Number.isFinite(value) && value > 0) update(value);
       };
     }
 
-    function scaledFrusta(base, centers, size, requestedCount = centers.length / 3) {
-      const verticesPerCamera = 16;
+    function scaledCameraSegments(
+      base,
+      centers,
+      scale,
+      requestedCount = centers.length / 3,
+      verticesPerCamera = 16
+    ) {
       const cameraCount = Math.max(0, Math.floor(Math.min(
         requestedCount, centers.length / 3, base.length / (verticesPerCamera * 3)
       )));
       const result = new Float32Array(cameraCount * verticesPerCamera * 3);
-      const scale = size / 0.3;
       for (let cameraIndex = 0; cameraIndex < cameraCount; ++cameraIndex) {
         const centerOffset = cameraIndex * 3;
         const centerX = centers[centerOffset];
@@ -925,6 +1250,10 @@ __RECONSTRUCTION_SCRIPT__
         }
       }
       return result;
+    }
+
+    function scaledFrusta(base, centers, size, requestedCount = centers.length / 3) {
+      return scaledCameraSegments(base, centers, size / 0.3, requestedCount, 16);
     }
 
     function updatePointSize(value) {
@@ -958,9 +1287,125 @@ __RECONSTRUCTION_SCRIPT__
     bindNumber("estimated-frusta-width", value => estimatedFrusta.material.linewidth = value);
     document.getElementById("estimated-frusta-color").oninput =
       event => estimatedFrusta.material.color.set(event.target.value);
-    bindNumber("paths-width", value => estimatedPath.material.linewidth = value);
+    bindNumber(
+      "gt-frusta-size",
+      () => showKeyframe(Number(keyframeSlider.value))
+    );
+    bindNumber("gt-frusta-width", value => gtFrusta.material.linewidth = value);
+    const gtFrustaColorInput = document.getElementById("gt-frusta-color");
+    const gtFrustaColorMode = document.getElementById("gt-frusta-color-mode");
+    gtFrustaColorInput.oninput = () => showKeyframe(Number(keyframeSlider.value));
+    if (gtFrustaColorMode !== null) {
+      gtFrustaColorMode.onchange = event => {
+        gtFrustaColorInput.disabled = gtKeyframeConfidences.length > 0 && event.target.value === "confidence";
+        showKeyframe(Number(keyframeSlider.value));
+      };
+    }
+    bindNumber(
+      "gt-cov-scale",
+      () => showKeyframe(Number(keyframeSlider.value))
+    );
+    bindNumber("gt-cov-width", value => gtCovEllipses.material.linewidth = value);
+    const gtCovColorInput = document.getElementById("gt-cov-color");
+    const gtCovColorMode = document.getElementById("gt-cov-color-mode");
+    if (gtCovColorInput !== null) {
+      gtCovColorInput.oninput = () => showKeyframe(Number(keyframeSlider.value));
+    }
+    if (gtCovColorMode !== null) {
+      gtCovColorMode.onchange = event => {
+        if (gtCovColorInput !== null) {
+          gtCovColorInput.disabled = gtKeyframeConfidences.length > 0 && event.target.value === "confidence";
+        }
+        showKeyframe(Number(keyframeSlider.value));
+      };
+    }
+    bindNumber(
+      "dense-gt-frusta-size",
+      () => showKeyframe(Number(keyframeSlider.value))
+    );
+    bindNumber("dense-gt-frusta-width", value => denseGtFrusta.material.linewidth = value);
+    document.getElementById("dense-gt-frusta-color").oninput =
+      event => denseGtFrusta.material.color.set(event.target.value);
+    bindNumber("paths-width", value => {
+      estimatedPath.material.linewidth = value;
+      gtPath.material.linewidth = value;
+      denseGtPath.material.linewidth = value;
+    });
     document.getElementById("estimated-path-color").oninput =
       event => estimatedPath.material.color.set(event.target.value);
+    document.getElementById("gt-path-color").oninput =
+      event => gtPath.material.color.set(event.target.value);
+    document.getElementById("dense-gt-path-color").oninput =
+      event => denseGtPath.material.color.set(event.target.value);
+
+    const priorHoverTooltip = document.getElementById("prior-hover-tooltip");
+    const hoverProjVec = new THREE.Vector3();
+    function updatePriorHoverTooltip(clientX, clientY) {
+      if (priorHoverTooltip === null) return;
+      if (
+        orbitPointerId !== null ||
+        rollPointerId !== null ||
+        (!gtFrusta.visible && !gtCovEllipses.visible) ||
+        gtKeyframeCenters.length === 0
+      ) {
+        priorHoverTooltip.hidden = true;
+        return;
+      }
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (clientX < rect.left || clientX >= rect.right || clientY < rect.top || clientY >= rect.bottom) {
+        priorHoverTooltip.hidden = true;
+        return;
+      }
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const bounded = Math.max(0, Math.min(Number(keyframeSlider.value), keyframeTimeline.names.length - 1));
+      const visibleCount = bounded < gtKeyframeFrustaCounts.length
+        ? gtKeyframeFrustaCounts[bounded]
+        : Math.floor(gtKeyframeCenters.length / 3);
+      let bestIdx = -1;
+      let bestDist = 18;
+      for (let i = 0; i < visibleCount; ++i) {
+        hoverProjVec.fromArray(gtKeyframeCenters, i * 3).project(camera);
+        if (hoverProjVec.z < -1 || hoverProjVec.z > 1) continue;
+        const sx = (hoverProjVec.x + 1) * rect.width * 0.5;
+        const sy = (1 - hoverProjVec.y) * rect.height * 0.5;
+        const d = Math.hypot(px - sx, py - sy);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx < 0) {
+        priorHoverTooltip.hidden = true;
+        return;
+      }
+      const name = bestIdx < gtKeyframeNames.length ? gtKeyframeNames[bestIdx] : `prior #${bestIdx + 1}`;
+      const lines = [`prior anchor: ${name}`];
+      if (bestIdx < gtKeyframeConfidences.length) {
+        lines.push(`Confidence: ${Number(gtKeyframeConfidences[bestIdx]).toFixed(4)}`);
+      }
+      if (bestIdx < gtKeyframePosStdMeters.length && Array.isArray(gtKeyframePosStdMeters[bestIdx])) {
+        const s = gtKeyframePosStdMeters[bestIdx];
+        lines.push(
+          `Position std (1σ): ${Number(s[0]).toFixed(3)} m  (axes: ${Number(s[1]).toFixed(2)}, ${Number(s[2]).toFixed(2)}, ${Number(s[3]).toFixed(2)} m)`
+        );
+      }
+      if (bestIdx < gtKeyframeInliers.length) {
+        const inl = gtKeyframeInliers[bestIdx];
+        const rms = bestIdx < gtKeyframeReprojRmsPx.length ? Number(gtKeyframeReprojRmsPx[bestIdx]).toFixed(2) : null;
+        lines.push(rms !== null ? `2D-3D inliers: ${inl}  (reproj RMS: ${rms} px)` : `2D-3D inliers: ${inl}`);
+      }
+      priorHoverTooltip.textContent = lines.join("\n");
+      priorHoverTooltip.style.left = `${Math.min(window.innerWidth - 280, clientX + 14)}px`;
+      priorHoverTooltip.style.top = `${Math.min(window.innerHeight - 90, clientY + 14)}px`;
+      priorHoverTooltip.hidden = false;
+    }
+    renderer.domElement.addEventListener("pointermove", event => {
+      updatePriorHoverTooltip(event.clientX, event.clientY);
+    });
+    renderer.domElement.addEventListener("pointerleave", () => {
+      if (priorHoverTooltip !== null) priorHoverTooltip.hidden = true;
+    });
 
     document.getElementById("projection").onchange = event => {
       const nextCamera = event.target.value === "orthographic"
@@ -1010,7 +1455,7 @@ __RECONSTRUCTION_SCRIPT__
     function resize() {
       updateProjectionDimensions();
       renderer.setSize(window.innerWidth, window.innerHeight);
-      for (const object of [estimatedFrusta, loopClosures, estimatedPath]) {
+      for (const object of [estimatedFrusta, gtFrusta, gtCovEllipses, denseGtFrusta, loopClosures, estimatedPath, gtPath, denseGtPath]) {
         object.material.resolution.set(window.innerWidth, window.innerHeight);
       }
       drawTrackedKeypoints(Number(keyframeSlider.value));

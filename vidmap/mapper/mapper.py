@@ -8,6 +8,7 @@ from vidmap.configuration.defaults import CANONICAL_POINT_BUDGET
 from vidmap.mapper.focal_prior import load_focal_prior
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.inputs.snapshot import calibration_artifact_name
+from vidmap.mapper.location_priors import load_location_priors
 from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
 from .checkpoints import remove_disabled_intermediate_reconstructions
@@ -153,6 +154,7 @@ class Mapper:
     def _solve(self, mapping_stage_inputs, replay, playback_trace, prior):
         solve_start_time = sync_time()
         solve_state = mapping_stage_inputs.solve_state
+        location_priors = load_location_priors(self.conf.location_priors, solve_state)
 
         calibration = self.conf.calibration
 
@@ -200,6 +202,7 @@ class Mapper:
             sequence_id_to_index=mapping_stage_inputs.sequence_id_to_index,
             filtered_consecutive_pair_ids=relative_pose.filtered_consecutive_pairs,
             replay=replay,
+            location_priors=location_priors,
         )
         rotation_averager.average()
 
@@ -235,6 +238,7 @@ class Mapper:
             options=self.conf.gp,
             output_dir=self.sfm_outputs_dir,
             replay=replay,
+            location_priors=location_priors,
             persist_intermediate_reconstructions=self.persist_intermediate_reconstructions,
             playback_trace=playback_trace,
         )
@@ -247,6 +251,7 @@ class Mapper:
             depth_stddev_multiplier=self.conf.mdrp.depth_stddev_multiplier,
             optimize_intrinsics=calibration.optimize_intrinsics,
             focal_prior=prior,
+            location_priors=location_priors,
             output_dir=self.sfm_outputs_dir,
             replay=replay,
             persist_intermediate_reconstructions=self.persist_intermediate_reconstructions,

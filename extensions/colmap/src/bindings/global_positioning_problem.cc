@@ -555,4 +555,81 @@ PYBIND11_MODULE(global_positioning, m) {
               vidmap::TemporalAccelerationCostFunctor::Create(
                   dt_prev, dt_next, 1.0 / stddev));
         });
+  m.def(
+      "append_bearing_observations",
+      [](ceres::Problem& problem,
+         py::array_t<double, py::array::c_style> center,
+         const Eigen::Matrix3d& cam_from_world_rotation,
+         const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>&
+             points,
+         const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>&
+             bearings,
+         const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>&
+             stddevs,
+         const std::shared_ptr<ceres::LossFunction>& loss) {
+        const auto count = points.rows();
+        if (center.size() != 3 || !center.writeable() ||
+            bearings.rows() != count || stddevs.rows() != count ||
+            !cam_from_world_rotation.allFinite() || !points.allFinite() ||
+            !bearings.allFinite() || !stddevs.allFinite() ||
+            (count > 0 && stddevs.minCoeff() <= 0.0)) {
+          throw std::invalid_argument("invalid bearing observation arrays");
+        }
+        // Constant world points and per-observation scales, owned by the
+        // returned capsule.
+        struct Storage {
+          std::vector<Eigen::Vector3d> points;
+          std::vector<double> scales;
+          std::shared_ptr<ceres::LossFunction> loss;
+        };
+        auto storage = std::make_unique<Storage>();
+        storage->points.reserve(count);
+        storage->scales.reserve(count);
+        storage->loss = loss;
+        double* center_data = center.mutable_data();
+        const Eigen::Map<const Eigen::Vector3d> center_xyz(center_data);
+        const Eigen::Matrix3d world_from_cam =
+            cam_from_world_rotation.transpose();
+        for (Eigen::Index i = 0; i < count; ++i) {
+          const Eigen::Vector3d bearing = bearings.row(i).normalized();
+          if (!bearing.allFinite()) continue;
+          storage->points.emplace_back(points.row(i).transpose());
+          Eigen::Vector3d& point = storage->points.back();
+          const double distance = (point - center_xyz).norm();
+          storage->scales.push_back(
+              distance > 1e-6 ? std::clamp(1.0 / distance, 1e-3, 10.0) : 1.0);
+          double& scale = storage->scales.back();
+          // Whiten in the camera frame: Sigma_world = R^T diag(sigma^2) R.
+          const Eigen::Matrix3d covariance =
+              world_from_cam *
+              stddevs.row(i).array().square().matrix().asDiagonal() *
+              cam_from_world_rotation;
+          problem.AddResidualBlock(
+              colmap::CovarianceWeightedCostFunctor<
+                  colmap::BATAPairwiseDirectionCostFunctor>::
+                  Create(covariance, world_from_cam * bearing),
+              loss.get(),
+              center_data,
+              point.data(),
+              &scale);
+          problem.SetParameterBlockConstant(point.data());
+          problem.SetParameterLowerBound(&scale, 0, 1e-3);
+        }
+        const size_t added = storage->scales.size();
+        return py::make_tuple(
+            py::capsule(storage.release(),
+                        [](void* ptr) { delete static_cast<Storage*>(ptr); }),
+            added);
+      },
+      py::arg("problem"),
+      py::arg("center").noconvert(),
+      py::arg("cam_from_world_rotation"),
+      py::arg("points"),
+      py::arg("bearings"),
+      py::arg("stddevs"),
+      py::arg("loss"),
+      "Constrain a camera center by unit bearings (in the camera frame) to "
+      "constant world points, with per-axis stddevs in the camera frame. "
+      "Keep the returned storage and the center alive while using the "
+      "problem.");
 }

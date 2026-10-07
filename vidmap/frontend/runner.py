@@ -54,6 +54,7 @@ def run_local_frontend(
     workspace: str | Path,
     imnames=None,
     intrinsics_path: str | Path | None = None,
+    gt_reconstruction_path: str | Path | None = None,
     force_frontend: bool = False,
     cache_depth_maps: bool = False,
     mapper_inputs_path: str | Path | None = None,
@@ -72,6 +73,7 @@ def run_local_frontend(
         intrinsics_path=intrinsics_path,
         estimate_intrinsics=conf.pipeline.camera_priors.initialization == "predicted",
         time_varying_intrinsics=conf.pipeline.camera_priors.time_varying,
+        gt_reconstruction_path=gt_reconstruction_path,
     )
     reference_image_ids = tuple(scene_parser.rec.images)
     identity = FrontendIdentity.from_config(

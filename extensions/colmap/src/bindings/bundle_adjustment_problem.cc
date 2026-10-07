@@ -1,4 +1,5 @@
 #include "colmap/estimators/ceres_loss_function.h"
+#include "colmap/estimators/cost_functions/reprojection_error.h"
 #include "colmap/scene/reconstruction.h"
 
 #include <stdexcept>
@@ -101,4 +102,66 @@ PYBIND11_MODULE(bundle_adjustment, m) {
                   target_log_ratio,
                   sigma_log_ratio));
         });
+  m.def(
+      "append_constant_point_reprojections",
+      [](ceres::Problem& problem,
+         colmap::Reconstruction& reconstruction,
+         colmap::image_t image_id,
+         const Eigen::Matrix<double, Eigen::Dynamic, 2, Eigen::RowMajor>&
+             points2D,
+         const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>&
+             points3D,
+         colmap::CeresLossFunctionType loss_type,
+         double loss_scale,
+         double weight) {
+        if (points3D.rows() != points2D.rows() || !points2D.allFinite() ||
+            !points3D.allFinite() || !std::isfinite(loss_scale) ||
+            loss_scale <= 0 || !std::isfinite(weight) || weight < 0) {
+          throw std::invalid_argument(
+              "invalid BA constant-point reprojection arrays");
+        }
+        // The upstream BA problem owns costs, but not loss functions.
+        std::shared_ptr<ceres::LossFunction> loss =
+            colmap::CreateCeresLossFunction(loss_type, loss_scale, weight);
+        auto& image = reconstruction.Image(image_id);
+        auto& camera = reconstruction.Camera(image.CameraId());
+        double* pose = image.FramePtr()->RigFromWorld().params.data();
+        size_t added = 0;
+        if (weight > 0 && problem.HasParameterBlock(pose) &&
+            problem.HasParameterBlock(camera.params.data())) {
+          if (!image.IsRefInFrame()) {
+            throw std::invalid_argument(
+                "VidMap constant-point reprojections require a reference "
+                "camera");
+          }
+          for (Eigen::Index i = 0; i < points2D.rows(); ++i) {
+            problem.AddResidualBlock(
+                colmap::CreateCameraCostFunction<
+                    colmap::ReprojErrorConstantPoint3DCostFunctor>(
+                    camera.model_id,
+                    Eigen::Vector2d(points2D.row(i).transpose()),
+                    Eigen::Vector3d(points3D.row(i).transpose())),
+                loss.get(),
+                pose,
+                camera.params.data());
+            ++added;
+          }
+        }
+        using Loss = std::shared_ptr<ceres::LossFunction>;
+        return py::make_tuple(
+            py::capsule(new Loss(std::move(loss)),
+                        [](void* ptr) { delete static_cast<Loss*>(ptr); }),
+            added);
+      },
+      py::arg("problem"),
+      py::arg("reconstruction"),
+      py::arg("image_id"),
+      py::arg("points2D"),
+      py::arg("points3D"),
+      py::arg("loss_type"),
+      py::arg("loss_scale"),
+      py::arg("weight"),
+      "Add reprojection residuals of constant world points into an image "
+      "whose pose and camera are already in the problem. Keep the returned "
+      "loss alive while using the problem.");
 }

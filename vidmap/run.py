@@ -25,6 +25,16 @@ def build_parser() -> ArgumentParser:
     )
     parser.add_argument("--imnames", nargs="*", type=str)
     parser.add_argument("--intrinsics", type=str)
+    parser.add_argument(
+        "--gt-reconstruction",
+        type=str,
+        help="Optional ground-truth COLMAP reconstruction directory used to force GT keyframes.",
+    )
+    parser.add_argument(
+        "--location-priors",
+        type=str,
+        help="Optional .npz of absolute location priors (per-image rotations and 2D-3D correspondences to world points) used in rotation averaging, global positioning, and BA.",
+    )
     parser.add_argument("--name", type=str)
     parser.add_argument("--force-frontend", action="store_true")
     parser.add_argument(
@@ -58,6 +68,15 @@ def main(argv=None):
         from vidmap.run_options import TIME_VARYING_INTRINSICS_OVERRIDES
 
         frontend_overrides = [*frontend_overrides, *TIME_VARYING_INTRINSICS_OVERRIDES]
+    if args.gt_reconstruction:
+        frontend_overrides = list(frontend_overrides) + [
+            "keyframes.selection.force_gt_keyframes=true",
+        ]
+    if args.location_priors:
+        mapping_overrides = list(mapping_overrides) + [
+            "mapper.location_priors.enabled=true",
+            f"mapper.location_priors.path={args.location_priors}",
+        ]
 
     from vidmap.configuration.build import build_frontend_config, build_mapping_config
     from vidmap.configuration.names import FRONTEND_CONFIG_DIR, MAPPING_CONFIG_DIR, resolve_config_path
@@ -95,6 +114,7 @@ def main(argv=None):
         workspace=args.output,
         imnames=args.imnames,
         intrinsics_path=args.intrinsics,
+        gt_reconstruction_path=args.gt_reconstruction,
         force_frontend=args.force_frontend,
         cache_depth_maps=args.cache_depth_maps,
         device=run_options.device,

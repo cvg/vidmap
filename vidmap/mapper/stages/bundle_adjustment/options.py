@@ -16,6 +16,7 @@ def build_bundle_adjustment_options(
     optimize_intrinsics,
     refine_principal_point,
     fix_rotations,
+    fix_first_pose=True,
     fix_all_poses=False,
     reprojection_loss,
     reprojection_scale,
@@ -31,7 +32,7 @@ def build_bundle_adjustment_options(
             config.set_constant_cam_intrinsics(camera_id)
     for point_id in variable_point3D_ids:
         config.add_variable_point(point_id)
-    if image_order:
+    if image_order and fix_first_pose:
         config.set_constant_rig_from_world_pose(reconstruction.images[image_order[0]].frame_id)
     options = pycolmap.BundleAdjustmentOptions(
         refine_focal_length=True,

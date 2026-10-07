@@ -13,6 +13,7 @@ import pycolmap
 import vidmap.utils.multiview_geometry as multiview_geometry
 from vidmap.mapper.checkpoints import reconstruction_checkpoint_directory
 from vidmap.mapper.focal_prior import native_focal_priors
+from vidmap.mapper.location_priors import LocationPriorSet
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.positioning import LossConfig
@@ -74,6 +75,7 @@ class BundleAdjuster:
     output_dir: Path
     replay: ReplayCache
     focal_prior: dict[int, tuple[tuple[float, float], ...]] | None = None
+    location_priors: LocationPriorSet | None = None
     point_budget_scale: float = 1.0
     persist_intermediate_reconstructions: bool = False
     playback_trace: PlaybackTraceRecorder | None = None
@@ -160,8 +162,15 @@ class BundleAdjuster:
             }
         )
 
+    @property
+    def _use_location_priors(self) -> bool:
+        priors = self.location_priors
+        return priors is not None and priors.options.enabled and priors.options.use_in_bundle_adjustment
+
     def _refine_principal_point(self, remaining_solves: int) -> bool:
         # Count configured joint solves, excluding warm-up and point-only refinement.
+        if self._use_location_priors and len(self.reconstruction.cameras) > 1:
+            return False
         return self.optimize_intrinsics and remaining_solves < self.options.intrinsics.principal_point_last_n_solves
 
     def run_normal(self) -> None:
@@ -170,6 +179,8 @@ class BundleAdjuster:
         while iteration < self.options.normal.iterations:
             if iteration == 0:
                 self.log_depth_scales = {image_id: 0.0 for image_id in self.reconstruction.images.keys()}
+                if self._use_location_priors:
+                    self.log_depth_scales.update(self.estimate_log_depth_scales())
                 self.log_depth_scales = self.reset_and_retriangulate(
                     max_error_multiplier=self.options.first_iteration_error_multiplier * self.options.multiply_errors,
                 )
@@ -442,6 +453,13 @@ class BundleAdjuster:
         variable_point3D_ids = points.ids[
             points.track_lengths < self.options.variable_point_track_length_threshold
         ].tolist()
+        location_priors = self.location_priors if self._use_location_priors and not policy.fix_all_poses else None
+        num_location_anchors = (
+            len(set(location_priors.active_image_ids(self.reconstruction)) & set(optimized_image_ids))
+            if location_priors is not None
+            else 0
+        )
+        relax_scale_prior = num_location_anchors >= 2
         options, config = build_bundle_adjustment_options(
             reconstruction=self.reconstruction,
             image_order=optimized_image_ids,
@@ -450,6 +468,8 @@ class BundleAdjuster:
             optimize_intrinsics=self.optimize_intrinsics and not policy.fix_intrinsics,
             refine_principal_point=policy.refine_principal_point and not policy.fix_intrinsics,
             fix_rotations=policy.fix_rotations,
+            # Location priors fix the gauge.
+            fix_first_pose=num_location_anchors == 0,
             fix_all_poses=policy.fix_all_poses,
             reprojection_loss=reprojection_loss,
             reprojection_scale=self.options.reproj_loss_scale * keypoint_stddev,
@@ -558,8 +578,12 @@ class BundleAdjuster:
                     image_id=image_id,
                     log_scale=self.log_depth_scales[image_id],
                     fix_scale=policy.fix_scale,
-                    use_scale_prior=policy.regularize_scale,
-                    scale_prior_stddev=depth_options.scale_std,
+                    use_scale_prior=policy.regularize_scale and not relax_scale_prior,
+                    scale_prior_stddev=(
+                        float(self.location_priors.options.ba_relaxed_scale_prior_stddev)
+                        if relax_scale_prior
+                        else depth_options.scale_std
+                    ),
                     scale_prior_loss=LossConfig(name=depth_options.scale_reg_loss_name, weight=float(np.sum(mask))),
                 )
             )
@@ -577,6 +601,7 @@ class BundleAdjuster:
             intrinsics_priors,
             self.solve_state,
             relative_intrinsics_priors=relative_intrinsics_priors,
+            location_priors=location_priors,
             playback_callback=playback_sink,
             playback_options=playback_options,
         )

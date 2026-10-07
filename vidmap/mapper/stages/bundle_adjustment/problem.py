@@ -49,6 +49,7 @@ class BundleAdjustmentDiagnostics(SolverDiagnostics):
     num_depth_residuals: int = 0
     num_intrinsics_prior_residuals: int = 0
     num_relative_intrinsics_prior_residuals: int = 0
+    num_location_reprojection_residuals: int = 0
     num_scale_prior_residuals: int = 0
 
 
@@ -68,6 +69,7 @@ def run_bundle_adjustment(
     state,
     *,
     relative_intrinsics_priors=(),
+    location_priors=None,
     playback_callback=None,
     playback_options=None,
 ):
@@ -116,6 +118,13 @@ def run_bundle_adjustment(
             [params1, params2],
         )
         diagnostics.num_relative_intrinsics_prior_residuals += 1
+
+    # Reprojections of absolute location priors into their anchor images.
+    _location_storage = []
+    if location_priors is not None:
+        _location_storage, diagnostics.num_location_reprojection_residuals = location_priors.append_ba_constraints(
+            problem, reconstruction, image_ids
+        )
 
     scale_records = {record.image_id: record for record in depth_scales}
     scales = {image_id: np.array([record.log_scale], dtype=float) for image_id, record in scale_records.items()}
