@@ -55,6 +55,7 @@ set(
     src/stages/track_records.cc
     src/stages/track_establishment.cc
     src/stages/track_filter.cc
+    src/stages/imu_uncertainty.cc
     src/stages/video_rotation_averaging.cc
     src/stages/global_positioning.cc
     src/stages/bundle_adjustment.cc
