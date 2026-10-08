@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pycolmap
+import pycolmap.inertial
 import vidmap_native._core as native
 
 from vidmap.mapper.inputs.loader import MappingStageInputs
@@ -269,8 +270,8 @@ def _build_synthetic_vi_stage_inputs(
             problem.add_pair(pair_rec)
 
     # Pre-integrate IMU measurements between consecutive frames at ZERO nominal bias.
-    imu_options = pycolmap.ImuPreintegrationOptions()
-    imu_options.method = pycolmap.ImuIntegrationMethod.RK4
+    imu_options = pycolmap.inertial.ImuPreintegrationOptions()
+    imu_options.method = pycolmap.inertial.ImuIntegrationMethod.RK4
     imu_calib = pycolmap.ImuCalibration()
     imu_calib.gravity_magnitude = gravity_mag
     imu_calib.gyro_noise_density = 1e-4
@@ -287,7 +288,7 @@ def _build_synthetic_vi_stage_inputs(
         t1 = float(t_samples[idx + 1])
         t0_ns = pycolmap.timestamp_from_seconds(t0)
         t1_ns = pycolmap.timestamp_from_seconds(t1)
-        integrator = pycolmap.ImuPreintegrator(imu_options, imu_calib, t0_ns, t1_ns)
+        integrator = pycolmap.inertial.ImuPreintegrator(imu_options, imu_calib, t0_ns, t1_ns)
         ms = pycolmap.ImuMeasurements()
         for step_i in range(steps_per_interval + 1):
             t_cur = t0 + step_i * dt_imu
