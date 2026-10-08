@@ -68,7 +68,7 @@ target_include_directories(
     src
     ${VIDMAP_COLMAP_INCLUDE_DIRS}
 )
-target_link_libraries(vidmap_native_algorithms PUBLIC ${VIDMAP_COLMAP_ESTIMATORS_TARGET})
+target_link_libraries(vidmap_native_algorithms PUBLIC ${VIDMAP_COLMAP_ESTIMATORS_TARGET} colmap::colmap_inertial)
 
 # COLMAP's static libraries can reference Abseil's logging internals without listing
 # Abseil in their exported configuration, which leaves the module with undefined

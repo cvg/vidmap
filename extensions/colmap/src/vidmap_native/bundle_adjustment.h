@@ -1,6 +1,6 @@
 #pragma once
 
-#include "colmap/estimators/imu_preintegration.h"
+#include "colmap/inertial/preintegration.h"
 
 #include <map>
 #include <vector>

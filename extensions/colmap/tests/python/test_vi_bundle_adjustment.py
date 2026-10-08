@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pycolmap
+import pycolmap.inertial
 import vidmap_native._core as native
 
 
@@ -135,8 +136,8 @@ def _build_synthetic_vi_scene(
         return rot_vec / (2.0 * eps)
 
     # IMU calibration and preintegration options.
-    imu_options = pycolmap.ImuPreintegrationOptions()
-    imu_options.method = pycolmap.ImuIntegrationMethod.RK4
+    imu_options = pycolmap.inertial.ImuPreintegrationOptions()
+    imu_options.method = pycolmap.inertial.ImuIntegrationMethod.RK4
     imu_calib = pycolmap.ImuCalibration()
     imu_calib.gravity_magnitude = gravity_mag
     imu_calib.gyro_noise_density = 1e-3
@@ -171,7 +172,7 @@ def _build_synthetic_vi_scene(
         t1 = frame_times[i + 1]
         t0_ns = pycolmap.timestamp_from_seconds(t0)
         t1_ns = pycolmap.timestamp_from_seconds(t1)
-        integrator = pycolmap.ImuPreintegrator(imu_options, imu_calib, t0_ns, t1_ns)
+        integrator = pycolmap.inertial.ImuPreintegrator(imu_options, imu_calib, t0_ns, t1_ns)
 
         ms = pycolmap.ImuMeasurements()
         for step in range(steps_per_interval + 1):
