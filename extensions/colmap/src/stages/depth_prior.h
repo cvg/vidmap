@@ -62,13 +62,14 @@ struct LogScaledDepthErrorCostFunctor
 
 class ScalePriorCostFunction : public ceres::SizedCostFunction<1, 2> {
  public:
-  explicit ScalePriorCostFunction(double inverse_stddev)
-      : inverse_stddev_(inverse_stddev) {}
+  explicit ScalePriorCostFunction(double inverse_stddev,
+                                  double target_log_scale = 0.0)
+      : inverse_stddev_(inverse_stddev), target_log_scale_(target_log_scale) {}
 
   bool Evaluate(double const* const* parameters,
                 double* residuals,
                 double** jacobians) const override {
-    residuals[0] = inverse_stddev_ * parameters[0][1];
+    residuals[0] = inverse_stddev_ * (parameters[0][1] - target_log_scale_);
     if (jacobians != nullptr && jacobians[0] != nullptr) {
       jacobians[0][0] = 0.0;
       jacobians[0][1] = inverse_stddev_;
@@ -78,6 +79,7 @@ class ScalePriorCostFunction : public ceres::SizedCostFunction<1, 2> {
 
  private:
   const double inverse_stddev_;
+  const double target_log_scale_;
 };
 
 }  // namespace vidmap

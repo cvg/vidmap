@@ -41,6 +41,11 @@ class RelativePoseEstimator:
     replay: ReplayCache
 
     def estimate(self) -> RelativePoseResult:
+        if not self.options.enabled:
+            return RelativePoseResult(
+                inlier_thresholds=self.inlier_threshold_options,
+                filtered_consecutive_pairs=set(),
+            )
         state = self.solve_state
         rec = self.solve_state.reconstruction
         cameras = rec.cameras

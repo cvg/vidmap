@@ -49,6 +49,7 @@ class VGCOptions:
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class MDRPOptions:
+    enabled: bool = True
     max_workers: Annotated[Optional[int], Field(gt=0)] = None
     compute_reproj_error_outliers: bool = True
     reproj_outlier_threshold: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 5.0
@@ -69,6 +70,24 @@ class RAOptions:
     video_lc_cauchy_scale: float = 0.05
     # One thread keeps the solve byte-identical; None means one, -1 means every core.
     num_threads: Optional[int] = None
+    use_imu: bool = False
+    refine_gyro_bias: bool = True
+    auto_initialize_gyro_bias: bool = True
+    imu_cost_weight: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    invalidate_outlier_pairs: bool = True
+    salvage_outlier_translations: bool = True
+    # Salvage only with matches the rejected visual relative pose does not explain. On short
+    # baselines, rotation-translation ambiguity otherwise lets matches on a dominant moving
+    # object pass the salvage tests.
+    salvage_require_second_motion: bool = True
+    imu_max_rotation_error_deg: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 5.0
+    imu_use_dynamic_rotation_error: bool = True
+    imu_dynamic_rotation_threshold_multiplier: Annotated[
+        float, Field(gt=0, allow_inf_nan=False)
+    ] = 3.5
+    imu_gyro_bias_stddev_rad_s: Annotated[float, Field(ge=0, allow_inf_nan=False)] = (
+        0.002
+    )
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

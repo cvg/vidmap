@@ -327,6 +327,26 @@ class GlobalPositioner:
         self.solve_state.export_poses()
         self.solve_state.export_track_values()
 
+    def _use_imu(self) -> bool:
+        return bool(self.options.common.use_imu and self.solve_state.imu_edges)
+
+    def _record_imu_result(
+        self,
+        result: native.GlobalPositioningResult,
+        *,
+        applied_scale_to_problem: bool,
+        cumulative_scale: float,
+    ) -> None:
+        self.solve_state.update_imu_states(
+            result.imu_states,
+            use_metric_velocity=applied_scale_to_problem,
+        )
+        self.solve_state.gravity_direction = np.asarray(result.gravity_direction, dtype=np.float64).copy()
+        self.solve_state.gravity_in_world = np.asarray(result.gravity_in_world, dtype=np.float64).copy()
+        self.solve_state.imu_scale = float(cumulative_scale)
+        self.solve_state.has_metric_imu_scale = bool(applied_scale_to_problem)
+        self.solve_state.reintegrate_imu_edges()
+
     def first_pass(self, native_options, replay_images):
         input_summary = None
         if self.replay.write_enabled("gp1"):
@@ -342,7 +362,29 @@ class GlobalPositioner:
 
         if self.playback_trace is not None:
             self.playback_trace.attach_global_positioning(native_options, "gp1")
-        result = native.run_global_positioning(native_options, self.solve_state.native_problem)
+        if self._use_imu():
+            common = self.options.common
+            native_options.use_imu = True
+            native_options.use_linear_gravity_warm_start = common.use_linear_gravity_warm_start
+            native_options.gravity_magnitude = common.gravity_magnitude
+            native_options.imu_cost_weight = common.imu_cost_weight
+            if self.solve_state.imu_from_cam.has_pose:
+                native_options.imu_from_cam = self.solve_state.imu_from_cam
+            if self.solve_state.gravity_direction is not None:
+                native_options.initial_gravity_direction = np.asarray(
+                    self.solve_state.gravity_direction, dtype=np.float64
+                )
+            native_options.apply_imu_scale_to_problem = bool(
+                common.apply_imu_scale_to_problem and not self.options.second_pass.enabled
+            )
+            result = native.run_global_positioning(
+                native_options,
+                self.solve_state.native_problem,
+                imu_edges=self.solve_state.imu_edges,
+                imu_states=self.solve_state.imu_states_list(),
+            )
+        else:
+            result = native.run_global_positioning(native_options, self.solve_state.native_problem)
         self.export_solved_scene()
         replay_result = self.result_for_replay(result)
         if self.replay.write_enabled("gp1"):
@@ -355,6 +397,12 @@ class GlobalPositioner:
                 gp_output_summary("gp1", self.solve_state, replay_result),
             )
         self.require_success(result, "First")
+        if self._use_imu() and not self.options.second_pass.enabled:
+            self._record_imu_result(
+                result,
+                applied_scale_to_problem=bool(native_options.apply_imu_scale_to_problem),
+                cumulative_scale=float(result.scale),
+            )
         return result
 
     def second_pass(self, native_options, first_result, replay_images, temporal_prior_specs):
@@ -395,7 +443,30 @@ class GlobalPositioner:
             self.replay.write_json("gp2", "input_summary.json", input_summary)
         if self.playback_trace is not None:
             self.playback_trace.attach_global_positioning(native_options, "gp2")
-        result = native.run_global_positioning(native_options, self.solve_state.native_problem)
+        if self._use_imu():
+            common = self.options.common
+            native_options.use_imu = True
+            native_options.use_linear_gravity_warm_start = False
+            native_options.gravity_magnitude = common.gravity_magnitude
+            native_options.imu_cost_weight = common.imu_cost_weight
+            if self.solve_state.imu_from_cam.has_pose:
+                native_options.imu_from_cam = self.solve_state.imu_from_cam
+            native_options.initial_scale = float(first_result.scale)
+            native_options.initial_gravity_direction = np.asarray(first_result.gravity_direction, dtype=np.float64)
+            native_options.apply_imu_scale_to_problem = bool(common.apply_imu_scale_to_problem)
+            pass2_states = [
+                first_result.imu_states[image_id]
+                for image_id in self.solve_state.image_order
+                if image_id in first_result.imu_states
+            ]
+            result = native.run_global_positioning(
+                native_options,
+                self.solve_state.native_problem,
+                imu_edges=self.solve_state.imu_edges,
+                imu_states=pass2_states,
+            )
+        else:
+            result = native.run_global_positioning(native_options, self.solve_state.native_problem)
         self.export_solved_scene()
         replay_result = self.result_for_replay(result)
         if self.replay.write_enabled("gp2"):
@@ -405,6 +476,12 @@ class GlobalPositioner:
                 gp_output_summary("gp2", self.solve_state, replay_result),
             )
         self.require_success(result, "Second")
+        if self._use_imu():
+            self._record_imu_result(
+                result,
+                applied_scale_to_problem=bool(native_options.apply_imu_scale_to_problem),
+                cumulative_scale=float(result.scale),
+            )
         return result
 
     def filter_tracks(self):

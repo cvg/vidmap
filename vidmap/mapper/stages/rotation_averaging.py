@@ -17,7 +17,7 @@ from vidmap.mapper.replay.evidence.stages import ra_summary
 logger = logging.getLogger(__name__)
 
 
-def _build_native_options(options: RAOptions):
+def _build_native_options(options: RAOptions, state: SolveState | None = None):
     native_options = native.RotationAveragingOptions()
     native_options.random_seed = options.random_seed
     native_options.max_rotation_error_deg = options.max_rotation_error_deg
@@ -26,6 +26,27 @@ def _build_native_options(options: RAOptions):
     native_options.skip_risky_loop_closure_pairs = options.filter_risky_loop_closure_pairs
     native_options.filter_unregistered_images = options.filter_unregistered_images
     native_options.num_threads = 1 if options.num_threads is None else int(options.num_threads)
+    use_imu = bool(options.use_imu and state is not None and state.imu_edges)
+    native_options.use_imu = use_imu
+    if use_imu:
+        native_options.refine_gyro_bias = options.refine_gyro_bias
+        native_options.auto_initialize_gyro_bias = options.auto_initialize_gyro_bias
+        if options.imu_cost_weight != 1.0:
+            native_options.visual_rotation_stddev_deg /= float(np.sqrt(options.imu_cost_weight))
+        native_options.invalidate_outlier_pairs = options.invalidate_outlier_pairs
+        native_options.salvage_outlier_translations = options.salvage_outlier_translations
+        native_options.salvage_require_second_motion = options.salvage_require_second_motion
+        native_options.use_dynamic_imu_rotation_threshold = (
+            options.imu_use_dynamic_rotation_error
+        )
+        native_options.imu_dynamic_rotation_threshold_multiplier = (
+            options.imu_dynamic_rotation_threshold_multiplier
+        )
+        native_options.imu_gyro_bias_stddev_rad_s = options.imu_gyro_bias_stddev_rad_s
+        if native_options.max_rotation_error_deg <= 0.0:
+            native_options.max_rotation_error_deg = options.imu_max_rotation_error_deg
+        if state is not None and state.imu_from_cam.has_pose:
+            native_options.imu_from_cam = state.imu_from_cam
     return native_options
 
 
@@ -45,12 +66,26 @@ class RotationAverager:
             for image_id, image in state.image_records().items()
             if image.pose.has_pose
         }
-        result = native.run_video_rotation_averaging(
-            opt_ra,
-            state.image_order,
-            state.pair_order,
-            state.native_problem,
-        )
+        if opt_ra.use_imu and state.imu_edges:
+            result = native.run_video_rotation_averaging(
+                opt_ra,
+                state.image_order,
+                state.pair_order,
+                state.native_problem,
+                imu_edges=state.imu_edges,
+                imu_states=state.imu_states_list(),
+            )
+            if result.success:
+                state.update_imu_states(result.imu_states)
+                state.gravity_direction = np.asarray(result.initial_gravity_direction, dtype=np.float64).copy()
+                state.reintegrate_imu_edges()
+        else:
+            result = native.run_video_rotation_averaging(
+                opt_ra,
+                state.image_order,
+                state.pair_order,
+                state.native_problem,
+            )
 
         registered_image_ids = set(translations)
         if opt_ra.max_rotation_error_deg > 0.0 and result.success:
@@ -70,8 +105,9 @@ class RotationAverager:
     def average(self) -> None:
         state = self.solve_state
         rec = self.solve_state.reconstruction
-        opt_ra = _build_native_options(self.options)
-        for pass_index, image_order_passes in enumerate((1, 2)):
+        opt_ra = _build_native_options(self.options, state)
+        passes = (1,) if opt_ra.use_imu else (1, 2)
+        for pass_index, image_order_passes in enumerate(passes):
             opt_ra.image_order_passes = image_order_passes
             self.run_pass(opt_ra)
 

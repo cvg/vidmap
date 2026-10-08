@@ -81,7 +81,7 @@ class BundleAdjuster:
     triangulator: pycolmap.IncrementalTriangulator = field(init=False)
     triangulator_options: pycolmap.IncrementalTriangulatorOptions = field(init=False)
     shift_scale: dict = field(init=False)
-    truncation_multiplier: float = field(init=False)
+    truncation_multiplier: float = field(init=False, default=1.0)
 
     @property
     def reconstruction(self) -> pycolmap.Reconstruction:
@@ -135,6 +135,8 @@ class BundleAdjuster:
     def prepare_workspace(self) -> None:
         target_multiplier = self.options.depth.target_stddev_multiplier
         for image in self.solve_state.image_records().values():
+            if len(image.depth_stddevs) == 0:
+                continue
             image.depth_stddevs = np.asarray(image.depth_stddevs) / self.depth_stddev_multiplier * target_multiplier
             self.solve_state.update_image(image)
 
@@ -194,6 +196,8 @@ class BundleAdjuster:
         while iteration < self.options.normal.iterations:
             if iteration == 0:
                 self.shift_scale = {image_id: np.array([0.0, 0.0]) for image_id in self.reconstruction.images.keys()}
+                if self.solve_state.has_metric_imu_scale or self.options.imu.use_imu:
+                    self.shift_scale.update(self.estimate_depth_scales())
                 self.shift_scale = self.reset_and_retriangulate(
                     max_error_multiplier=self.options.first_iteration_error_multiplier * self.options.multiply_errors,
                 )
@@ -408,12 +412,15 @@ class BundleAdjuster:
     def estimate_truncation_multiplier(self) -> float:
         whitened_residuals = []
         points = self.point3D_table()
+        use_metric_scale = self.solve_state.has_metric_imu_scale or self.options.imu.use_imu
         for image_id in self.reconstruction.reg_image_ids():
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
             if point2D_indices.size == 0:
                 continue
             solve_image = self.solve_state.image(image_id)
+            if len(solve_image.depth_validity) == 0:
+                continue
             valid = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             valid_indices = point2D_indices[valid]
             if valid_indices.size == 0:
@@ -430,7 +437,11 @@ class BundleAdjuster:
             if mask.sum() == 0:
                 continue
             log_stddevs = np.clip(stddevs[mask] / depth_priors[mask], 1e-6, None)
-            log_distances = np.log(depth_priors[mask]) - np.log(projected_depths[mask])
+            if use_metric_scale:
+                scale_offset = float(self.shift_scale.get(image_id, (0.0, 0.0))[1])
+                log_distances = (np.log(depth_priors[mask]) + scale_offset) - np.log(projected_depths[mask])
+            else:
+                log_distances = np.log(depth_priors[mask]) - np.log(projected_depths[mask])
             whitened_residuals.append(log_distances / log_stddevs)
 
         if not whitened_residuals:
@@ -500,17 +511,28 @@ class BundleAdjuster:
                 weight=prior_options.weight_multiplier * self.point_budget_scale,
             )
 
+        use_imu_in_solve = bool(self.options.imu.use_imu and self.solve_state.imu_edges and not policy.fix_all_poses)
+        imu_image_ids = set()
+        if use_imu_in_solve:
+            for edge in self.solve_state.imu_edges:
+                imu_image_ids.add(int(edge.image_id1))
+                imu_image_ids.add(int(edge.image_id2))
+
         depth_constraints = []
         depth_scales = []
         images_without_residuals = []
+        use_metric_scale = self.solve_state.has_metric_imu_scale or self.options.imu.use_imu
         small_angle_ids = self.small_triangulation_angle_ids(depth_options.risky_triangulation_angle_deg)
         for image_id in optimized_image_ids:
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
             if point2D_indices.size == 0:
-                images_without_residuals.append(image_id)
+                if image_id not in imu_image_ids:
+                    images_without_residuals.append(image_id)
                 continue
             solve_image = self.solve_state.image(image_id)
+            if len(solve_image.depth_validity) == 0:
+                continue
             valid = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             depths = np.asarray(solve_image.depth_values)[point2D_indices]
             point2D_indices = point2D_indices[valid]
@@ -528,14 +550,28 @@ class BundleAdjuster:
 
             mask = depths > 0
             variances = np.asarray(solve_image.depth_stddevs)[point2D_indices] ** 2
+            scale_offset = float(self.shift_scale.get(image_id, (0.0, 0.0))[1]) if use_metric_scale else 0.0
             if policy.gross_outliers:
-                whitened = (
-                    np.abs(np.log(depths).clip(1e-6, None) - np.log(projected_depths).clip(1e-6, None))
-                    / variances**0.5
-                )
+                if use_metric_scale:
+                    whitened = (
+                        np.abs(
+                            np.log(depths.clip(1e-6, None)) + scale_offset - np.log(projected_depths.clip(1e-6, None))
+                        )
+                        / variances**0.5
+                    )
+                else:
+                    whitened = (
+                        np.abs(np.log(depths).clip(1e-6, None) - np.log(projected_depths).clip(1e-6, None))
+                        / variances**0.5
+                    )
                 mask *= whitened < 2
             if depth_cutoff > 0 and param_multiplier > 0:
-                log_residual = np.abs(np.log(depths.clip(1e-6, None)) - np.log(projected_depths.clip(1e-6, None)))
+                if use_metric_scale:
+                    log_residual = np.abs(
+                        np.log(depths.clip(1e-6, None)) + scale_offset - np.log(projected_depths.clip(1e-6, None))
+                    )
+                else:
+                    log_residual = np.abs(np.log(depths.clip(1e-6, None)) - np.log(projected_depths.clip(1e-6, None)))
                 cauchy_scales = param_multiplier * variances**0.5 / depths.clip(1e-6, None)
                 mask *= log_residual < depth_cutoff * cauchy_scales
             if np.sum(mask) == 0:
@@ -577,7 +613,7 @@ class BundleAdjuster:
             depth_scales.append(
                 make_depth_scale_record(
                     image_id=image_id,
-                    shift_scale=self.shift_scale[image_id],
+                    shift_scale=self.shift_scale.get(image_id, np.array([0.0, 0.0])),
                     fix_scale=policy.fix_scale,
                     use_scale_prior=policy.regularize_scale,
                     scale_prior_stddev=depth_options.scale_std,
@@ -586,17 +622,66 @@ class BundleAdjuster:
                 )
             )
 
+        imu_edges = []
+        imu_states = []
+        if use_imu_in_solve:
+            imu_edges = list(self.solve_state.imu_edges)
+            imu_states = self.solve_state.imu_states_list()
+            options.use_imu = True
+            options.use_analytical_imu_cost = self.options.imu.use_analytical_imu_cost
+            if self.options.imu.refine_imu_scale is not None:
+                options.refine_imu_scale = bool(self.options.imu.refine_imu_scale)
+            else:
+                options.refine_imu_scale = bool(
+                    (len(depth_constraints) > 0 or not self.solve_state.has_metric_imu_scale)
+                    and not (policy.fix_rotations and self.solve_state.has_metric_imu_scale)
+                )
+            options.refine_gravity = self.options.imu.refine_gravity
+            options.refine_imu_velocities = self.options.imu.refine_velocities
+            options.refine_gyro_bias = self.options.imu.refine_gyro_bias and (
+                not policy.fix_rotations or len(imu_states) == 0
+            )
+            options.refine_accel_bias = self.options.imu.refine_accel_bias
+            options.refine_imu_from_cam_rotation = bool(
+                self.options.imu.refine_imu_from_cam_rotation and policy.gross_outliers and not policy.fix_rotations
+            )
+            options.refine_imu_from_cam_translation = bool(
+                self.options.imu.refine_imu_from_cam_translation and policy.gross_outliers and not policy.fix_rotations
+            )
+            options.imu_from_cam_rotation_prior_stddev_deg = self.options.imu.imu_from_cam_rotation_prior_stddev_deg
+            options.imu_from_cam_translation_prior_stddev = self.options.imu.imu_from_cam_translation_prior_stddev
+            options.apply_imu_alignment_to_problem = self.options.imu.apply_imu_alignment_to_problem
+            options.auto_initialize_gravity = len(imu_states) == 0
+            options.auto_initialize_imu_states = len(imu_states) == 0
+            options.initial_log_scale = 0.0
+            options.initial_gravity_direction = np.asarray(self.solve_state.gravity_direction, dtype=np.float64)
+            if options.refine_imu_from_cam_rotation or options.refine_imu_from_cam_translation:
+                options.imu_from_cam = self.solve_state.initial_imu_from_cam
+            else:
+                options.imu_from_cam = self.solve_state.imu_from_cam
+
         logger.debug("Solving bundle-adjustment problem")
         playback_sink = None
         if self.playback_trace is not None:
             playback_sink = self.playback_trace.attach_bundle_adjustment(options, self.reconstruction)
-        result = native.run_bundle_adjustment(
-            options,
-            depth_constraints,
-            depth_scales,
-            intrinsics_priors,
-            self.solve_state.native_problem,
-        )
+        orig_imu_weights = [float(edge.loss.weight) for edge in imu_edges]
+        if use_imu_in_solve and abs(float(self.options.imu.imu_cost_weight) - 1.0) > 1e-12:
+            imu_weight_mult = float(self.options.imu.imu_cost_weight)
+            for edge, orig_w in zip(imu_edges, orig_imu_weights):
+                edge.loss.weight = orig_w * imu_weight_mult
+        try:
+            result = native.run_bundle_adjustment(
+                options,
+                depth_constraints,
+                depth_scales,
+                intrinsics_priors,
+                self.solve_state.native_problem,
+                imu_edges,
+                imu_states,
+            )
+        finally:
+            for edge, orig_w in zip(imu_edges, orig_imu_weights):
+                edge.loss.weight = orig_w
         if not result.success:
             self.solve_state.import_scene()
             diagnostics = result.diagnostics
@@ -614,6 +699,48 @@ class BundleAdjuster:
             return False
         for image_id, values in result.depth_shift_scales.items():
             self.shift_scale[int(image_id)] = np.asarray(values).copy()
+        if use_imu_in_solve:
+            s = float(result.scale)
+            log_s = float(result.log_scale)
+            if (
+                options.refine_imu_scale
+                and not options.apply_imu_alignment_to_problem
+                and np.isfinite(s)
+                and s > 0.0
+                and abs(log_s) > 1e-12
+            ):
+                problem = self.solve_state.native_problem
+                for image_id in problem.image_ids:
+                    image_record = problem.image(image_id)
+                    if image_record.pose.has_pose:
+                        image_record.pose.translation = np.asarray(image_record.pose.translation, dtype=np.float64) * s
+                        problem.update_image(image_record)
+                for point3D_id in problem.point3D_ids:
+                    track_record = problem.track(point3D_id)
+                    track_record.xyz = np.asarray(track_record.xyz, dtype=np.float64) * s
+                    problem.update_track(track_record)
+                for image_id in list(self.shift_scale.keys()):
+                    self.shift_scale[image_id] = np.array(
+                        [
+                            float(self.shift_scale[image_id][0]),
+                            float(self.shift_scale[image_id][1]) + log_s,
+                        ],
+                        dtype=np.float64,
+                    )
+            self.solve_state.gravity_direction = np.asarray(result.gravity_direction, dtype=np.float64).copy()
+            self.solve_state.gravity_in_world = np.asarray(result.gravity_in_world, dtype=np.float64).copy()
+            if self.solve_state.has_metric_imu_scale:
+                self.solve_state.imu_scale *= s
+            else:
+                self.solve_state.imu_scale = s
+            self.solve_state.has_metric_imu_scale = True
+            if options.refine_imu_from_cam_rotation or options.refine_imu_from_cam_translation:
+                self.solve_state.imu_from_cam = result.imu_from_cam
+            self.solve_state.update_imu_states(
+                result.imu_states,
+                use_metric_velocity=True,
+            )
+            self.solve_state.reintegrate_imu_edges()
         if not policy.fix_all_poses:
             for image_id in images_without_residuals:
                 image_record = self.solve_state.image(image_id)
@@ -639,6 +766,8 @@ class BundleAdjuster:
             if point2D_indices.size == 0:
                 continue
             solve_image = self.solve_state.image(image_id)
+            if len(solve_image.depth_validity) == 0:
+                continue
             valid_prior = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             if not np.any(valid_prior):
                 continue
@@ -702,10 +831,10 @@ class BundleAdjuster:
             for lift_index, image_id in enumerate(image_ids):
                 lift_image = self.solve_state.image(image_id)
                 point2D_index = point2D_indices[lift_index]
-                if not lift_image.depth_validity[point2D_index]:
+                if len(lift_image.depth_validity) <= point2D_index or not lift_image.depth_validity[point2D_index]:
                     continue
                 xy = lift_image.keypoints[point2D_index]
-                depth = lift_image.depth_values[point2D_index] * np.exp(self.shift_scale[image_id][1])
+                depth = lift_image.depth_values[point2D_index] * np.exp(self.shift_scale.get(image_id, (0.0, 0.0))[1])
                 camera = self.reconstruction.cameras[lift_image.camera_id]
                 xyz = self.reconstruction.image(image_id).cam_from_world().inverse() * (
                     np.concatenate([camera.cam_from_img(xy[None]), np.ones((1, 1))], -1) * depth

@@ -33,14 +33,14 @@ class Mapper:
         self,
         *,
         conf: MapperOptions,
-        mapper_inputs: MapperInputs,
+        mapper_inputs: MapperInputs | None = None,
         sfm_outputs_dir: Path,
-        point_budget: int,
+        point_budget: int = CANONICAL_POINT_BUDGET,
         persist_intermediate_reconstructions: bool = False,
     ) -> None:
         if not isinstance(conf, MapperOptions):
             raise TypeError(f"Expected MapperOptions, got {type(conf).__name__}")
-        if not isinstance(mapper_inputs, MapperInputs):
+        if mapper_inputs is not None and not isinstance(mapper_inputs, MapperInputs):
             raise TypeError(f"Expected MapperInputs, got {type(mapper_inputs).__name__}")
         if not isinstance(persist_intermediate_reconstructions, bool):
             raise TypeError(
@@ -48,7 +48,9 @@ class Mapper:
                 f"got {type(persist_intermediate_reconstructions).__name__}"
             )
         sfm_outputs_dir = Path(sfm_outputs_dir).resolve()
-        if mapper_inputs.directory == sfm_outputs_dir or mapper_inputs.directory in sfm_outputs_dir.parents:
+        if mapper_inputs is not None and (
+            mapper_inputs.directory == sfm_outputs_dir or mapper_inputs.directory in sfm_outputs_dir.parents
+        ):
             raise ValueError("Mapper outputs must not be inside the mapper-input directory")
         self.conf = conf
         if isinstance(point_budget, bool) or not isinstance(point_budget, Integral) or point_budget <= 0:
@@ -57,6 +59,7 @@ class Mapper:
         self.mapper_inputs = mapper_inputs
         self.sfm_outputs_dir = sfm_outputs_dir
         self.persist_intermediate_reconstructions = persist_intermediate_reconstructions
+        self.last_solve_state = None
 
     def run(
         self,
@@ -66,7 +69,11 @@ class Mapper:
         playback_trace_point_cap: int | None = None,
         overwrite_outputs: bool = False,
         on_inputs_validated: Callable[[], None] | None = None,
+        on_state_loaded: Callable | None = None,
+        on_stage_complete: Callable | None = None,
     ):
+        if self.mapper_inputs is None:
+            raise ValueError("Mapper.run() requires mapper_inputs")
         boundary = self.mapper_inputs.frontend_identity()["boundary_options"]
         need_factors = self._validate_calibration_request(boundary)
         if save_playback_trace:
@@ -94,6 +101,8 @@ class Mapper:
                     prior = self._prepare_calibration(state, boundary)
 
             mapping_stage_inputs = loader.load(on_database_loaded=admit_calibration)
+            if on_state_loaded is not None:
+                on_state_loaded(mapping_stage_inputs.solve_state)
 
             if on_inputs_validated is not None:
                 on_inputs_validated()
@@ -113,7 +122,13 @@ class Mapper:
                 else None
             )
             try:
-                reconstruction = self._solve(mapping_stage_inputs, replay, playback_trace, prior)
+                reconstruction = self._solve(
+                    mapping_stage_inputs,
+                    replay,
+                    playback_trace,
+                    prior,
+                    on_stage_complete=on_stage_complete,
+                )
                 if playback_trace is not None:
                     playback_trace.finish(reconstruction)
             except BaseException:
@@ -124,6 +139,24 @@ class Mapper:
         finally:
             remove_database_sidecars(working_database)
             working_database.unlink(missing_ok=True)
+
+    def solve_stage_inputs(
+        self,
+        mapping_stage_inputs,
+        *,
+        prior: dict | None = None,
+        on_stage_complete: Callable | None = None,
+    ):
+        """Run the full mapping pipeline on pre-loaded MappingStageInputs."""
+        self.sfm_outputs_dir.mkdir(parents=True, exist_ok=True)
+        replay = ReplayCache(self.conf.replay_cache, self.sfm_outputs_dir)
+        return self._solve(
+            mapping_stage_inputs,
+            replay,
+            None,
+            {} if prior is None else prior,
+            on_stage_complete=on_stage_complete,
+        )
 
     def _validate_calibration_request(self, boundary) -> bool:
         """Check configuration before loading or publishing and resolve whether factors are needed."""
@@ -150,9 +183,18 @@ class Mapper:
         log_focal_stddev = calibration.da3_log_focal_stddev if predictor == "da3" else None
         return load_focal_prior(path, solve_state, log_focal_stddev=log_focal_stddev, shared=shared)
 
-    def _solve(self, mapping_stage_inputs, replay, playback_trace, prior):
+    def _solve(
+        self,
+        mapping_stage_inputs,
+        replay,
+        playback_trace,
+        prior,
+        *,
+        on_stage_complete: Callable | None = None,
+    ):
         solve_start_time = sync_time()
         solve_state = mapping_stage_inputs.solve_state
+        self.last_solve_state = solve_state
 
         calibration = self.conf.calibration
 
@@ -178,6 +220,8 @@ class Mapper:
             focal_prior=prior if calibration.vgc_focal_prior else None,
         )
         view_graph_calibrator.calibrate()
+        if on_stage_complete is not None:
+            on_stage_complete("vgc", solve_state)
 
         # Bearings are shared by relative-pose estimation and the later global
         # positioning stage, so construct them once on the solve state.
@@ -193,6 +237,8 @@ class Mapper:
             replay=replay,
         )
         relative_pose = relative_pose_estimator.estimate()
+        if on_stage_complete is not None:
+            on_stage_complete("mdrp", solve_state)
 
         rotation_averager = RotationAverager(
             solve_state=solve_state,
@@ -202,6 +248,8 @@ class Mapper:
             replay=replay,
         )
         rotation_averager.average()
+        if on_stage_complete is not None:
+            on_stage_complete("ra", solve_state)
 
         # Mark inconsistent boundary depth before track construction so every
         # subsequent position solve sees the same filtered observations.
@@ -220,6 +268,8 @@ class Mapper:
             replay=replay,
         )
         tracks = track_builder.build()
+        if on_stage_complete is not None:
+            on_stage_complete("tracks", solve_state)
 
         record_timing("pre_global_positioning", sync_time() - vgc_start_time)
         log_memory("pre_global_positioning")
@@ -240,6 +290,8 @@ class Mapper:
             playback_trace=playback_trace,
         )
         global_positioner.position()
+        if on_stage_complete is not None:
+            on_stage_complete("gp", solve_state)
 
         bundle_adjuster = BundleAdjuster(
             solve_state=solve_state,
@@ -254,7 +306,9 @@ class Mapper:
             playback_trace=playback_trace,
         )
         bundle_adjuster.adjust()
-        if self.mapper_inputs.full_depth_maps_path is not None:
+        if on_stage_complete is not None:
+            on_stage_complete("ba", solve_state)
+        if self.mapper_inputs is not None and self.mapper_inputs.full_depth_maps_path is not None:
             from vidmap.depth_artifacts import write_depth_scales
 
             write_depth_scales(

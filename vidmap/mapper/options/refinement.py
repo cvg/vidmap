@@ -84,6 +84,23 @@ class BAFocalPriorOptions:
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
+class BAImuOptions:
+    use_imu: bool = False
+    use_analytical_imu_cost: bool = True
+    imu_cost_weight: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    refine_imu_scale: Optional[bool] = None
+    refine_gravity: bool = True
+    refine_velocities: bool = True
+    refine_gyro_bias: bool = True
+    refine_accel_bias: bool = True
+    refine_imu_from_cam_rotation: bool = False
+    refine_imu_from_cam_translation: bool = False
+    imu_from_cam_rotation_prior_stddev_deg: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.5
+    imu_from_cam_translation_prior_stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.02
+    apply_imu_alignment_to_problem: bool = False
+
+
+@pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class BAOptions:
     normal: BANormalOptions = dc_field(default_factory=BANormalOptions)
     annealing: BAAnnealingOptions = dc_field(default_factory=BAAnnealingOptions)
@@ -91,6 +108,7 @@ class BAOptions:
     depth: BADepthOptions = dc_field(default_factory=BADepthOptions)
     intrinsics: BAIntrinsicsOptions = dc_field(default_factory=BAIntrinsicsOptions)
     focal_prior: BAFocalPriorOptions = dc_field(default_factory=BAFocalPriorOptions)
+    imu: BAImuOptions = dc_field(default_factory=BAImuOptions)
     solver_backend: SolverBackendOptions = dc_field(default_factory=SolverBackendOptions)
 
     retriangulation_reproj_multiplier: float = 8.0
@@ -112,6 +130,7 @@ class BAOptions:
                 "depth": BADepthOptions,
                 "intrinsics": BAIntrinsicsOptions,
                 "focal_prior": BAFocalPriorOptions,
+                "imu": BAImuOptions,
                 "triangulation": BATriangulationOptions,
                 "solver_backend": SolverBackendOptions,
             },

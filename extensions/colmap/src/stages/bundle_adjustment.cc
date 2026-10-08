@@ -373,6 +373,22 @@ class DefaultBundleAdjuster {
     Eigen::Vector3d ba_init = Eigen::Vector3d::Zero();
     CollectImuImageIdsAndInitStates(bg_init, ba_init);
 
+    for (ImuEdgeRecord& edge : mutable_imu_edges_) {
+      if (edge.integrator != nullptr &&
+          imu_state_params_.count(edge.image_id1) != 0) {
+        const Eigen::Vector6d biases =
+            imu_state_params_.at(edge.image_id1).segment<6>(3);
+        if ((biases - edge.data.biases).norm() > 1e-6) {
+          const double orig_g = edge.data.gravity_magnitude;
+          edge.integrator->Reintegrate(biases);
+          edge.integrator->Update(&edge.data);
+          if (orig_g > 0.0) {
+            edge.data.gravity_magnitude = orig_g;
+          }
+        }
+      }
+    }
+
     // Stage 1: Estimate initial gyroscope bias via InertialRotationCostFunctor.
     if (options_.auto_initialize_imu_states && imu_states_.empty() &&
         options_.refine_gyro_bias) {
@@ -1173,8 +1189,11 @@ class DefaultBundleAdjuster {
 
       if (scale_record.use_scale_prior) {
         owned_losses_.push_back(scale_record.scale_prior_loss.Create());
+        const double target_log_scale =
+            has_imu_ ? scale_record.shift_scale[1] : 0.0;
         problem_->AddResidualBlock(
-            new ScalePriorCostFunction(1.0 / scale_record.scale_prior_stddev),
+            new ScalePriorCostFunction(1.0 / scale_record.scale_prior_stddev,
+                                       target_log_scale),
             owned_losses_.back().get(),
             shift_scale.data());
         ++result_.diagnostics.num_scale_prior_residuals;
