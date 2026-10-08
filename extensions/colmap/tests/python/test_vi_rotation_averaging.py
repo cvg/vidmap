@@ -1,5 +1,6 @@
 import numpy as np
 import pycolmap
+import pycolmap.inertial
 import vidmap_native._core as native
 from scipy.spatial.transform import Rotation
 
@@ -64,8 +65,8 @@ def _simulate_sequence_with_contiguous_outliers(
         R_WB = Rotation.from_euler("xyz", rpy).as_matrix()
         return pos, vel, acc, R_WB
 
-    imu_options = pycolmap.ImuPreintegrationOptions()
-    imu_options.method = pycolmap.ImuIntegrationMethod.RK4
+    imu_options = pycolmap.inertial.ImuPreintegrationOptions()
+    imu_options.method = pycolmap.inertial.ImuIntegrationMethod.RK4
     imu_calib = pycolmap.ImuCalibration()
     imu_calib.gyro_noise_density = 1e-4
     imu_calib.accel_noise_density = 1e-3
@@ -99,7 +100,7 @@ def _simulate_sequence_with_contiguous_outliers(
         t0, t1 = times[i], times[i + 1]
         t0_ns = pycolmap.timestamp_from_seconds(t0)
         t1_ns = pycolmap.timestamp_from_seconds(t1)
-        integ = pycolmap.ImuPreintegrator(imu_options, imu_calib, t0_ns, t1_ns)
+        integ = pycolmap.inertial.ImuPreintegrator(imu_options, imu_calib, t0_ns, t1_ns)
         ms = pycolmap.ImuMeasurements()
         num_steps = int(round((t1 - t0) / dt_imu))
         for step in range(num_steps + 1):

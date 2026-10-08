@@ -2,9 +2,9 @@
 #include "vidmap_native/video_rotation_averaging.h"
 
 #include "colmap/estimators/cost_functions/manifold.h"
-#include "colmap/estimators/imu_preintegration.h"
-#include "colmap/estimators/imu_preintegration_cost.h"
 #include "colmap/geometry/pose.h"
+#include "colmap/inertial/preintegration.h"
+#include "colmap/inertial/preintegration_cost.h"
 #include "colmap/math/connected_components.h"
 #include "colmap/math/math.h"
 #include "colmap/math/random.h"
