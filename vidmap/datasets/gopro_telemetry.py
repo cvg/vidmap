@@ -322,8 +322,43 @@ def _build_payload_timestamps(blocks: list[np.ndarray], payload_duration: float,
     )
 
 
-def load_gopro_telemetry_bin(bin_path: Path | str) -> GoProTelemetry:
-    """Parse binary GPMF telemetry track (or video file) and extract IMU/optical streams."""
+def _build_stmp_anchored_timestamps(blocks: list[np.ndarray], stmps_s: Sequence[float]) -> np.ndarray:
+    """Build sample timestamps by anchoring each GPMF payload at its own STMP.
+
+    STMP is the camera-clock time of the first sample of each payload. The
+    sensor oscillator drifts slowly against the camera clock, so samples are
+    spaced uniformly only within a payload, at the rate implied by the next
+    payload's STMP (the last payload reuses the previous rate).
+    """
+    if not blocks:
+        return np.zeros(0, dtype=np.float64)
+    stmps = np.asarray(stmps_s, dtype=np.float64)
+    if len(stmps) != len(blocks):
+        raise ValueError("Need exactly one STMP per payload")
+    if len(blocks) == 1:
+        raise ValueError("Need at least two payloads to infer the sample rate")
+    counts = np.array([len(block) for block in blocks], dtype=np.float64)
+    periods = np.diff(stmps) / counts[:-1]
+    if np.any(periods <= 0):
+        raise ValueError("STMP timestamps must be strictly increasing")
+    periods = np.append(periods, periods[-1])
+    return np.concatenate(
+        [
+            stmp + np.arange(len(block), dtype=np.float64) * period
+            for stmp, period, block in zip(stmps, periods, blocks)
+        ]
+    )
+
+
+def load_gopro_telemetry_bin(bin_path: Path | str, imu_timing: str = "stmp") -> GoProTelemetry:
+    """Parse binary GPMF telemetry track (or video file) and extract IMU/optical streams.
+
+    ``imu_timing`` selects how ACCL/GYRO sample times are reconstructed:
+    ``"stmp"`` (default) anchors every payload at its own STMP, which follows the
+    camera clock and absorbs the drift of the IMU oscillator, while ``"uniform"``
+    spreads samples over the average payload duration (legacy behavior, off by a
+    few milliseconds when the IMU clock drifts).
+    """
     p = Path(bin_path)
     buf = gpmf.io.extract_gpmf_stream(str(p)) if p.suffix.lower() in (".mp4", ".mov") else p.read_bytes()
 
@@ -368,8 +403,25 @@ def load_gopro_telemetry_bin(bin_path: Path | str) -> GoProTelemetry:
     if stmps["ACCL"] and stmps["CORI"]:
         t0_imu = (stmps["ACCL"][0] - stmps["CORI"][0]) * 1e-6
 
-    accl_timestamps = _build_payload_timestamps(blocks["ACCL"], payload_duration, t0_imu)
-    gyro_timestamps = _build_payload_timestamps(blocks["GYRO"], payload_duration, t0_imu)
+    if imu_timing == "stmp":
+        if not stmps["CORI"]:
+            raise ValueError("STMP-anchored IMU timing requires CORI STMPs as the video time origin")
+        video_origin_us = stmps["CORI"][0]
+
+        def stmp_timestamps(key: str) -> np.ndarray:
+            if len(stmps[key]) != len(blocks[key]):
+                raise ValueError(f"Missing STMP for some {key} payloads")
+            return _build_stmp_anchored_timestamps(
+                blocks[key], [(value - video_origin_us) * 1e-6 for value in stmps[key]]
+            )
+
+        accl_timestamps = stmp_timestamps("ACCL")
+        gyro_timestamps = stmp_timestamps("GYRO")
+    elif imu_timing == "uniform":
+        accl_timestamps = _build_payload_timestamps(blocks["ACCL"], payload_duration, t0_imu)
+        gyro_timestamps = _build_payload_timestamps(blocks["GYRO"], payload_duration, t0_imu)
+    else:
+        raise ValueError(f"Unknown imu_timing '{imu_timing}'")
     cori_timestamps = np.arange(len(all_cori), dtype=np.float64) / video_fps
     iori_timestamps = np.arange(len(all_iori), dtype=np.float64) / video_fps
     grav_timestamps = np.arange(len(all_grav), dtype=np.float64) / video_fps
@@ -395,12 +447,16 @@ def load_gopro_telemetry_bin(bin_path: Path | str) -> GoProTelemetry:
     )
 
 
-def load_gopro_telemetry(path: Path | str) -> GoProTelemetry:
-    """Load GoPro telemetry from either .npz or binary GPMF (.bin, .gpmf, .mp4, .mov)."""
+def load_gopro_telemetry(path: Path | str, imu_timing: str = "stmp") -> GoProTelemetry:
+    """Load GoPro telemetry from either .npz or binary GPMF (.bin, .gpmf, .mp4, .mov).
+
+    ``imu_timing`` only applies to binary GPMF inputs (see ``load_gopro_telemetry_bin``);
+    .npz files store precomputed sample timestamps.
+    """
     p = Path(path)
     suffix = p.suffix.lower()
     if suffix == ".npz":
         return load_gopro_telemetry_npz(p)
     if suffix in (".bin", ".gpmf", ".mp4", ".mov"):
-        return load_gopro_telemetry_bin(p)
+        return load_gopro_telemetry_bin(p, imu_timing=imu_timing)
     raise ValueError(f"Unsupported GoPro telemetry file suffix '{p.suffix}' for {p}")
