@@ -5,8 +5,8 @@
 #include "colmap/estimators/cost_functions/manifold.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
 #include "colmap/estimators/cost_functions/utils.h"
-#include "colmap/estimators/imu_preintegration.h"
-#include "colmap/estimators/imu_preintegration_cost.h"
+#include "colmap/inertial/preintegration.h"
+#include "colmap/inertial/preintegration_cost.h"
 #include "colmap/math/random.h"
 #include "colmap/util/threading.h"
 

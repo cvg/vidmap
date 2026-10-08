@@ -10,6 +10,7 @@ import vidmap_native._core as native
 from scipy.spatial.transform import Rotation
 
 import pycolmap
+import pycolmap.inertial
 
 
 def _skew(v: np.ndarray) -> np.ndarray:
@@ -152,8 +153,8 @@ def _build_synthetic_igp_scene(
         dR = R_minus.T @ R_plus
         return Rotation.from_matrix(dR).as_rotvec() / (2.0 * eps)
 
-    imu_options = pycolmap.ImuPreintegrationOptions()
-    imu_options.method = pycolmap.ImuIntegrationMethod.RK4
+    imu_options = pycolmap.inertial.ImuPreintegrationOptions()
+    imu_options.method = pycolmap.inertial.ImuIntegrationMethod.RK4
     init_biases = np.zeros(6, dtype=np.float64)
     if not preintegrate_at_zero_bias:
         init_biases[:3] = bg_true
@@ -190,7 +191,7 @@ def _build_synthetic_igp_scene(
         t1 = frame_times[i + 1]
         t0_ns = pycolmap.timestamp_from_seconds(t0)
         t1_ns = pycolmap.timestamp_from_seconds(t1)
-        integrator = pycolmap.ImuPreintegrator(
+        integrator = pycolmap.inertial.ImuPreintegrator(
             imu_options, imu_calib, t0_ns, t1_ns
         )
 
