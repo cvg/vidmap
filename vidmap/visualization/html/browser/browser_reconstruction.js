@@ -94,7 +94,8 @@
         database: database,
         loopClosureMasks: loopClosureMasks,
         gtTrajectory: options.gtTrajectory ?? null,
-        denseGtTrajectory: options.denseGtTrajectory ?? null
+        denseGtTrajectory: options.denseGtTrajectory ?? null,
+        estimatedFramesTrajectory: options.estimatedFramesTrajectory ?? null
       };
     }
 
@@ -167,7 +168,8 @@
           ? null
           : await decodedEmbeddedFile(masksEntry, LOOP_CLOSURE_MASKS_PATH),
         gtTrajectory: payload.gtTrajectory ?? null,
-        denseGtTrajectory: payload.denseGtTrajectory ?? null
+        denseGtTrajectory: payload.denseGtTrajectory ?? null,
+        estimatedFramesTrajectory: payload.estimatedFramesTrajectory ?? null
       });
     }
 
@@ -694,7 +696,9 @@
           minimumTrackLengthLabel.textContent = "1 observation";
           setMinimumTrackLength(1);
           keyframeTimeline.pointOffsets = Array.from(loaded.points.pointOffsets);
-          replaceEstimatedGeometry(loaded.cameras.centers, loaded.cameras.frusta);
+          replaceEstimatedGeometry(
+            loaded.cameras.centers, loaded.cameras.frusta, selection.estimatedFramesTrajectory ?? null
+          );
           replaceGtGeometry(selection.gtTrajectory, selection.denseGtTrajectory);
           let loopClosureStatus;
           if (selection.database !== null) {

@@ -152,6 +152,9 @@ __RECONSTRUCTION_SCRIPT__
     let imageDirectory = null;
     let estimatedFrustaPositions = new Float32Array();
     let estimatedPathPositions = new Float32Array();
+    // Optional dense path from all-frame localization; the slider still steps through keyframes.
+    let estimatedFramesPathPositions = new Float32Array();
+    let estimatedFramesKeyframeCounts = [];
     let gtPathPositions = new Float32Array();
     let gtKeyframePathCounts = [];
     let gtKeyframeFrustaCounts = [];
@@ -803,9 +806,17 @@ __RECONSTRUCTION_SCRIPT__
     ) {
       updateCameraSegmentsPrefix(object, base, centers, pointCount, sigmaScale, 144, confidences, solidColorHex);
     }
-    function replaceEstimatedGeometry(centers, frusta) {
+    function replaceEstimatedGeometry(centers, frusta, framesTrajectory = null) {
       estimatedPathPositions = centers;
       estimatedFrustaPositions = frusta;
+      const hasFrames = (
+        framesTrajectory !== null && typeof framesTrajectory === "object" &&
+        Array.isArray(framesTrajectory.centers) && framesTrajectory.centers.length >= 6
+      );
+      estimatedFramesPathPositions = hasFrames ? Float32Array.from(framesTrajectory.centers) : new Float32Array();
+      estimatedFramesKeyframeCounts = (
+        hasFrames && Array.isArray(framesTrajectory.keyframePathCounts) ? framesTrajectory.keyframePathCounts : []
+      );
       updateLoopClosureGeometry(Number(document.getElementById("keyframe-slider").value));
       fitScene();
     }
@@ -967,7 +978,14 @@ __RECONSTRUCTION_SCRIPT__
       }
       preview.dataset.keyframeIndex = String(bounded);
       drawTrackedKeypoints(bounded);
-      updatePathPrefix(estimatedPath, estimatedPathPositions, bounded + 1);
+      if (estimatedFramesPathPositions.length >= 6) {
+        const framesCount = bounded < estimatedFramesKeyframeCounts.length
+          ? estimatedFramesKeyframeCounts[bounded]
+          : Math.floor(estimatedFramesPathPositions.length / 3);
+        updatePathPrefix(estimatedPath, estimatedFramesPathPositions, framesCount);
+      } else {
+        updatePathPrefix(estimatedPath, estimatedPathPositions, bounded + 1);
+      }
       const estimatedSize = Number(document.getElementById("estimated-frusta-size").value);
       updateFrustaPrefix(
         estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, bounded + 1, estimatedSize
