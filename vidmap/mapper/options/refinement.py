@@ -23,6 +23,9 @@ class BATriangulationOptions:
     re_max_trials: int = 1_000_000
     re_min_ratio: float = 1.0
     relaxed_max_transitivity: Annotated[int, Field(gt=0)] = 1000
+    # Keep correspondences of pairs invalidated upstream (e.g. rotation outliers) in the
+    # BA correspondence graph used for track merging, completion, and re-triangulation.
+    use_invalid_pairs: bool = False
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

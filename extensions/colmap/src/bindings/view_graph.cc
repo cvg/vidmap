@@ -78,7 +78,14 @@ void BindViewGraph(py::module_& m) {
         py::arg("max_epipolar_angle_deg"),
         py::arg("min_inliers"),
         py::arg("min_inlier_ratio"),
-        py::arg("pair"));
+        py::arg("pair"),
+        py::arg("excluded_matches") = std::vector<bool>{});
+  m.def("find_matches_explained_by_relative_pose",
+        &FindMatchesExplainedByRelativePose,
+        py::arg("image1"),
+        py::arg("image2"),
+        py::arg("pair"),
+        py::arg("max_epipolar_angle_deg"));
 }
 
 }  // namespace vidmap

@@ -157,6 +157,8 @@ class BundleAdjuster:
             image_id1, image_id2 = image_pair.image_id1, image_pair.image_id2
             if len(image_pair.inlier_indices) == 0:
                 continue
+            if not image_pair.is_valid and not self.options.triangulation.use_invalid_pairs:
+                continue
             if image_id1 not in registered_image_ids or image_id2 not in registered_image_ids:
                 continue
             geometry = pycolmap.TwoViewGeometry()

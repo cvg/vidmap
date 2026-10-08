@@ -157,7 +157,61 @@ class KnownRotationTranslationLocalEstimator
   }
 };
 
+void CheckExcludedMatches(const std::vector<bool>& excluded_matches,
+                          const Eigen::Index num_matches) {
+  if (!excluded_matches.empty() &&
+      static_cast<Eigen::Index>(excluded_matches.size()) != num_matches) {
+    throw std::invalid_argument(
+        "excluded_matches must be empty or have one entry per match");
+  }
+}
+
 }  // namespace
+
+std::vector<bool> FindMatchesExplainedByRelativePose(
+    const ImageRecord& image1,
+    const ImageRecord& image2,
+    const PairRecord& pair,
+    const double max_epipolar_angle_deg) {
+  const Eigen::Index num_matches = pair.all_matches.rows();
+  std::vector<bool> explained(num_matches, false);
+  if (!pair.geometry.cam2_from_cam1.has_pose || image1.bearings.rows() == 0 ||
+      image2.bearings.rows() == 0 || max_epipolar_angle_deg <= 0.0) {
+    return explained;
+  }
+  const colmap::Rigid3d cam2_from_cam1 =
+      ToColmapPose(pair.geometry.cam2_from_cam1);
+  const Eigen::Matrix3d R_21 = cam2_from_cam1.rotation().toRotationMatrix();
+  const double t_norm = cam2_from_cam1.translation().norm();
+  const Eigen::Vector3d t_21 =
+      t_norm > kEpsilon ? Eigen::Vector3d(cam2_from_cam1.translation() / t_norm)
+                        : Eigen::Vector3d::Zero();
+  const double sin_thres = std::sin(colmap::DegToRad(max_epipolar_angle_deg));
+  const double max_residual = sin_thres * sin_thres;
+  for (Eigen::Index k = 0; k < num_matches; ++k) {
+    const std::uint32_t idx1 = pair.all_matches(k, 0);
+    const std::uint32_t idx2 = pair.all_matches(k, 1);
+    if (idx1 >= static_cast<std::uint32_t>(image1.bearings.rows()) ||
+        idx2 >= static_cast<std::uint32_t>(image2.bearings.rows())) {
+      continue;
+    }
+    const Eigen::Vector3d b1_rot = R_21 * image1.bearings.row(idx1).transpose();
+    const Eigen::Vector3d b2 = image2.bearings.row(idx2).transpose();
+    double residual = std::numeric_limits<double>::max();
+    const double ep_norm_sq = t_21.cross(b1_rot).squaredNorm();
+    if (ep_norm_sq >= 1e-8) {
+      // Epipolar angle, as in the salvage estimator (no cheirality test, so
+      // that any match the rejected motion can account for is excluded).
+      const double normal_dot_t = b2.cross(b1_rot).dot(t_21);
+      residual = (normal_dot_t * normal_dot_t) / ep_norm_sq;
+    } else if (t_norm <= kEpsilon) {
+      // Rotation-only (panoramic) model: angle between b2 and R_21 * b1.
+      residual = b2.cross(b1_rot).squaredNorm();
+    }
+    explained[k] = residual <= max_residual;
+  }
+  return explained;
+}
 
 void PrepareImageBearings(MappingProblem* problem) {
   problem->Validate();
@@ -318,11 +372,13 @@ bool TrySalvagePairTranslationWithKnownRotation(
     const double max_epipolar_angle_deg,
     const int min_inliers,
     const double min_inlier_ratio,
-    PairRecord* pair) {
+    PairRecord* pair,
+    const std::vector<bool>& excluded_matches) {
   if (pair == nullptr) {
     throw std::invalid_argument("pair must not be null");
   }
   const Eigen::Index num_matches = pair->all_matches.rows();
+  CheckExcludedMatches(excluded_matches, num_matches);
   if (!image1.pose.has_pose || !image2.pose.has_pose ||
       image1.bearings.rows() == 0 || image2.bearings.rows() == 0 ||
       max_epipolar_angle_deg <= 0.0 || num_matches < std::max(2, min_inliers)) {
@@ -343,6 +399,9 @@ bool TrySalvagePairTranslationWithKnownRotation(
   valid_match_indices.reserve(num_matches);
 
   for (Eigen::Index k = 0; k < num_matches; ++k) {
+    if (!excluded_matches.empty() && excluded_matches[k]) {
+      continue;
+    }
     const std::uint32_t idx1 = pair->all_matches(k, 0);
     const std::uint32_t idx2 = pair->all_matches(k, 1);
     if (idx1 >= static_cast<std::uint32_t>(image1.bearings.rows()) ||

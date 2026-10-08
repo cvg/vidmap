@@ -57,6 +57,9 @@ void BindVideoRotationAveraging(py::module_& m) {
           "salvage_outlier_translations",
           &VideoRotationAveragingOptions::salvage_outlier_translations)
       .def_readwrite(
+          "salvage_require_second_motion",
+          &VideoRotationAveragingOptions::salvage_require_second_motion)
+      .def_readwrite(
           "salvage_epipolar_angle_thres_deg",
           &VideoRotationAveragingOptions::salvage_epipolar_angle_thres_deg)
       .def_readwrite("salvage_min_inlier_ratio",

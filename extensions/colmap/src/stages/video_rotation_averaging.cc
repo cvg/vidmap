@@ -935,14 +935,26 @@ RotationAveragingResult RunVideoRotationAveraging(
         PairRecord pair = problem->Pair(pair_id);
         const ImageRecord& image1 = problem->Image(pair.image_id1);
         const ImageRecord& image2 = problem->Image(pair.image_id2);
-        if (options.salvage_outlier_translations &&
-            TrySalvagePairTranslationWithKnownRotation(
-                image1,
-                image2,
-                options.salvage_epipolar_angle_thres_deg,
-                options.salvage_min_inliers,
-                options.salvage_min_inlier_ratio,
-                &pair)) {
+        bool salvaged = false;
+        if (options.salvage_outlier_translations) {
+          const std::vector<bool> excluded_matches =
+              options.salvage_require_second_motion
+                  ? FindMatchesExplainedByRelativePose(
+                        image1,
+                        image2,
+                        pair,
+                        options.salvage_epipolar_angle_thres_deg)
+                  : std::vector<bool>{};
+          salvaged = TrySalvagePairTranslationWithKnownRotation(
+              image1,
+              image2,
+              options.salvage_epipolar_angle_thres_deg,
+              options.salvage_min_inliers,
+              options.salvage_min_inlier_ratio,
+              &pair,
+              excluded_matches);
+        }
+        if (salvaged) {
           problem->UpdatePair(pair);
           result.salvaged_pair_ids.push_back(pair_id);
           excluded_pairs.erase(pair_id);

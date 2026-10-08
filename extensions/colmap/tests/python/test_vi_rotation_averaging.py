@@ -477,3 +477,124 @@ def test_vi_rotation_averaging_dynamic_imu_rotation_threshold():
     )
     assert set(res_dyn.outlier_pair_ids) == corrupted_pair_ids
     assert lc_pid not in set(res_dyn.outlier_pair_ids)
+
+
+def _make_two_view_salvage_problem(rng, noise_deg: float = 0.02):
+    """Two views observing a static scene (60 points) and a larger rigid object
+    (90 points) that rotates by 10 deg relative to the static scene between the
+    views. The image poses hold the true camera rotations, while the pair stores
+    the apparent relative pose of the moving object as the rejected visual pose."""
+    R_21 = Rotation.from_euler("xyz", [2.0, -6.0, 1.0], degrees=True).as_matrix()
+    c_2 = np.array([0.4, 0.05, 0.1])  # camera 2 center in camera 1 frame
+    t_21 = -R_21 @ c_2
+
+    def random_points(num, depth_range):
+        xy = rng.uniform(-0.5, 0.5, size=(num, 2))
+        depth = rng.uniform(*depth_range, size=(num, 1))
+        return np.hstack([xy * depth, depth])
+
+    static_pts = random_points(60, (4.0, 12.0))
+    object_pts = random_points(90, (2.5, 4.0))
+    # Rigid object motion in the static (camera 1) frame about its centroid.
+    R_obj = Rotation.from_euler("xyz", [4.0, 9.0, -2.0], degrees=True).as_matrix()
+    centroid = object_pts.mean(axis=0)
+    object_pts_moved = (R_obj @ (object_pts - centroid).T).T + centroid + np.array([0.0, 0.15, 0.0])
+
+    def to_bearings(pts):
+        b = pts / np.linalg.norm(pts, axis=1, keepdims=True)
+        noise = Rotation.from_rotvec(rng.normal(scale=np.radians(noise_deg), size=(len(b), 3)))
+        return noise.apply(b)
+
+    b1 = to_bearings(np.vstack([static_pts, object_pts]))
+    b2 = to_bearings((R_21 @ np.vstack([static_pts, object_pts_moved]).T).T + t_21)
+
+    images = []
+    for image_id, bearings, R in ((1, b1, np.eye(3)), (2, b2, R_21)):
+        image = native.ImageRecord()
+        image.image_id = image_id
+        image.frame_id = image_id
+        image.camera_id = 1
+        image.keypoints = np.zeros((len(bearings), 2), dtype=np.float64)
+        image.bearings = bearings
+        image.pose.has_pose = True
+        image.pose.rotation_xyzw = Rotation.from_matrix(R).as_quat()
+        images.append(image)
+
+    pair = native.PairRecord()
+    pair.pair_id = _pair_id(1, 2)
+    pair.image_id1 = 1
+    pair.image_id2 = 2
+    pair.is_valid = False
+    num = len(b1)
+    pair.all_matches = np.column_stack((np.arange(num), np.arange(num))).astype(np.uint32)
+    pair.inlier_indices = np.arange(num, dtype=np.int32)
+    pair.are_loop_closure = np.zeros(num, dtype=np.uint8)
+    # Store the moving object's apparent relative motion as the (rejected) visual pose.
+    R_obj_21 = R_21 @ R_obj
+    t_obj_21 = R_21 @ ((np.eye(3) - R_obj) @ centroid + np.array([0.0, 0.15, 0.0])) + t_21
+    pair.geometry.cam2_from_cam1.has_pose = True
+    pair.geometry.cam2_from_cam1.rotation_xyzw = Rotation.from_matrix(R_obj_21).as_quat()
+    pair.geometry.cam2_from_cam1.translation = t_obj_21 / np.linalg.norm(t_obj_21)
+    return images, pair
+
+
+def test_salvage_require_second_motion():
+    pycolmap.set_random_seed(0)
+    images, pair = _make_two_view_salvage_problem(np.random.default_rng(7))
+    # The rejected visual pose (moving object) explains the object matches, not the static ones.
+    explained = np.asarray(
+        native.find_matches_explained_by_relative_pose(images[0], images[1], pair, max_epipolar_angle_deg=0.4)
+    )
+    # (Being a 1D constraint per match, the epipolar geometry of the object also explains a
+    # fraction of the static matches by chance.)
+    assert explained[60:].mean() > 0.95
+    assert explained[:60].mean() < 0.3
+    static_unexplained = set(np.flatnonzero(~explained[:60]).tolist())
+
+    # The static scene is a second motion supported by unexplained matches: salvage succeeds.
+    _, salvaged_pair = _make_two_view_salvage_problem(np.random.default_rng(7))
+    assert native.try_salvage_pair_translation_with_known_rotation(
+        images[0],
+        images[1],
+        max_epipolar_angle_deg=0.4,
+        min_inliers=30,
+        min_inlier_ratio=0.25,
+        pair=salvaged_pair,
+        excluded_matches=explained.tolist(),
+    )
+    inliers = set(int(i) for i in salvaged_pair.inlier_indices)
+    assert len(inliers & static_unexplained) >= len(static_unexplained) - 2
+    assert not inliers & set(np.flatnonzero(explained).tolist())
+
+    # Hatch-like case: the moving object dominates (20 static vs. 90 object matches). Under the
+    # reference rotation, a wrong translation explains half of the object matches (rotation-
+    # translation ambiguity), so plain salvage accepts the pair with object inliers. Excluding the
+    # matches explained by the rejected (object) pose leaves too few matches: the pair stays rejected.
+    def make_object_dominated_pair():
+        _, object_pair = _make_two_view_salvage_problem(np.random.default_rng(7))
+        keep = np.r_[0:20, 60:150]
+        object_pair.all_matches = np.asarray(object_pair.all_matches)[keep]
+        object_pair.inlier_indices = np.arange(len(keep), dtype=np.int32)
+        object_pair.are_loop_closure = np.zeros(len(keep), dtype=np.uint8)
+        return object_pair
+
+    hijacked_pair = make_object_dominated_pair()
+    assert native.try_salvage_pair_translation_with_known_rotation(
+        images[0], images[1], max_epipolar_angle_deg=0.4, min_inliers=30, min_inlier_ratio=0.3, pair=hijacked_pair
+    )
+    assert sum(int(i) >= 20 for i in hijacked_pair.inlier_indices) > 30
+
+    protected_pair = make_object_dominated_pair()
+    excluded = native.find_matches_explained_by_relative_pose(
+        images[0], images[1], protected_pair, max_epipolar_angle_deg=0.4
+    )
+    assert not native.try_salvage_pair_translation_with_known_rotation(
+        images[0],
+        images[1],
+        max_epipolar_angle_deg=0.4,
+        min_inliers=30,
+        min_inlier_ratio=0.3,
+        pair=protected_pair,
+        excluded_matches=excluded,
+    )
+    assert not protected_pair.is_valid

@@ -38,6 +38,11 @@ struct VideoRotationAveragingOptions {
   // rotation-rejected pairs via known-rotation 2-point translation RANSAC on
   // static background matches before invalidating the pair.
   bool salvage_outlier_translations = false;
+  // Only salvage with matches that the rejected visual relative pose does not
+  // explain (within salvage_epipolar_angle_thres_deg), i.e. require a second
+  // motion. Pairs whose matches mostly follow a moving object stay rejected,
+  // while pairs with a wrong model but static matches are still salvaged.
+  bool salvage_require_second_motion = true;
   double salvage_epipolar_angle_thres_deg = 0.4;
   double salvage_min_inlier_ratio = 0.30;
   int salvage_min_inliers = 50;

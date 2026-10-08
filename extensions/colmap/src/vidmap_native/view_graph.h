@@ -53,11 +53,22 @@ FocalLengthCalibResult CalibrateFocalLengths(
 std::size_t ApplyFocalCalibration(const ViewGraphCalibrationOptions& options,
                                   const FocalLengthCalibResult& result,
                                   MappingProblem* problem);
-bool TrySalvagePairTranslationWithKnownRotation(const ImageRecord& image1,
-                                                const ImageRecord& image2,
-                                                double max_epipolar_angle_deg,
-                                                int min_inliers,
-                                                double min_inlier_ratio,
-                                                PairRecord* pair);
+bool TrySalvagePairTranslationWithKnownRotation(
+    const ImageRecord& image1,
+    const ImageRecord& image2,
+    double max_epipolar_angle_deg,
+    int min_inliers,
+    double min_inlier_ratio,
+    PairRecord* pair,
+    const std::vector<bool>& excluded_matches = {});
+// Flags the matches of the pair that its stored relative pose
+// (geometry.cam2_from_cam1) explains within max_epipolar_angle_deg. Salvage
+// can exclude them so that a rotation-rejected pair is only salvaged by a
+// second motion supported by matches the rejected motion does not explain.
+std::vector<bool> FindMatchesExplainedByRelativePose(
+    const ImageRecord& image1,
+    const ImageRecord& image2,
+    const PairRecord& pair,
+    double max_epipolar_angle_deg);
 
 }  // namespace vidmap
