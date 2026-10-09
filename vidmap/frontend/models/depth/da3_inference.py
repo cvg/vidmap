@@ -14,6 +14,19 @@ from safetensors.torch import load_file
 from vidmap.utils.device import get_autocast_context
 
 
+def _dynamo_recompile_limits(limit: int) -> dict[str, int | bool]:
+    """Dynamo recompile limit that fails when hit, under this PyTorch's config names.
+
+    PyTorch 2.7 renamed cache_size_limit / fail_on_cache_limit_hit to recompile_limit /
+    fail_on_recompile_limit_hit.
+    """
+    if hasattr(torch._dynamo.config, "recompile_limit"):
+        names = ("recompile_limit", "fail_on_recompile_limit_hit")
+    else:
+        names = ("cache_size_limit", "fail_on_cache_limit_hit")
+    return dict(zip(names, (limit, True), strict=True))
+
+
 class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
     """DA3 model construction, checkpoint loading, and inference used by VidMap."""
 
@@ -128,7 +141,7 @@ class Da3Inference(torch.nn.Module, PyTorchModelHubMixin):
         # Several independent shapes/branches share upstream Python code objects.
         # Keep specialization explicit instead of hitting Dynamo's default eager fallback.
         with (
-            torch._dynamo.config.patch(recompile_limit=64, fail_on_recompile_limit_hit=True),
+            torch._dynamo.config.patch(_dynamo_recompile_limits(64)),
             autocast_ctx,
         ):
             # The upstream outer product is autocast-sensitive, even when the
