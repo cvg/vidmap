@@ -81,10 +81,65 @@ void TestFrozenLogFocalJacobian() {
   }
 }
 
+void TestRelativeLogFocalJacobian() {
+  const double target_ratio = std::log(1.2);
+  const double sigma_log = 0.05;
+  for (const int dim1 : {1, 3, 4}) {
+    for (const int dim2 : {1, 3, 4}) {
+      const int focal_count1 = dim1 == 4 ? 2 : 1;
+      const int focal_count2 = dim2 == 4 ? 2 : 1;
+      std::vector<std::size_t> idxs1;
+      for (int i = 0; i < focal_count1; ++i) idxs1.push_back(i);
+      std::vector<std::size_t> idxs2;
+      for (int i = 0; i < focal_count2; ++i) idxs2.push_back(i);
+
+      vidmap::LogRelativeFocalPriorCostFunction cost(
+          dim1, idxs1, dim2, idxs2, target_ratio, sigma_log);
+
+      std::vector<double> p1(dim1, 500.0);
+      std::vector<double> p2(dim2, 600.0);
+      std::vector<double> j1(dim1), j2(dim2);
+      const double* blocks[] = {p1.data(), p2.data()};
+      double* jacobians[] = {j1.data(), j2.data()};
+      double residual;
+      Check(cost.Evaluate(blocks, &residual, jacobians),
+            "relative focal cost evaluation failed");
+      const double expected_res =
+          ((std::log(600.0) - std::log(500.0)) - target_ratio) / sigma_log;
+      Check(std::abs(residual - expected_res) < 1e-12,
+            "relative focal residual mismatch");
+
+      // Check jacobians with finite differences
+      const double step = 1e-4;
+      for (int i = 0; i < dim1; ++i) {
+        double plus, minus;
+        p1[i] += step;
+        cost.Evaluate(blocks, &plus, nullptr);
+        p1[i] -= 2 * step;
+        cost.Evaluate(blocks, &minus, nullptr);
+        p1[i] += step;
+        Check(std::abs(j1[i] - (plus - minus) / (2 * step)) < 1e-8,
+              "relative focal p1 finite-difference mismatch");
+      }
+      for (int i = 0; i < dim2; ++i) {
+        double plus, minus;
+        p2[i] += step;
+        cost.Evaluate(blocks, &plus, nullptr);
+        p2[i] -= 2 * step;
+        cost.Evaluate(blocks, &minus, nullptr);
+        p2[i] += step;
+        Check(std::abs(j2[i] - (plus - minus) / (2 * step)) < 1e-8,
+              "relative focal p2 finite-difference mismatch");
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
   TestOptionValidation();
   TestFrozenLogFocalJacobian();
+  TestRelativeLogFocalJacobian();
   return 0;
 }

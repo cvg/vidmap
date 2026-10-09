@@ -85,4 +85,20 @@ PYBIND11_MODULE(bundle_adjustment, m) {
                   focal,
                   stddev));
         });
+  m.def("relative_focal_prior_cost",
+        [](const colmap::Camera& camera1,
+           const colmap::Camera& camera2,
+           double target_log_ratio,
+           double sigma_log_ratio) {
+          const auto indices1 = camera1.FocalLengthIdxs();
+          const auto indices2 = camera2.FocalLengthIdxs();
+          return std::shared_ptr<ceres::CostFunction>(
+              new vidmap::LogRelativeFocalPriorCostFunction(
+                  camera1.params.size(),
+                  std::vector<std::size_t>(indices1.begin(), indices1.end()),
+                  camera2.params.size(),
+                  std::vector<std::size_t>(indices2.begin(), indices2.end()),
+                  target_log_ratio,
+                  sigma_log_ratio));
+        });
 }

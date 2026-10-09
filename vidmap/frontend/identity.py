@@ -41,6 +41,7 @@ def frontend_config_identity(conf) -> dict[str, object]:
             "estimator": conf.pipeline.camera_priors.estimator,
             "inference": conf.pipeline.camera_priors.inference,
             "initialization": conf.pipeline.camera_priors.initialization,
+            "time_varying": conf.pipeline.camera_priors.time_varying,
         },
     }
 
@@ -61,6 +62,7 @@ class FrontendIdentity:
     estimator: str
     inference: str
     initialization: str
+    time_varying: bool = False
 
     @classmethod
     def from_config(
@@ -89,6 +91,7 @@ class FrontendIdentity:
             estimator=conf.pipeline.camera_priors.estimator,
             inference=conf.pipeline.camera_priors.inference,
             initialization=conf.pipeline.camera_priors.initialization,
+            time_varying=conf.pipeline.camera_priors.time_varying,
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -107,5 +110,6 @@ class FrontendIdentity:
                 "estimator": self.estimator,
                 "inference": self.inference,
                 "initialization": self.initialization,
+                "time_varying": self.time_varying,
             },
         }

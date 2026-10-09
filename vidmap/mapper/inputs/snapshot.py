@@ -46,7 +46,8 @@ FRONTEND_IDENTITY_KEYS = frozenset(
         "boundary_options",
     }
 )
-BOUNDARY_OPTION_KEYS = frozenset({"estimator", "inference", "initialization"})
+BOUNDARY_OPTION_KEYS = frozenset({"estimator", "inference", "initialization", "time_varying"})
+LEGACY_BOUNDARY_OPTION_KEYS = frozenset({"estimator", "inference", "initialization"})
 
 
 def calibration_artifact_name(estimator: str, inference: str) -> str | None:
@@ -232,10 +233,11 @@ def _validate_frontend_identity(identity: object, *, manifest_path: Path) -> Non
     options = identity["boundary_options"]
     if (
         not isinstance(options, dict)
-        or set(options) != BOUNDARY_OPTION_KEYS
+        or (set(options) != BOUNDARY_OPTION_KEYS and set(options) != LEGACY_BOUNDARY_OPTION_KEYS)
         or options["estimator"] not in {"da3", "geocalib", "none"}
         or options["inference"] not in {"per_view", "selected_batch"}
         or options["initialization"] not in {"predicted", "supplied"}
+        or not isinstance(options.get("time_varying", False), bool)
         or (options["inference"] == "selected_batch" and options["estimator"] != "geocalib")
         or (options["estimator"] == "none" and options["initialization"] != "supplied")
     ):

@@ -225,6 +225,7 @@ def create_database_from_frontend(
     database_path: Path,
     *,
     estimate_intrinsics: bool,
+    time_varying_intrinsics: bool = False,
     matches: dict[ImagePair, object] | None = None,
 ) -> dict[str, int]:
     """Build a COLMAP database from a validated frontend result."""
@@ -249,13 +250,14 @@ def create_database_from_frontend(
         if matches is None
         else tuple(sorted(matches, key=lambda pair: (str(pair[0]), str(pair[1]))))
     )
+    camera_policy = "per_image" if (time_varying_intrinsics or not estimate_intrinsics) else "shared"
     return build_colmap_database(
         database_path,
         initial_reconstruction,
         frontend_result.keyframe_sequence,
         paths.sparse_features_path,
         import_pairs,
-        camera_policy="shared" if estimate_intrinsics else "per_image",
+        camera_policy=camera_policy,
         prior_focal_length=not estimate_intrinsics,
         sparse_matches_path=paths.sparse_matches_path if matches is None else None,
         matches=matches,

@@ -34,5 +34,6 @@ std::size_t CalibrateFocalLengths(const colmap::ViewGraphCalibrationOptions&,
                                   colmap::Reconstruction&,
                                   colmap::PoseGraph&,
                                   const MappingSidecars&,
-                                  const std::vector<LogFocalPriorRecord>&);
+                                  const std::vector<LogFocalPriorRecord>&,
+                                  const std::vector<LogRelativeFocalPriorRecord>&);
 }  // namespace vidmap

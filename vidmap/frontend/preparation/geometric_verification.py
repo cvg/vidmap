@@ -115,6 +115,7 @@ class GeometricVerifier:
         replay: ReplayCache,
         repro_dir: Path | None,
         estimate_intrinsics: bool,
+        time_varying_intrinsics: bool = False,
         pre_geom_db_stop: bool = False,
     ):
         self.options = options
@@ -122,6 +123,7 @@ class GeometricVerifier:
         self.replay = replay
         self.repro_dir = repro_dir
         self.estimate_intrinsics = estimate_intrinsics
+        self.time_varying_intrinsics = time_varying_intrinsics
         self.pre_geom_db_stop = pre_geom_db_stop
 
     def verify(
@@ -147,6 +149,7 @@ class GeometricVerifier:
                 initial_reconstruction,
                 tcorr,
                 estimate_intrinsics=self.estimate_intrinsics,
+                time_varying_intrinsics=self.time_varying_intrinsics,
                 database_path=temporary_path,
                 pre_geom_db_stop=self.pre_geom_db_stop,
             )
@@ -182,6 +185,7 @@ def _verify_database(
     tcorr: Mapping[ImagePair, Any],
     *,
     estimate_intrinsics: bool,
+    time_varying_intrinsics: bool = False,
     database_path: Path,
     pre_geom_db_stop: bool,
 ) -> frozenset[ImagePair] | None:
@@ -191,6 +195,7 @@ def _verify_database(
             initial_reconstruction,
             database_path,
             estimate_intrinsics=estimate_intrinsics,
+            time_varying_intrinsics=time_varying_intrinsics,
             matches=tcorr,
         )
 
@@ -201,6 +206,7 @@ def _verify_database(
         initial_reconstruction,
         database_path,
         estimate_intrinsics=estimate_intrinsics,
+        time_varying_intrinsics=time_varying_intrinsics,
         matches=tcorr,
     )
 

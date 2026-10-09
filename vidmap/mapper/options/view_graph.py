@@ -28,6 +28,8 @@ class VGCCalibrationOptions:
     # Outer prior coefficient before multiplication by eligible pairs / images.
     focal_prior_weight: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0e-5
     normalize_weight_by_pair_count: bool = True
+    relative_focal_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0e-1
+    relative_focal_loss_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.05
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

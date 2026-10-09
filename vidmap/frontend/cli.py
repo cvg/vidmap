@@ -51,11 +51,13 @@ def main(argv=None):
 
         parser = build_parser()
         args, overrides = parse_config_args(parser, argv)
-        from vidmap.run_options import RunOptions
+        from vidmap.run_options import TIME_VARYING_INTRINSICS_OVERRIDES, RunOptions
         from vidmap.utils.logging import configure_logging
 
         run_options = RunOptions.from_namespace(args)
         configure_logging(run_options.verbosity)
+        if args.time_varying_intrinsics:
+            overrides = [*overrides, *TIME_VARYING_INTRINSICS_OVERRIDES]
         conf = config_from_args(args, overrides)
         if args.mapper_inputs and not args.cache_depth_maps:
             parser.error("--mapper-inputs requires --cache-depth-maps")

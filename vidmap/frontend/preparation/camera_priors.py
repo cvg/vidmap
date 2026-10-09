@@ -54,8 +54,8 @@ def _apply_shared_focal(camera: pycolmap.Camera, focal: float, principal_point=N
     camera.params = params
 
 
-def apply_camera_priors(*, results, shared, reconstruction):
-    """Use the shared estimate or median predicted focal for the input cameras."""
+def apply_camera_priors(*, results, shared, reconstruction, time_varying: bool = False, names=None):
+    """Use the shared estimate, time-varying filtered sequence, or median predicted focal for the input cameras."""
     if not results:
         raise ValueError("Predicted initialization requires calibration results")
     cameras = {image.camera_id: reconstruction.cameras[image.camera_id] for image in reconstruction.images.values()}
@@ -72,6 +72,28 @@ def apply_camera_priors(*, results, shared, reconstruction):
         K = np.asarray(results[0]["K"], dtype=np.float32)
         for camera in cameras.values():
             _apply_calibration(camera, K[[0, 1], [0, 1]], K[:2, 2])
+    elif time_varying:
+        if names is None or len(names) != len(results):
+            raise ValueError("Time-varying camera priors require image names matching results")
+        from vidmap.utils.camera_smoothing import smooth_temporal_focals
+
+        intrinsics = np.asarray([result["K"] for result in results], dtype=np.float32)
+        raw_focals = (intrinsics[:, 0, 0] + intrinsics[:, 1, 1]).astype(np.float64) / 2.0
+        smoothed_focals = smooth_temporal_focals(raw_focals)
+
+        name_to_camera = {img.name: reconstruction.cameras[img.camera_id] for img in reconstruction.images.values()}
+        assigned_camera_ids = set()
+        for name, focal in zip(names, smoothed_focals, strict=True):
+            cam = name_to_camera.get(name)
+            if cam is not None:
+                pp = (cam.width / 2.0, cam.height / 2.0)
+                _apply_shared_focal(cam, float(focal), pp)
+                assigned_camera_ids.add(cam.camera_id)
+
+        median_focal = float(np.median(smoothed_focals))
+        for camera in cameras.values():
+            if camera.camera_id not in assigned_camera_ids:
+                _apply_shared_focal(camera, median_focal, (camera.width / 2.0, camera.height / 2.0))
     else:
         intrinsics = np.asarray([result["K"] for result in results], dtype=np.float32)
         median_focal = float(np.median((intrinsics[:, 0, 0] + intrinsics[:, 1, 1]).astype(np.float64) / 2.0))

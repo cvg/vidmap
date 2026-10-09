@@ -459,17 +459,36 @@ class BundleAdjuster:
         )
 
         intrinsics_priors = []
+        relative_intrinsics_priors = []
         prior_options = self.options.focal_prior
         if self.optimize_intrinsics and not policy.fix_intrinsics and prior_options.enabled:
             if not self.focal_prior:
                 raise ValueError("No frozen original focal observations; cannot enable a missing prior")
+            loss_name = prior_options.annealing_loss if policy.refinement else prior_options.normal_loss
+            prior_weight = prior_options.weight_multiplier * self.point_budget_scale
             intrinsics_priors = native_focal_priors(
                 self.focal_prior,
                 camera_ids=camera_ids,
-                loss=prior_options.annealing_loss if policy.refinement else prior_options.normal_loss,
+                loss=loss_name,
                 scale=prior_options.robust_scale,
-                weight=prior_options.weight_multiplier * self.point_budget_scale,
+                weight=prior_weight,
             )
+            if len(camera_ids) > 1 and len(optimized_image_ids) > 1:
+                from vidmap.mapper.focal_prior import native_relative_focal_priors
+
+                consec_cam_pairs = []
+                for i in range(len(optimized_image_ids) - 1):
+                    c1 = self.reconstruction.images[optimized_image_ids[i]].camera_id
+                    c2 = self.reconstruction.images[optimized_image_ids[i + 1]].camera_id
+                    if c1 != c2:
+                        consec_cam_pairs.append((c1, c2))
+                if consec_cam_pairs:
+                    relative_intrinsics_priors = native_relative_focal_priors(
+                        consec_cam_pairs,
+                        loss=loss_name,
+                        scale=prior_options.robust_scale,
+                        weight=prior_weight,
+                    )
 
         depth_batches = []
         depth_scales = []
@@ -557,6 +576,7 @@ class BundleAdjuster:
             depth_scales,
             intrinsics_priors,
             self.solve_state,
+            relative_intrinsics_priors=relative_intrinsics_priors,
             playback_callback=playback_sink,
             playback_options=playback_options,
         )

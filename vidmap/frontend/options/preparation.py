@@ -15,6 +15,7 @@ class CameraPriorEstimationOptions:
     inference: Literal["per_view", "selected_batch"] = "selected_batch"
     initialization: Literal["predicted", "supplied"] = "predicted"
     max_images: int = 30
+    time_varying: bool = False
 
     @model_validator(mode="after")
     def validate_applicable_options(self):
@@ -22,6 +23,10 @@ class CameraPriorEstimationOptions:
             raise ValueError("Selected-batch inference requires GeoCalib")
         if self.estimator == "none" and self.initialization != "supplied":
             raise ValueError("Predicted initialization requires an estimator")
+        if self.time_varying and self.inference != "per_view":
+            raise ValueError("Time-varying camera priors require per_view inference")
+        if self.time_varying and self.estimator == "none":
+            raise ValueError("Time-varying camera priors require an estimator")
         return self
 
 

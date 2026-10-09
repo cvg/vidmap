@@ -37,7 +37,8 @@ std::size_t CalibrateFocalLengths(
     colmap::Reconstruction& reconstruction,
     colmap::PoseGraph& graph,
     const MappingSidecars& sidecars,
-    const std::vector<LogFocalPriorRecord>& focal_priors) {
+    const std::vector<LogFocalPriorRecord>& focal_priors,
+    const std::vector<LogRelativeFocalPriorRecord>& relative_focal_priors) {
   ValidateCalibrationOptions(options);
   sidecars.Validate(reconstruction);
   std::unordered_set<CameraId> prior_camera_ids;
@@ -46,6 +47,11 @@ std::size_t CalibrateFocalLengths(
     if (!prior_camera_ids.insert(prior.camera_id).second) {
       throw std::invalid_argument("VGC focal priors require unique cameras");
     }
+  }
+  for (const auto& prior : relative_focal_priors) {
+    prior.Validate();
+    reconstruction.Camera(prior.camera_id1);
+    reconstruction.Camera(prior.camera_id2);
   }
   struct FocalLengthCalibInput {
     PairId pair_id;
@@ -116,6 +122,20 @@ std::size_t CalibrateFocalLengths(
           prior.loss.get(),
           focal);
     }
+  }
+
+  // Relative log-focal priors between (consecutive) cameras of time-varying intrinsics.
+  for (const auto& prior : relative_focal_priors) {
+    problem.AddResidualBlock(
+        new LogRelativeFocalPriorCostFunction(1,
+                                              {0},
+                                              1,
+                                              {0},
+                                              prior.target_log_ratio,
+                                              prior.sigma_log_ratio),
+        prior.loss.get(),
+        &focal_lengths.at(prior.camera_id1),
+        &focal_lengths.at(prior.camera_id2));
   }
 
   std::size_t num_cameras = 0;

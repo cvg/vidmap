@@ -71,6 +71,7 @@ def run_local_frontend(
         imnames=imnames,
         intrinsics_path=intrinsics_path,
         estimate_intrinsics=conf.pipeline.camera_priors.initialization == "predicted",
+        time_varying_intrinsics=conf.pipeline.camera_priors.time_varying,
     )
     reference_image_ids = tuple(scene_parser.rec.images)
     identity = FrontendIdentity.from_config(

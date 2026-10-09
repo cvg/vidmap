@@ -61,6 +61,7 @@ def reconstruct(
         imnames=imnames,
         intrinsics_path=intrinsics_path,
         estimate_intrinsics=estimate_intrinsics,
+        time_varying_intrinsics=frontend_conf.pipeline.camera_priors.time_varying,
     )
     output_dir = workspace if output_dir is None else Path(output_dir).expanduser()
     run_options = RunOptions() if run_options is None else run_options

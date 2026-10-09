@@ -91,6 +91,7 @@ target_include_directories(
   vidmap_native_core
   PRIVATE
     src
+    ${VIDMAP_COLMAP_INCLUDE_DIRS}
 )
 target_link_libraries(vidmap_native_core PRIVATE vidmap_native_algorithms)
 target_compile_definitions(
