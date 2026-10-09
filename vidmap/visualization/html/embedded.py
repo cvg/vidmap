@@ -141,8 +141,12 @@ def _compact_loop_closure_database(
             temporary.unlink(missing_ok=True)
 
 
-def _image_previews(run: Path, images_dir: Path | None) -> dict[str, dict[str, object]]:
-    reconstruction = run / "rec"
+def _image_previews(
+    run: Path,
+    images_dir: Path | None,
+    reconstruction_dir: Path | None = None,
+) -> dict[str, dict[str, object]]:
+    reconstruction = reconstruction_dir if reconstruction_dir is not None else run / "rec"
     if images_dir is None:
         from vidmap.reconstruction import local_run_image_dir
 
@@ -167,10 +171,17 @@ def _image_previews(run: Path, images_dir: Path | None) -> dict[str, dict[str, o
     }
 
 
-def _embedded_run_payload(run_dir: str | Path, *, images_dir: str | Path | None = None) -> dict[str, object]:
+def _embedded_run_payload(
+    run_dir: str | Path,
+    *,
+    reconstruction_dir: str | Path | None = None,
+    images_dir: str | Path | None = None,
+) -> dict[str, object]:
     """Package one normalized run for the browser's ordinary load path."""
     run = Path(run_dir).expanduser().resolve(strict=True)
-    reconstruction = run / "rec"
+    reconstruction = (
+        Path(reconstruction_dir).expanduser().resolve(strict=True) if reconstruction_dir is not None else run / "rec"
+    )
     mapper_inputs = run / "mapper_inputs"
     source_files = {
         f"rec/{name}": _required_file(reconstruction / name, f"rec/{name}")
@@ -197,6 +208,7 @@ def _embedded_run_payload(run_dir: str | Path, *, images_dir: str | Path | None 
         "imagePreviews": _image_previews(
             run,
             None if images_dir is None else Path(images_dir),
+            reconstruction_dir=reconstruction,
         ),
     }
 
@@ -205,8 +217,59 @@ def write_embedded_viewer_html(
     run_dir: str | Path,
     output: str | Path,
     *,
+    reconstruction_dir: str | Path | None = None,
     images_dir: str | Path | None = None,
 ) -> Path:
-    """Write an embedded viewer that automatically loads one run."""
-    payload = _embedded_run_payload(run_dir, images_dir=images_dir)
+    """Write an embedded viewer that automatically loads one run or sub-reconstruction."""
+    payload = _embedded_run_payload(
+        run_dir,
+        reconstruction_dir=reconstruction_dir,
+        images_dir=images_dir,
+    )
     return write_html(output, scene.render_viewer_html(embedded_run=payload))
+
+
+def write_all_embedded_viewers(
+    run_dir: str | Path,
+    output_dir: str | Path | None = None,
+    *,
+    images_dir: str | Path | None = None,
+    base_name: str | None = None,
+) -> list[Path]:
+    """Write embedded viewer HTMLs for all reconstructions or sub-reconstructions in a run."""
+    run = Path(run_dir).expanduser().resolve(strict=True)
+    out_dir = Path(output_dir).expanduser().resolve() if output_dir is not None else run
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rec_dir = run / "rec"
+    sub_dirs = (
+        sorted([d for d in rec_dir.iterdir() if d.is_dir() and (d / "images.bin").is_file()])
+        if rec_dir.is_dir()
+        else []
+    )
+
+    written = []
+    if sub_dirs:
+        for sub_dir in sub_dirs:
+            stem = base_name if base_name is not None else "vidmap-viewer-embedded"
+            sep = "-" if stem == "vidmap-viewer-embedded" else "_"
+            out_file = out_dir / f"{stem}{sep}sub{sub_dir.name}.html"
+            write_embedded_viewer_html(
+                run,
+                out_file,
+                reconstruction_dir=sub_dir,
+                images_dir=images_dir,
+            )
+            written.append(out_file)
+    else:
+        stem = base_name if base_name is not None else "vidmap-viewer-embedded"
+        out_file = out_dir / f"{stem}.html"
+        write_embedded_viewer_html(
+            run,
+            out_file,
+            reconstruction_dir=rec_dir,
+            images_dir=images_dir,
+        )
+        written.append(out_file)
+
+    return written

@@ -64,7 +64,7 @@ def reconstruct(
     )
     output_dir = workspace if output_dir is None else Path(output_dir).expanduser()
     run_options = RunOptions() if run_options is None else run_options
-    return run_mapping(
+    reconstruction = run_mapping(
         mapping_conf,
         frontend_conf=frontend_conf,
         mapper_inputs=mapper_inputs,
@@ -74,6 +74,17 @@ def reconstruct(
         scene_name=scene_parser.scene,
         overwrite_outputs=overwrite_outputs,
     )
+
+    if run_options.split_cuts:
+        from vidmap.mapper.sub_reconstruction import decompose_reconstruction
+
+        return decompose_reconstruction(
+            reconstruction,
+            min_shared_points=run_options.min_covisibility_points,
+            min_model_size=run_options.min_model_size,
+        )
+
+    return reconstruction
 
 
 def resolve_mapper_inputs(frontend_conf, mapper_inputs: str | Path | MapperInputs) -> MapperInputs:

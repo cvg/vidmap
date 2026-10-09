@@ -209,7 +209,7 @@ __SQLITE_SCRIPT__
       <div class="control-group-content">
     <div class="control-row">
       <label class="toggle"><input id="points-toggle" type="checkbox" checked> points</label>
-      <label class="setting">size <input id="points-size" type="number" min="0.01" max="20" step="0.01" value="0.7"></label>
+      <label class="setting">size <input id="points-size" type="number" min="0.01" max="20" step="0.01" value="3"></label>
       <label class="setting">mode
         <select id="points-color-mode">
           <option value="solid">solid</option>
@@ -220,7 +220,7 @@ __SQLITE_SCRIPT__
     </div>
     <div class="control-row">
       <label class="toggle"><input id="estimated-frusta-toggle" type="checkbox" checked> estimated cameras</label>
-      <label class="setting">size <input id="estimated-frusta-size" type="number" min="0.01" max="20" step="0.05" value="0.3"></label>
+      <label class="setting">size <input id="estimated-frusta-size" type="number" min="0.01" max="20" step="0.05" value="2"></label>
       <label class="setting">line <input id="estimated-frusta-width" type="number" min="0.5" max="20" step="0.5" value="1"></label>
       <label class="setting">color <input id="estimated-frusta-color" type="color" value="#d62728"></label>
     </div>
