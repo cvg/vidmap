@@ -132,7 +132,7 @@ std::map<ObservationKind, ObservationSelection> PrepareObservations(
                       bool loop,
                       bool early) {
       const auto& image = reconstruction.Image(element.image_id);
-      selected[{loop, image.CameraPtr()->has_prior_focal_length, early}]
+      selected[{loop, image.CameraPtr()->HasPriorFocalLength(), early}]
           .observations.push_back({point_id, element, anchor, loop, early});
     };
     std::unordered_set<colmap::image_t> regular_images;

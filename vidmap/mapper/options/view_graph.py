@@ -1,7 +1,7 @@
 """Options for view-graph filtering, calibration, and relative orientation."""
 
 from dataclasses import field as dc_field
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -57,14 +57,15 @@ class MDRPOptions:
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class RAOptions:
+    max_iterations: Annotated[int, Field(gt=0)] = 100
     filter_risky_loop_closure_pairs: bool = False
     filter_unregistered_images: bool = True
-    # Disable native post-RA edge filtering to avoid silent de-registration.
-    max_rotation_error_deg: float = 0.0
-    video_tracking_huber_scale: float = 0.1
-    video_lc_cauchy_scale: float = 0.05
-    # One thread keeps the solve byte-identical; None means one, -1 means every core.
-    num_threads: Optional[int] = None
+    # Disable post-RA edge filtering to retain the current pose mask.
+    max_rotation_error_deg: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
+    video_tracking_huber_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.1
+    video_lc_cauchy_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.05
+    # None means one thread; -1 means every core.
+    num_threads: Annotated[int, Field(gt=0)] | Literal[-1] | None = None
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

@@ -5,7 +5,6 @@
 #include "stages/intrinsics_prior.h"
 #include "vidmap_native/tracks.h"
 #include "vidmap_native/types.h"
-#include "vidmap_native/video_rotation_averaging.h"
 #include "vidmap_native/view_graph.h"
 
 namespace {
@@ -36,11 +35,6 @@ void TestOptionValidation() {
   inlier_options.min_angle_from_epipole_deg = 181.0;
   CheckInvalidArgument([&] { inlier_options.Validate(); },
                        "invalid epipole angle was accepted");
-
-  vidmap::VideoRotationAveragingOptions rotation_options;
-  rotation_options.num_threads = 0;
-  CheckInvalidArgument([&] { rotation_options.Validate(); },
-                       "zero rotation-averaging threads were accepted");
 }
 
 void TestFrozenLogFocalJacobian() {

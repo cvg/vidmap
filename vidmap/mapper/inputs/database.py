@@ -55,7 +55,7 @@ def load_finalized_database(
                 image_id=image_id,
                 keypoints=features,
             )
-            rec.add_image_with_trivial_frame(gimg, pycolmap.Rigid3d())
+            rec.add_image_with_trivial_frame(gimg, pycolmap.Rigid3d(translation=np.full(3, np.nan)))
             sidecars.add_image(image_id, native.ImageData())
         pair_ids, matches = database.read_all_matches()
         total_pairs = len(pair_ids)
