@@ -123,7 +123,7 @@ std::size_t CalibrateFocalLengths(
     double* focal = &focal_lengths.at(camera_id);
     if (!problem.HasParameterBlock(focal)) continue;
     problem.SetParameterLowerBound(focal, 0, kFocalLengthLowerBound);
-    if (camera.has_prior_focal_length) {
+    if (camera.HasPriorFocalLength()) {
       problem.SetParameterBlockConstant(focal);
     } else {
       ++num_cameras;
@@ -167,7 +167,7 @@ std::size_t CalibrateFocalLengths(
   }
   for (const auto& [camera_id, focal] : focal_lengths) {
     auto& camera = reconstruction.Camera(camera_id);
-    if (!camera.has_prior_focal_length) camera.SetFocalLength(focal);
+    if (!camera.HasPriorFocalLength()) camera.SetFocalLength(focal);
   }
 
   const double max_error_sq =

@@ -46,7 +46,7 @@ git clone --recursive https://github.com/cvg/vidmap.git && cd vidmap
 
 Build and install [COLMAP](https://github.com/colmap/colmap) and its PyCOLMAP bindings
 [from source](https://colmap.github.io/install.html#build-from-source).
-Last tested with [ea063e6](https://github.com/colmap/colmap/commit/ea063e6874583429143dd5c53d86c3e68c895e8f).
+Last tested with [9e653da](https://github.com/colmap/colmap/commit/9e653da3baaaada926bda6c5286568413fb3e675).
 For GPU mapper acceleration, build them against
 [Ceres 2.3 or newer](https://ceres-solver.readthedocs.io/latest/installation.html)
 with CUDA and cuDSS instead ([see how to enable](#gpu-acceleration)).

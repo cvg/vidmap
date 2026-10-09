@@ -1,6 +1,11 @@
 #include "vidmap_native/view_graph.h"
 
+#include "colmap/estimators/rotation_averaging.h"
+
 #include "bindings.h"
+
+#include <vector>
+
 #include <pybind11/stl.h>
 
 namespace py = pybind11;
@@ -20,6 +25,8 @@ void BindViewGraph(py::module_& m) {
                      &InlierThresholdOptions::min_angle_from_epipole_deg)
       .def("validate", &InlierThresholdOptions::Validate);
 
+  m.def("filter_edges_by_relative_rotation",
+        &colmap::FilterEdgesByRelativeRotation);
   m.def("prepare_image_bearings", &PrepareImageBearings);
   m.def("reclassify_calibrated_planar_pairs", &ReclassifyCalibratedPlanarPairs);
   m.def("score_image_pair_inliers", &ImagePairsInlierCount);

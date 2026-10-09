@@ -34,7 +34,7 @@ void ReclassifyCalibratedPlanarPairs(
     const auto& image2 = reconstruction.Image(image_id2);
     const colmap::Camera& camera1 = *image1.CameraPtr();
     const colmap::Camera& camera2 = *image2.CameraPtr();
-    if (!camera1.has_prior_focal_length || !camera2.has_prior_focal_length) {
+    if (!camera1.HasPriorFocalLength() || !camera2.HasPriorFocalLength()) {
       continue;
     }
 

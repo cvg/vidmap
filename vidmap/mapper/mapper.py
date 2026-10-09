@@ -197,7 +197,7 @@ class Mapper:
         rotation_averager = RotationAverager(
             solve_state=solve_state,
             options=self.conf.ra,
-            consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
+            sequence_id_to_index=mapping_stage_inputs.sequence_id_to_index,
             filtered_consecutive_pair_ids=relative_pose.filtered_consecutive_pairs,
             replay=replay,
         )

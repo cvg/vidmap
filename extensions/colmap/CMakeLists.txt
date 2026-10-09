@@ -17,7 +17,7 @@ find_package(pybind11 3.1.0 CONFIG REQUIRED)
 set(VIDMAP_COLMAP_VERSION "4.3.0")
 set(
   VIDMAP_COLMAP_REVISION
-  "ea063e6874583429143dd5c53d86c3e68c895e8f"
+  "9e653da3baaaada926bda6c5286568413fb3e675"
   CACHE STRING
   "Upstream COLMAP revision used by vidmap_native"
 )
@@ -44,7 +44,6 @@ set(
     src/stages/view_graph_manipulation.cc
     src/stages/view_graph_calibration.cc
     src/stages/track_establishment.cc
-    src/stages/video_rotation_averaging.cc
 )
 
 add_library(vidmap_native_algorithms STATIC ${VIDMAP_NATIVE_ALGORITHM_SOURCES})
@@ -73,7 +72,6 @@ set(
     src/bindings/mapping_sidecars.cc
     src/bindings/view_graph.cc
     src/bindings/tracks.cc
-    src/bindings/video_rotation_averaging.cc
     src/bindings/global_positioning.cc
 )
 
