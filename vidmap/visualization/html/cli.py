@@ -42,11 +42,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.run_dir is None and args.output is None:
         parser.error("--output is required unless --run-dir is provided")
     if args.run_dir is not None:
-        from .embedded import write_embedded_viewer_html
+        from .embedded import write_all_embedded_viewers
 
-        output = args.run_dir / "vidmap-viewer-embedded.html" if args.output is None else args.output
-        written = write_embedded_viewer_html(args.run_dir, output, images_dir=args.images)
-        print(written.resolve())
+        out_dir = args.output.parent if args.output is not None else args.run_dir
+        base_name = args.output.stem if args.output is not None else None
+        written = write_all_embedded_viewers(
+            args.run_dir,
+            out_dir,
+            images_dir=args.images,
+            base_name=base_name,
+        )
+        for path in written:
+            print(path.resolve())
         return 0
     written = write_viewer_html(args.output)
     print(written.resolve())

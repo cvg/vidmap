@@ -166,7 +166,7 @@ __RECONSTRUCTION_SCRIPT__
     let covarianceIndexActive = false;
     let covarianceDrawCount = pointPositions.length / 3;
     const pointMaterial = new THREE.PointsMaterial({
-      color: 0xffffff, size: 0.7, sizeAttenuation: false, vertexColors: true
+      color: 0xffffff, size: 3, sizeAttenuation: false, vertexColors: true
     });
     pointMaterial.onBeforeCompile = shader => {
       shader.uniforms.vidmapKeyframeLimit = keyframeLimit;

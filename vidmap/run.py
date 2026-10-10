@@ -33,6 +33,11 @@ def build_parser() -> ArgumentParser:
         help="Retain full depth maps for depth-lift flythroughs.",
     )
     parser.add_argument("-o", "--overwrite", action="store_true")
+    parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Generate embedded HTML viewer(s) upon completion.",
+    )
     from vidmap.run_options import add_run_arguments
 
     add_run_arguments(parser, mapping=True)
@@ -94,7 +99,7 @@ def main(argv=None):
     from vidmap.reconstruction import reconstruct
 
     output_dir = Path(args.output).expanduser()
-    reconstruction = reconstruct(
+    reconstruction_or_models = reconstruct(
         mapping_conf,
         frontend_conf,
         args.input_data,
@@ -106,10 +111,18 @@ def main(argv=None):
         overwrite_outputs=args.overwrite,
         output_dir=output_dir,
     )
-    reconstruction_dir = output_dir / "rec"
-    reconstruction_dir.mkdir(parents=True, exist_ok=True)
-    reconstruction.write(reconstruction_dir)
-    logger.info("Reconstruction written to %s", reconstruction_dir)
+    from vidmap.mapper.sub_reconstruction import export_sub_reconstructions
+
+    models = reconstruction_or_models if isinstance(reconstruction_or_models, list) else [reconstruction_or_models]
+    written_recs = export_sub_reconstructions(models, output_dir)
+    logger.info("Reconstruction written to %s", [str(p) for p in written_recs])
+
+    if getattr(args, "html", False):
+        from vidmap.visualization.html.embedded import write_all_embedded_viewers
+
+        written_viewers = write_all_embedded_viewers(output_dir)
+        for viewer_path in written_viewers:
+            logger.info("Embedded viewer written to %s", viewer_path)
     return 0
 
 
