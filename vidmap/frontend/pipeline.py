@@ -176,6 +176,7 @@ class Frontend:
             self.scene_parser, reference_image_names=list(self.reference_image_names)
         )
         if self.options.camera_priors.initialization == "predicted":
+            time_varying = self.options.camera_priors.time_varying
             shared = self.options.camera_priors.inference == "selected_batch"
             if self.options.camera_priors.estimator == "da3":
                 path = tracking.paths.depth_maps_path
@@ -184,7 +185,11 @@ class Frontend:
             names = ("batch_calibration",) if shared else tracking.keyframe_sequence
             with h5py.File(path, "r") as hfile:
                 apply_camera_priors(
-                    results=[hfile[name] for name in names], shared=shared, reconstruction=reconstruction
+                    results=[hfile[name] for name in names],
+                    shared=shared,
+                    reconstruction=reconstruction,
+                    time_varying=time_varying,
+                    names=names if not shared else None,
                 )
 
         correspondence_filter = CorrespondenceFilter(
@@ -211,6 +216,7 @@ class Frontend:
             replay=self.replay,
             repro_dir=self.repro_dir,
             estimate_intrinsics=self.estimate_intrinsics,
+            time_varying_intrinsics=self.options.camera_priors.time_varying,
             pre_geom_db_stop=pre_geom_db_stop,
         )
         verification = geometric_verifier.verify(tracking, reconstruction, filtered.tcorr)

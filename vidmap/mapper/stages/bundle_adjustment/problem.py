@@ -48,6 +48,7 @@ class BundleAdjustmentDiagnostics(SolverDiagnostics):
     num_reprojection_residuals: int = 0
     num_depth_residuals: int = 0
     num_intrinsics_prior_residuals: int = 0
+    num_relative_intrinsics_prior_residuals: int = 0
     num_scale_prior_residuals: int = 0
 
 
@@ -66,6 +67,7 @@ def run_bundle_adjustment(
     intrinsics_priors,
     state,
     *,
+    relative_intrinsics_priors=(),
     playback_callback=None,
     playback_options=None,
 ):
@@ -100,6 +102,20 @@ def run_bundle_adjustment(
         for focal, stddev in prior.observations:
             problem.add_residual_block(ba_costs.focal_prior_cost(camera, focal, stddev), prior.loss, [params])
             diagnostics.num_intrinsics_prior_residuals += 1
+
+    # Relative log-focal priors between consecutive cameras (time-varying intrinsics).
+    for prior in relative_intrinsics_priors:
+        prior.validate()
+        camera1, camera2 = reconstruction.camera(prior.camera_id1), reconstruction.camera(prior.camera_id2)
+        params1, params2 = camera1.params, camera2.params
+        if not (problem.has_parameter_block(params1) and problem.has_parameter_block(params2)):
+            continue
+        problem.add_residual_block(
+            ba_costs.relative_focal_prior_cost(camera1, camera2, prior.target_log_ratio, prior.sigma_log_ratio),
+            prior.loss,
+            [params1, params2],
+        )
+        diagnostics.num_relative_intrinsics_prior_residuals += 1
 
     scale_records = {record.image_id: record for record in depth_scales}
     scales = {image_id: np.array([record.log_scale], dtype=float) for image_id, record in scale_records.items()}

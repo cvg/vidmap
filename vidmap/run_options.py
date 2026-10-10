@@ -5,6 +5,9 @@ from __future__ import annotations
 from argparse import Namespace
 from dataclasses import dataclass
 
+# Frontend config overrides implied by --time-varying-intrinsics (one camera per frame needs per-view priors).
+TIME_VARYING_INTRINSICS_OVERRIDES = ("camera_priors.time_varying=true", "camera_priors.inference=per_view")
+
 
 @dataclass(frozen=True)
 class RunOptions:
@@ -85,6 +88,11 @@ def add_run_arguments(parser, *, mapping: bool, profiling: bool = False) -> None
         default="auto",
         choices=["auto", "cpu", "gpu", "cuda", "mps"],
         help="Compute device for neural networks (default: auto; choices: auto, cpu, gpu, cuda, mps).",
+    )
+    parser.add_argument(
+        "--time-varying-intrinsics",
+        action="store_true",
+        help="Model and estimate time-varying camera intrinsics across frames.",
     )
     parser.set_defaults(
         save_playback_trace=False,

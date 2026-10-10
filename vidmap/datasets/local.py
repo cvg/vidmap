@@ -132,6 +132,7 @@ class LocalImageParser(PreparedSceneParser):
         imnames: Sequence[str] | None = None,
         intrinsics_path: str | Path | None = None,
         estimate_intrinsics: bool = False,
+        time_varying_intrinsics: bool = False,
     ) -> None:
         self.rgb_dir = Path(image_dir).expanduser()
         if not self.rgb_dir.is_dir():
@@ -141,7 +142,13 @@ class LocalImageParser(PreparedSceneParser):
         if estimate_intrinsics:
             if intrinsics_path is not None:
                 raise ValueError("intrinsics_path cannot be combined with estimate_intrinsics=True")
-            intrinsics: Mapping = {1: {"params": [1000.0, 1000.0, 1000.0, 1000.0], "images": "all"}}
+            if time_varying_intrinsics:
+                intrinsics: Mapping = {
+                    i: {"params": [1000.0, 1000.0, 1000.0, 1000.0], "images": [name]}
+                    for i, name in enumerate(self.imnames, start=1)
+                }
+            else:
+                intrinsics: Mapping = {1: {"params": [1000.0, 1000.0, 1000.0, 1000.0], "images": "all"}}
         else:
             if intrinsics_path is None:
                 raise ValueError("intrinsics_path is required when estimate_intrinsics=False")

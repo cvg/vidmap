@@ -54,6 +54,11 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error).replace("Pipeline config", "End-to-end config"))
 
+    if args.time_varying_intrinsics:
+        from vidmap.run_options import TIME_VARYING_INTRINSICS_OVERRIDES
+
+        frontend_overrides = [*frontend_overrides, *TIME_VARYING_INTRINSICS_OVERRIDES]
+
     from vidmap.configuration.build import build_frontend_config, build_mapping_config
     from vidmap.configuration.names import FRONTEND_CONFIG_DIR, MAPPING_CONFIG_DIR, resolve_config_path
 

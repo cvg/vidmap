@@ -32,5 +32,15 @@ void BindRecords(py::module_& m) {
       .def_readwrite("observations", &LogFocalPriorRecord::observations)
       .def_readwrite("loss", &LogFocalPriorRecord::loss)
       .def("validate", &LogFocalPriorRecord::Validate);
+  py::class_<LogRelativeFocalPriorRecord>(m, "LogRelativeFocalPriorRecord")
+      .def(py::init<>())
+      .def_readwrite("camera_id1", &LogRelativeFocalPriorRecord::camera_id1)
+      .def_readwrite("camera_id2", &LogRelativeFocalPriorRecord::camera_id2)
+      .def_readwrite("target_log_ratio",
+                     &LogRelativeFocalPriorRecord::target_log_ratio)
+      .def_readwrite("sigma_log_ratio",
+                     &LogRelativeFocalPriorRecord::sigma_log_ratio)
+      .def_readwrite("loss", &LogRelativeFocalPriorRecord::loss)
+      .def("validate", &LogRelativeFocalPriorRecord::Validate);
 }
 }  // namespace vidmap

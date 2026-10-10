@@ -38,6 +38,7 @@ void BindViewGraph(py::module_& m) {
         py::arg("reconstruction"),
         py::arg("pose_graph"),
         py::arg("sidecars"),
-        py::arg("focal_priors") = std::vector<LogFocalPriorRecord>{});
+        py::arg("focal_priors") = std::vector<LogFocalPriorRecord>{},
+        py::arg("relative_focal_priors") = std::vector<LogRelativeFocalPriorRecord>{});
 }
 }  // namespace vidmap

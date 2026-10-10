@@ -91,12 +91,31 @@ class ViewGraphCalibrator:
                     loss="cauchy",
                     weight=weight,
                 )
+            relative_focal_priors = []
+            rel_weight = self.options.relative_focal_weight
+            if len(cameras) > 1 and self.consecutive_pair_ids and rel_weight > 0:
+                from vidmap.mapper.focal_prior import native_relative_focal_priors
+
+                consec_cam_pairs = []
+                for pid in self.consecutive_pair_ids:
+                    image_id1, image_id2 = pycolmap.pair_id_to_image_pair(pid)
+                    cid1 = state.reconstruction.images[image_id1].camera_id
+                    cid2 = state.reconstruction.images[image_id2].camera_id
+                    if cid1 != cid2:
+                        consec_cam_pairs.append((cid1, cid2))
+                relative_focal_priors = native_relative_focal_priors(
+                    consec_cam_pairs,
+                    loss="cauchy",
+                    scale=self.options.relative_focal_loss_scale,
+                    weight=rel_weight,
+                )
             invalid_count = native.calibrate_focal_lengths(
                 vgc_options,
                 state.reconstruction,
                 state.pose_graph,
                 state.sidecars,
                 focal_priors,
+                relative_focal_priors,
             )
             logger.info(
                 "VGC: invalidated %d / %d pairs (residual^2 > %.4f)",

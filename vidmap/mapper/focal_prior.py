@@ -19,6 +19,33 @@ def native_focal_priors(prior, *, camera_ids, loss, scale=1.0, weight=1.0):
     return records
 
 
+def native_relative_focal_priors(
+    consecutive_camera_pairs: list[tuple[int, int]],
+    *,
+    loss: str = "cauchy",
+    scale: float = 0.05,
+    weight: float = 1.0,
+):
+    import pycolmap
+
+    from vidmap.mapper.native.extension import native
+
+    records = []
+    seen = set()
+    for cam_id1, cam_id2 in consecutive_camera_pairs:
+        if cam_id1 == cam_id2 or (cam_id1, cam_id2) in seen:
+            continue
+        seen.add((cam_id1, cam_id2))
+        record = native.LogRelativeFocalPriorRecord()
+        record.camera_id1 = cam_id1
+        record.camera_id2 = cam_id2
+        record.target_log_ratio = 0.0
+        record.sigma_log_ratio = 1.0
+        record.loss = pycolmap.create_ceres_loss_function(pycolmap.LossFunctionType(loss.upper()), scale, weight)
+        records.append(record)
+    return records
+
+
 def load_focal_prior(path, state, *, log_focal_stddev=None, shared=False):
     images = state.reconstruction.images
     cameras = state.reconstruction.cameras

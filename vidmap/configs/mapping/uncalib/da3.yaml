@@ -5,15 +5,15 @@ mapper:
   ba:
     focal_prior:
       enabled: true
-      # 20x VGC's base weight; BA stays fixed, while VGC scales by
+      # 10x VGC's base weight; BA stays fixed, while VGC scales by
       # eligible pairs / original predictions.
-      weight_multiplier: 2.0e-4
+      weight_multiplier: 0.01
       robust_scale: 1.0  # Robust-loss scale in whitened residual units.
       normal_loss: huber
       annealing_loss: cauchy
   vgc:
     calibration:
-      focal_prior_weight: 1.0e-5
+      focal_prior_weight: 1.0e-3
       normalize_weight_by_pair_count: true
     filter:
       enabled: false

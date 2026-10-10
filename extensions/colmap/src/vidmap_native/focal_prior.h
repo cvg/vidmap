@@ -22,4 +22,22 @@ struct LogFocalPriorRecord {
   }
 };
 
+// Pairwise relative focal constraint between two cameras:
+// residuals[0] = ((log(f2) - log(f1)) - target_log_ratio) * (1 / sigma_log_ratio).
+struct LogRelativeFocalPriorRecord {
+  CameraId camera_id1 = 0;
+  CameraId camera_id2 = 0;
+  double target_log_ratio = 0.0;
+  double sigma_log_ratio = 1.0;
+  std::shared_ptr<ceres::LossFunction> loss;
+
+  void Validate() const {
+    if (camera_id1 == camera_id2 || sigma_log_ratio <= 0.0 ||
+        !std::isfinite(sigma_log_ratio) || !std::isfinite(target_log_ratio)) {
+      throw std::invalid_argument("invalid log-relative-focal prior");
+    }
+  }
+};
+
 }  // namespace vidmap
+
