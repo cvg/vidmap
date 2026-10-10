@@ -39,6 +39,7 @@ class GlobalPositioningDiagnostics(SolverDiagnostics):
     num_temporal_acceleration_residuals: int = 0
     num_regular_observations_used: int = 0
     num_loop_closure_observations_used: int = 0
+    num_location_observations_used: int = 0
     num_bata_scales: int = 0
     num_depth_map_scales: int = 0
     num_camera_centers: int = 0
@@ -110,6 +111,8 @@ def run_global_positioning(
     playback_options=None,
     playback_callback=None,
     capture_state=False,
+    location_priors=None,
+    scale_prior_stddev=None,
 ):
     """Prepare, extend and solve one GP pass on the caller's working reconstruction."""
     common = options.common
@@ -226,7 +229,13 @@ def run_global_positioning(
         for selection, loss in zip(selections[1:], geometry_losses[1:])
         if len(selection)
     ]
-    if not options.common.use_metric_depth_constraint and gp_options.optimize_scales:
+    # Bearing constraints to absolute location priors, which also fix the gauge.
+    _location_storage, num_location = (
+        location_priors.append_gp_observations(problem, reconstruction, centers, stage="gp2" if second_pass else "gp1")
+        if location_priors is not None
+        else ([], 0)
+    )
+    if not options.common.use_metric_depth_constraint and gp_options.optimize_scales and not num_location:
         gp_costs.fix_first_observation_scale(problem, selections)
     regular, loop, num_points, has_support = gp_costs.observation_counts(selections)
     if warmup_rounds and not has_support:
@@ -234,6 +243,8 @@ def run_global_positioning(
     diagnostics.num_regular_observations_used = regular
     diagnostics.num_loop_closure_observations_used = loop
     diagnostics.num_bata_residuals = diagnostics.num_bata_scales = regular + loop
+    diagnostics.num_location_observations_used = num_location
+    diagnostics.num_bata_residuals += num_location
     if capture_state:
         result.initial_bata_scales = _scale_values(selections)
 
@@ -275,7 +286,7 @@ def run_global_positioning(
         prior_loss = _loss(LossConfig(name=pass_options.scale_reg_loss_name, weight=pass_options.scale_reg_weight))
         prior_cost = pyceres.factors.NormalPrior(
             np.array([0.0 if common.use_log_scale_for_depth_map_scales else 1.0]),
-            np.array([[pass_options.scale_prior_stddev**2]]),
+            np.array([[(pass_options.scale_prior_stddev if scale_prior_stddev is None else scale_prior_stddev) ** 2]]),
         )
         for image_id, count in counts.items():
             scale = depth_scales[image_id]

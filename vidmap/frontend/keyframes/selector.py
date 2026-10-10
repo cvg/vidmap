@@ -148,7 +148,9 @@ class KeyframeSelector:
     def _select_keyframe(self, is_gt_frame):
         if is_gt_frame:
             return self.pair_source_idx
-        if self.last_good_frame_idx is not None and self.last_good_frame_idx > self.seg_start_frame:
+        if self.last_good_frame_idx is not None and self.last_good_frame_idx > max(
+            self.seg_start_frame, self.keyframe_ids[-1]
+        ):
             return self.last_good_frame_idx
         candidate = self.pair_source_idx
         if candidate == self.keyframe_ids[-1]:
@@ -196,7 +198,11 @@ class KeyframeSelector:
             self.conf.max_normalized_keypoint_drift,
         )
 
-        is_gt_frame = self.pair_source_idx in self.gt_frame_indices and self.pair_source_idx != self.seg_start_frame
+        is_gt_frame = (
+            self.pair_source_idx in self.gt_frame_indices
+            and self.pair_source_idx != self.seg_start_frame
+            and self.pair_source_idx > self.keyframe_ids[-1]
+        )
         if motion_score > self.conf.target_frac or is_gt_frame:
             new_keyframe = self._select_keyframe(is_gt_frame)
             if new_keyframe <= self.keyframe_ids[-1]:

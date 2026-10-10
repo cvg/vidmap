@@ -8,6 +8,7 @@ from vidmap.configuration.validators import dataclass as pydantic_dataclass
 from vidmap.configuration.validators import instantiate_nested_options
 
 from .calibration import CalibrationOptions
+from .location_priors import LocationPriorOptions
 from .positioning import DepthConsistencyOptions, GPOptions, MapperTrackOptions
 from .refinement import BAOptions
 from .view_graph import InlierThresholdOptions, MDRPOptions, RAOptions, VGCOptions
@@ -54,6 +55,7 @@ class MapperOptions:
     gp: GPOptions = dc_field(default_factory=GPOptions)
     ra: RAOptions = dc_field(default_factory=RAOptions)
     tracks: MapperTrackOptions = dc_field(default_factory=MapperTrackOptions)
+    location_priors: LocationPriorOptions = dc_field(default_factory=LocationPriorOptions)
 
     replay_cache: ReplayCacheOptions = dc_field(default_factory=ReplayCacheOptions)
 
@@ -72,6 +74,7 @@ class MapperOptions:
             "gp": GPOptions,
             "ra": RAOptions,
             "tracks": MapperTrackOptions,
+            "location_priors": LocationPriorOptions,
             "replay_cache": ReplayCacheOptions,
         }
         raw = instantiate_nested_options(coerce_to_dict(raw), option_groups)

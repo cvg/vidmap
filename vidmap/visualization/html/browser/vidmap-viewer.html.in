@@ -103,6 +103,14 @@
     button:hover, .file-button:hover { background: #eee; }
     #help { margin-top: 5px; color: #666; }
     #error { display: none; color: #a00; max-width: 480px; }
+    #prior-hover-tooltip {
+      position: fixed; z-index: 20; pointer-events: none;
+      padding: 6px 9px; border-radius: 5px;
+      background: rgba(20, 24, 30, 0.92); color: #f3f4f6;
+      font: 12px/1.45 system-ui, sans-serif;
+      box-shadow: 0 2px 10px rgba(0,0,0,.35);
+      white-space: pre-line;
+    }
   </style>
   <script src="__THREE_JS_URL__"></script>
   <script src="__ORBIT_CONTROLS_URL__"></script>
@@ -111,6 +119,7 @@ __SQLITE_SCRIPT__
 </head>
 <body>
   <div id="background-layer"></div>
+  <div id="prior-hover-tooltip" hidden></div>
   <details id="keyframe-preview-panel" open>
     <summary>Keyframe</summary>
     <div id="keyframe-preview-stage">
@@ -224,13 +233,45 @@ __SQLITE_SCRIPT__
       <label class="setting">line <input id="estimated-frusta-width" type="number" min="0.5" max="20" step="0.5" value="1"></label>
       <label class="setting">color <input id="estimated-frusta-color" type="color" value="#d62728"></label>
     </div>
+    <div class="control-row" id="gt-frusta-row" hidden>
+      <label class="toggle"><input id="gt-frusta-toggle" type="checkbox" checked> <span id="gt-frusta-label">GT cameras</span></label>
+      <label class="setting">size <input id="gt-frusta-size" type="number" min="0.01" max="20" step="0.05" value="3"></label>
+      <label class="setting">line <input id="gt-frusta-width" type="number" min="0.5" max="20" step="0.5" value="2"></label>
+      <label class="setting" id="gt-frusta-mode-setting" hidden>mode
+        <select id="gt-frusta-color-mode">
+          <option value="confidence" selected>confidence</option>
+          <option value="solid">solid</option>
+        </select>
+      </label>
+      <label class="setting">color <input id="gt-frusta-color" type="color" value="#00c853"></label>
+    </div>
+    <div class="control-row" id="gt-cov-row" hidden>
+      <label class="toggle"><input id="gt-cov-toggle" type="checkbox" checked> GT covariances</label>
+      <label class="setting">scale (σ) <input id="gt-cov-scale" type="number" min="0.1" max="20" step="0.25" value="2"></label>
+      <label class="setting">line <input id="gt-cov-width" type="number" min="0.5" max="20" step="0.5" value="1.5"></label>
+      <label class="setting">mode
+        <select id="gt-cov-color-mode">
+          <option value="confidence" selected>confidence</option>
+          <option value="solid">solid</option>
+        </select>
+      </label>
+      <label class="setting">color <input id="gt-cov-color" type="color" value="#00897b"></label>
+    </div>
+    <div class="control-row" id="dense-gt-frusta-row" hidden>
+      <label class="toggle"><input id="dense-gt-frusta-toggle" type="checkbox"> dense GT cameras</label>
+      <label class="setting">size <input id="dense-gt-frusta-size" type="number" min="0.01" max="20" step="0.05" value="2"></label>
+      <label class="setting">line <input id="dense-gt-frusta-width" type="number" min="0.5" max="20" step="0.5" value="1.5"></label>
+      <label class="setting">color <input id="dense-gt-frusta-color" type="color" value="#eab308"></label>
+    </div>
     <div class="control-row">
       <label class="toggle"><input id="paths-toggle" type="checkbox" checked> trajectories</label>
       <label class="setting">line <input id="paths-width" type="number" min="0.5" max="20" step="0.5" value="6"></label>
       <label class="setting">estimated <input id="estimated-path-color" type="color" value="#0064ff"></label>
+      <label class="setting" id="gt-path-controls" hidden><input id="gt-path-toggle" type="checkbox" checked> <span id="gt-path-label">GT</span> <input id="gt-path-color" type="color" value="#00c853"></label>
+      <label class="setting" id="dense-gt-path-controls" hidden><input id="dense-gt-path-toggle" type="checkbox"> dense GT <input id="dense-gt-path-color" type="color" value="#eab308"></label>
     </div>
     <div class="control-row">
-      <label class="toggle"><input id="loop-closures-toggle" type="checkbox" checked> loop closures</label>
+      <label class="toggle"><input id="loop-closures-toggle" type="checkbox"> loop closures</label>
       <label class="setting">line <input id="loop-closures-width" type="number" min="0.5" max="20" step="0.5" value="3"></label>
       <label class="setting"><span class="lc-rejected">red</span>/<span class="lc-accepted">green</span> min shared <input id="loop-closures-min-shared" type="number" min="0" step="1" value="__LOOP_CLOSURE_MIN_SHARED_POINTS__"></label>
     </div>

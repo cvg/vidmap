@@ -171,11 +171,327 @@ def _image_previews(
     }
 
 
+def _camera_frustum_segments(image, camera) -> tuple[list[float], list[float]]:
+    center = np.asarray(image.projection_center(), dtype=np.float64)
+    width = float(camera.width)
+    height = float(camera.height)
+    fx = float(camera.focal_length_x)
+    fy = float(camera.focal_length_y)
+    cx = float(camera.principal_point_x)
+    cy = float(camera.principal_point_y)
+    image_extent = max(0.3 * width / 1024.0, 0.3 * height / 1024.0)
+    world_extent = 2.0 * max(width, height) / (fx + fy)
+    scale = 0.5 * image_extent / world_extent
+    rot_cw = np.asarray(image.cam_from_world().rotation.matrix(), dtype=np.float64)
+    pixel_corners = ((0.0, 0.0), (width, 0.0), (width, height), (0.0, height))
+    corners = []
+    for u, v in pixel_corners:
+        ray = np.array([(u - cx) / fx, (v - cy) / fy, 1.0], dtype=np.float64)
+        corners.append(center + 0.5 * scale * (rot_cw.T @ ray))
+    segments: list[float] = []
+    for corner in corners:
+        segments.extend(round(float(x), 5) for x in center)
+        segments.extend(round(float(x), 5) for x in corner)
+    for idx in range(4):
+        segments.extend(round(float(x), 5) for x in corners[idx])
+        segments.extend(round(float(x), 5) for x in corners[(idx + 1) % 4])
+    return [round(float(x), 5) for x in center], segments
+
+
+def _compute_sim3_est_from_gt(
+    est_rec,
+    gt_rec,
+):
+    import pycolmap
+
+    from vidmap.benchmark.trajectory import align_umeyama_sim3
+
+    if est_rec.num_reg_images() < 2 or gt_rec.num_reg_images() < 2:
+        return None
+
+    est_posed = sorted(
+        (img for img in est_rec.images.values() if img.has_pose),
+        key=lambda img: str(img.name),
+    )
+    est_by_name = {str(img.name): img for img in est_posed}
+    min_est_name = str(est_posed[0].name)
+    max_est_name = str(est_posed[-1].name)
+
+    gt_all_posed = sorted(
+        (img for img in gt_rec.images.values() if img.has_pose),
+        key=lambda img: str(img.name),
+    )
+    gt_in_span = [img for img in gt_all_posed if min_est_name <= str(img.name) <= max_est_name]
+    if len(gt_in_span) < 2:
+        gt_in_span = gt_all_posed
+    gt_by_name = {str(img.name): img for img in gt_in_span}
+
+    common_names = sorted(set(est_by_name) & set(gt_by_name))
+    if len(common_names) >= 2:
+        p_es = np.array([est_by_name[n].projection_center() for n in common_names], dtype=np.float64)
+        p_gt = np.array([gt_by_name[n].projection_center() for n in common_names], dtype=np.float64)
+    else:
+        from vidmap.utils.trajectory import remap_poses_to_timeline
+
+        mapped_est = remap_poses_to_timeline(gt_rec, est_rec).reconstruction
+        mapped_names = sorted(
+            str(img.name) for img in mapped_est.images.values() if img.has_pose and str(img.name) in gt_by_name
+        )
+        if len(mapped_names) < 2:
+            return None
+        mapped_by_name = {str(img.name): img for img in mapped_est.images.values() if img.has_pose}
+        common_names = mapped_names
+        p_es = np.array([mapped_by_name[n].projection_center() for n in common_names], dtype=np.float64)
+        p_gt = np.array([gt_by_name[n].projection_center() for n in common_names], dtype=np.float64)
+
+    if len(common_names) >= 3:
+        s_u, rot_u, trans_u = align_umeyama_sim3(p_es, p_gt)
+        if not np.isfinite(s_u) or s_u <= 1e-6:
+            return None
+        sim3_gt_from_est = pycolmap.Sim3d(
+            scale=float(s_u),
+            rotation=pycolmap.Rotation3d(rot_u),
+            translation=np.asarray(trans_u, dtype=np.float64),
+        )
+
+        def _med_err(sim3: pycolmap.Sim3d) -> float:
+            rot_m = np.asarray(sim3.rotation.matrix(), dtype=np.float64)
+            t_v = np.asarray(sim3.translation, dtype=np.float64)
+            aligned = float(sim3.scale) * (p_es @ rot_m.T) + t_v
+            return float(np.median(np.linalg.norm(p_gt - aligned, axis=1)))
+
+        est_tmp = pycolmap.Reconstruction()
+        gt_tmp = pycolmap.Reconstruction()
+        for idx_n, n in enumerate(common_names, start=1):
+            e_im = est_by_name.get(n)
+            g_im = gt_by_name[n]
+            if e_im is None:
+                continue
+            if e_im.camera_id not in est_tmp.cameras:
+                est_tmp.add_camera_with_trivial_rig(est_rec.cameras[e_im.camera_id])
+            if g_im.camera_id not in gt_tmp.cameras:
+                gt_tmp.add_camera_with_trivial_rig(gt_rec.cameras[g_im.camera_id])
+            est_tmp.add_image_with_trivial_frame(
+                pycolmap.Image(image_id=idx_n, camera_id=e_im.camera_id, name=n), e_im.cam_from_world()
+            )
+            gt_tmp.add_image_with_trivial_frame(
+                pycolmap.Image(image_id=idx_n, camera_id=g_im.camera_id, name=n), g_im.cam_from_world()
+            )
+
+        best_med = _med_err(sim3_gt_from_est)
+        if est_tmp.num_reg_images() >= 3:
+            for max_error in (0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0):
+                cand = pycolmap.align_reconstructions_via_proj_centers(
+                    est_tmp,
+                    gt_tmp,
+                    max_proj_center_error=max_error,
+                )
+                if cand is not None and np.isfinite(cand.scale) and cand.scale > 1e-6:
+                    cand_med = _med_err(cand)
+                    if cand_med < best_med:
+                        best_med = cand_med
+                        sim3_gt_from_est = cand
+    else:
+        dist_es = float(np.linalg.norm(p_es[1] - p_es[0]))
+        dist_gt = float(np.linalg.norm(p_gt[1] - p_gt[0]))
+        s_2 = dist_gt / max(1e-6, dist_es) if dist_es > 1e-6 else 1.0
+        m_sum = np.zeros((3, 3), dtype=np.float64)
+        for n in common_names:
+            r_es = np.asarray(est_by_name[n].cam_from_world().rotation.matrix(), dtype=np.float64)
+            r_gt = np.asarray(gt_by_name[n].cam_from_world().rotation.matrix(), dtype=np.float64)
+            m_sum += r_gt.T @ r_es
+        u_m, _, vt_m = np.linalg.svd(m_sum)
+        s_diag = np.eye(3)
+        if np.linalg.det(u_m) * np.linalg.det(vt_m) < 0:
+            s_diag[2, 2] = -1.0
+        rot_2 = u_m @ s_diag @ vt_m
+        trans_2 = p_gt.mean(axis=0) - s_2 * (rot_2 @ p_es.mean(axis=0))
+        sim3_gt_from_est = pycolmap.Sim3d(
+            scale=float(s_2),
+            rotation=pycolmap.Rotation3d(rot_2),
+            translation=np.asarray(trans_2, dtype=np.float64),
+        )
+
+    return sim3_gt_from_est.inverse()
+
+
+def _covariance_ellipsoid_segments(
+    center: np.ndarray,
+    cov_3x3: np.ndarray,
+    num_ring_segments: int = 24,
+) -> list[float]:
+    eigvals, eigvecs = np.linalg.eigh(cov_3x3)
+    radii = np.sqrt(np.maximum(eigvals, 1e-12))
+    angles = np.linspace(0.0, 2.0 * np.pi, num_ring_segments + 1, dtype=np.float64)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+    segments: list[float] = []
+    for a, b in ((0, 1), (1, 2), (2, 0)):
+        va = eigvecs[:, a] * radii[a]
+        vb = eigvecs[:, b] * radii[b]
+        ring_pts = center[None, :] + cos_a[:, None] * va[None, :] + sin_a[:, None] * vb[None, :]
+        for s in range(num_ring_segments):
+            segments.extend(round(float(x), 5) for x in ring_pts[s])
+            segments.extend(round(float(x), 5) for x in ring_pts[s + 1])
+    return segments
+
+
+def _trajectory_payload_from_sim3(
+    est_rec,
+    gt_reconstruction_dir: Path,
+    sim3_est_from_gt,
+    *,
+    frusta_at_est_keyframes_only: bool = False,
+) -> dict[str, object] | None:
+    import bisect
+    import json
+
+    import pycolmap
+
+    if est_rec.num_reg_images() < 2 or sim3_est_from_gt is None:
+        return None
+
+    est_posed = sorted(
+        (img for img in est_rec.images.values() if img.has_pose),
+        key=lambda img: str(img.name),
+    )
+    est_by_name = {str(img.name): img for img in est_posed}
+    min_est_name = str(est_posed[0].name)
+    max_est_name = str(est_posed[-1].name)
+
+    gt_in_est = pycolmap.Reconstruction(gt_reconstruction_dir)
+    if gt_in_est.num_reg_images() < 2:
+        return None
+    gt_in_est.transform(sim3_est_from_gt)
+
+    gt_all_posed = sorted(
+        (img for img in gt_in_est.images.values() if img.has_pose),
+        key=lambda img: str(img.name),
+    )
+    gt_in_span = [img for img in gt_all_posed if min_est_name <= str(img.name) <= max_est_name]
+    gt_posed = gt_in_span if len(gt_in_span) >= 2 else gt_all_posed
+
+    gt_names = [str(img.name) for img in gt_posed]
+    centers: list[float] = []
+    for img in gt_posed:
+        centers.extend(round(float(x), 5) for x in img.projection_center())
+
+    if frusta_at_est_keyframes_only and len(gt_posed) > len(est_posed):
+        frusta_imgs = [img for img in gt_posed if str(img.name) in est_by_name]
+        if len(frusta_imgs) < 2:
+            step = max(1, len(gt_posed) // max(1, len(est_posed)))
+            frusta_imgs = gt_posed[::step]
+    else:
+        frusta_imgs = gt_posed
+
+    # Optional per-image metadata of the reference poses, next to the reference reconstruction:
+    #   pose_covariances.npz: image_names (N,), cov_position (N, 3, 3) camera-center covariance in world units,
+    #                         confidence (N,), num_inliers (N,), reproj_rms_px (N,)
+    #   pose_confidence.json: {image_name: confidence} (used if pose_covariances.npz is absent)
+    cov_npz_path = gt_reconstruction_dir / "pose_covariances.npz"
+    conf_json_path = gt_reconstruction_dir / "pose_confidence.json"
+    cov_info_by_name: dict[str, tuple[np.ndarray, float, int, float]] = {}
+    conf_only_by_name: dict[str, float] = {}
+    if cov_npz_path.is_file():
+        cov_data = np.load(cov_npz_path)
+        c_names = [str(x) for x in cov_data["image_names"]]
+        c_pos = np.asarray(cov_data["cov_position"], dtype=np.float64)
+        c_conf = np.asarray(cov_data["confidence"], dtype=np.float64)
+        c_inl = np.asarray(cov_data["num_inliers"], dtype=np.int32)
+        c_rms = np.asarray(cov_data["reproj_rms_px"], dtype=np.float64)
+        for i, n in enumerate(c_names):
+            cov_info_by_name[n] = (c_pos[i], float(c_conf[i]), int(c_inl[i]), float(c_rms[i]))
+    elif conf_json_path.is_file():
+        conf_only_by_name = {
+            str(k): float(v) for k, v in json.loads(conf_json_path.read_text(encoding="utf-8")).items()
+        }
+
+    scale_est_from_gt = float(sim3_est_from_gt.scale)
+    rot_est_from_gt = np.asarray(sim3_est_from_gt.rotation.matrix(), dtype=np.float64)
+
+    frusta_names = [str(img.name) for img in frusta_imgs]
+    keyframe_centers: list[float] = []
+    keyframe_frusta: list[float] = []
+    keyframe_cov_ellipses: list[float] = []
+    keyframe_confidences: list[float] = []
+    keyframe_inliers: list[int] = []
+    keyframe_pos_std_meters: list[list[float]] = []
+    keyframe_reproj_rms_px: list[float] = []
+
+    has_cov = bool(cov_info_by_name)
+    has_conf = bool(cov_info_by_name or conf_only_by_name)
+
+    for img in frusta_imgs:
+        name = str(img.name)
+        cam = gt_in_est.cameras[img.camera_id]
+        kf_center, kf_frustum = _camera_frustum_segments(img, cam)
+        keyframe_centers.extend(kf_center)
+        keyframe_frusta.extend(kf_frustum)
+        if has_cov and name in cov_info_by_name:
+            cov_world, conf_val, inl_val, rms_val = cov_info_by_name[name]
+            cov_viewer = (scale_est_from_gt**2) * (rot_est_from_gt @ cov_world @ rot_est_from_gt.T)
+            center_vec = np.asarray(img.projection_center(), dtype=np.float64)
+            keyframe_cov_ellipses.extend(_covariance_ellipsoid_segments(center_vec, cov_viewer))
+            keyframe_confidences.append(round(conf_val, 5))
+            keyframe_inliers.append(inl_val)
+            evals_m = np.maximum(np.linalg.eigvalsh(cov_world), 0.0)
+            axes_m = np.sqrt(evals_m)[::-1]
+            std_tot_m = float(np.sqrt(np.sum(evals_m)))
+            keyframe_pos_std_meters.append(
+                [
+                    round(std_tot_m, 4),
+                    round(float(axes_m[0]), 4),
+                    round(float(axes_m[1]), 4),
+                    round(float(axes_m[2]), 4),
+                ]
+            )
+            keyframe_reproj_rms_px.append(round(rms_val, 3) if np.isfinite(rms_val) else 0.0)
+        elif has_cov:
+            center_vec = np.asarray(img.projection_center(), dtype=np.float64)
+            keyframe_cov_ellipses.extend(_covariance_ellipsoid_segments(center_vec, np.eye(3) * 1e-6))
+            keyframe_confidences.append(round(conf_only_by_name.get(name, 1.0), 5))
+            keyframe_inliers.append(0)
+            keyframe_pos_std_meters.append([0.0, 0.0, 0.0, 0.0])
+            keyframe_reproj_rms_px.append(0.0)
+        elif has_conf:
+            keyframe_confidences.append(round(conf_only_by_name.get(name, 1.0), 5))
+
+    keyframe_path_counts: list[int] = []
+    keyframe_frusta_counts: list[int] = []
+    for idx, est_img in enumerate(est_posed):
+        name = str(est_img.name)
+        if idx == len(est_posed) - 1:
+            keyframe_path_counts.append(len(gt_names))
+            keyframe_frusta_counts.append(len(frusta_names))
+        else:
+            keyframe_path_counts.append(bisect.bisect_right(gt_names, name))
+            keyframe_frusta_counts.append(bisect.bisect_right(frusta_names, name))
+
+    result: dict[str, object] = {
+        "centers": centers,
+        "keyframePathCounts": keyframe_path_counts,
+        "keyframeFrustaCounts": keyframe_frusta_counts,
+        "keyframeCenters": keyframe_centers,
+        "keyframeFrusta": keyframe_frusta,
+        "keyframeNames": frusta_names,
+    }
+    if has_conf:
+        result["keyframeConfidences"] = keyframe_confidences
+    if has_cov:
+        result["keyframeCovEllipses"] = keyframe_cov_ellipses
+        result["keyframeInliers"] = keyframe_inliers
+        result["keyframePosStdMeters"] = keyframe_pos_std_meters
+        result["keyframeReprojRmsPx"] = keyframe_reproj_rms_px
+    return result
+
+
 def _embedded_run_payload(
     run_dir: str | Path,
     *,
     reconstruction_dir: str | Path | None = None,
     images_dir: str | Path | None = None,
+    gt_reconstruction_dir: str | Path | None = None,
+    dense_gt_reconstruction_dir: str | Path | None = None,
 ) -> dict[str, object]:
     """Package one normalized run for the browser's ordinary load path."""
     run = Path(run_dir).expanduser().resolve(strict=True)
@@ -203,7 +519,7 @@ def _embedded_run_payload(
     covariance = reconstruction / "visualization_cache" / "point_covariance_rank_v2.bin"
     if covariance.is_file():
         files["rec/visualization_cache/point_covariance_rank_v2.bin"] = _encoded_file(covariance)
-    return {
+    payload: dict[str, object] = {
         "files": files,
         "imagePreviews": _image_previews(
             run,
@@ -211,6 +527,46 @@ def _embedded_run_payload(
             reconstruction_dir=reconstruction,
         ),
     }
+    gt_dir = (
+        Path(gt_reconstruction_dir).expanduser().resolve(strict=True)
+        if gt_reconstruction_dir is not None
+        else (run / "gt_rec" if (run / "gt_rec" / "images.bin").is_file() else None)
+    )
+    dense_gt_dir = (
+        Path(dense_gt_reconstruction_dir).expanduser().resolve(strict=True)
+        if dense_gt_reconstruction_dir is not None
+        else (run / "dense_gt_rec" if (run / "dense_gt_rec" / "images.bin").is_file() else None)
+    )
+    if gt_dir is not None or dense_gt_dir is not None:
+        import pycolmap
+
+        est_rec = pycolmap.Reconstruction(reconstruction)
+        sim3_est_from_gt = None
+        if gt_dir is not None:
+            gt_rec = pycolmap.Reconstruction(gt_dir)
+            sim3_est_from_gt = _compute_sim3_est_from_gt(est_rec, gt_rec)
+            gt_trajectory = _trajectory_payload_from_sim3(
+                est_rec,
+                gt_dir,
+                sim3_est_from_gt,
+                frusta_at_est_keyframes_only=(dense_gt_dir is None),
+            )
+            if gt_trajectory is not None:
+                payload["gtTrajectory"] = gt_trajectory
+        if dense_gt_dir is not None:
+            dense_sim3 = sim3_est_from_gt
+            if dense_sim3 is None:
+                dense_rec = pycolmap.Reconstruction(dense_gt_dir)
+                dense_sim3 = _compute_sim3_est_from_gt(est_rec, dense_rec)
+            dense_trajectory = _trajectory_payload_from_sim3(
+                est_rec,
+                dense_gt_dir,
+                dense_sim3,
+                frusta_at_est_keyframes_only=True,
+            )
+            if dense_trajectory is not None:
+                payload["denseGtTrajectory"] = dense_trajectory
+    return payload
 
 
 def write_embedded_viewer_html(
@@ -219,12 +575,16 @@ def write_embedded_viewer_html(
     *,
     reconstruction_dir: str | Path | None = None,
     images_dir: str | Path | None = None,
+    gt_reconstruction_dir: str | Path | None = None,
+    dense_gt_reconstruction_dir: str | Path | None = None,
 ) -> Path:
     """Write an embedded viewer that automatically loads one run or sub-reconstruction."""
     payload = _embedded_run_payload(
         run_dir,
         reconstruction_dir=reconstruction_dir,
         images_dir=images_dir,
+        gt_reconstruction_dir=gt_reconstruction_dir,
+        dense_gt_reconstruction_dir=dense_gt_reconstruction_dir,
     )
     return write_html(output, scene.render_viewer_html(embedded_run=payload))
 
@@ -235,6 +595,8 @@ def write_all_embedded_viewers(
     *,
     images_dir: str | Path | None = None,
     base_name: str | None = None,
+    gt_reconstruction_dir: str | Path | None = None,
+    dense_gt_reconstruction_dir: str | Path | None = None,
 ) -> list[Path]:
     """Write embedded viewer HTMLs for all reconstructions or sub-reconstructions in a run."""
     run = Path(run_dir).expanduser().resolve(strict=True)
@@ -259,6 +621,8 @@ def write_all_embedded_viewers(
                 out_file,
                 reconstruction_dir=sub_dir,
                 images_dir=images_dir,
+                gt_reconstruction_dir=gt_reconstruction_dir,
+                dense_gt_reconstruction_dir=dense_gt_reconstruction_dir,
             )
             written.append(out_file)
     else:
@@ -269,6 +633,8 @@ def write_all_embedded_viewers(
             out_file,
             reconstruction_dir=rec_dir,
             images_dir=images_dir,
+            gt_reconstruction_dir=gt_reconstruction_dir,
+            dense_gt_reconstruction_dir=dense_gt_reconstruction_dir,
         )
         written.append(out_file)
 

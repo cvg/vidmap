@@ -92,7 +92,9 @@
         localInput: options.localInput ?? null,
         covarianceCache: options.covarianceCache ?? null,
         database: database,
-        loopClosureMasks: loopClosureMasks
+        loopClosureMasks: loopClosureMasks,
+        gtTrajectory: options.gtTrajectory ?? null,
+        denseGtTrajectory: options.denseGtTrajectory ?? null
       };
     }
 
@@ -163,7 +165,9 @@
         database: databaseEntry === undefined ? null : await decodedEmbeddedFile(databaseEntry, DATABASE_PATH),
         loopClosureMasks: masksEntry === undefined
           ? null
-          : await decodedEmbeddedFile(masksEntry, LOOP_CLOSURE_MASKS_PATH)
+          : await decodedEmbeddedFile(masksEntry, LOOP_CLOSURE_MASKS_PATH),
+        gtTrajectory: payload.gtTrajectory ?? null,
+        denseGtTrajectory: payload.denseGtTrajectory ?? null
       });
     }
 
@@ -691,6 +695,7 @@
           setMinimumTrackLength(1);
           keyframeTimeline.pointOffsets = Array.from(loaded.points.pointOffsets);
           replaceEstimatedGeometry(loaded.cameras.centers, loaded.cameras.frusta);
+          replaceGtGeometry(selection.gtTrajectory, selection.denseGtTrajectory);
           let loopClosureStatus;
           if (selection.database !== null) {
             setStatus("model loaded; validating loop-closure masks…");

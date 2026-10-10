@@ -10,6 +10,7 @@ import pyceres
 import pycolmap
 from scipy.cluster.hierarchy import DisjointSet
 
+from vidmap.mapper.location_priors import LocationPriorSet
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.view_graph import RAOptions
@@ -27,6 +28,7 @@ class RotationAverager:
     sequence_id_to_index: dict[int, int]
     filtered_consecutive_pair_ids: set[int]
     replay: ReplayCache
+    location_priors: LocationPriorSet | None = None
 
     def run_pass(self) -> bool:
         rec = self.solve_state.reconstruction
@@ -98,6 +100,13 @@ class RotationAverager:
             averager = pycolmap.create_default_ceres_rotation_averager(
                 options, tracking_graph, self.solve_state.reconstruction
             )
+            # Keep the prior losses alive while solving.
+            _prior_storage = None
+            if self.location_priors is not None:
+                # Align the spanning-tree initialization to the priors before solving.
+                _prior_storage, _ = self.location_priors.add_rotation_priors(
+                    averager.problem, self.solve_state.reconstruction, align=not options.skip_initialization
+                )
             for pair_id, edge in graph.edges.items():
                 if not edge.valid or pair_id in tracking_graph.edges or self.options.filter_risky_loop_closure_pairs:
                     continue

@@ -13,6 +13,7 @@ import pycolmap
 from vidmap_native import global_positioning as gp_costs
 
 from vidmap.mapper.checkpoints import reconstruction_checkpoint_directory
+from vidmap.mapper.location_priors import LocationPriorSet
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.positioning import GPOptions
@@ -170,6 +171,7 @@ class GlobalPositioner:
     options: GPOptions
     output_dir: Path
     replay: ReplayCache
+    location_priors: LocationPriorSet | None = None
     persist_intermediate_reconstructions: bool = False
     playback_trace: PlaybackTraceRecorder | None = None
 
@@ -242,6 +244,10 @@ class GlobalPositioner:
         stddev = self.options.common.bearing_kp_stddev
         if stage == "gp2":
             stddev *= self.options.second_pass.relax_angular_stddevs
+        location_priors = self._location_priors(stage)
+        scale_prior_stddev = None
+        if location_priors is not None and location_priors.num_active_anchors(working) >= 2:
+            scale_prior_stddev = float(location_priors.options.gp_relaxed_scale_prior_stddev)
         result = run_global_positioning(
             self.options,
             working,
@@ -257,6 +263,8 @@ class GlobalPositioner:
             playback_options=playback_options,
             playback_callback=callback,
             capture_state=record,
+            location_priors=location_priors,
+            scale_prior_stddev=scale_prior_stddev,
         )
         if record:
             replay_result = self.result_for_replay(result)
@@ -282,6 +290,14 @@ class GlobalPositioner:
                 ),
             )
         return result
+
+    def _location_priors(self, stage: str) -> LocationPriorSet | None:
+        priors = self.location_priors
+        if priors is None or not priors.options.enabled or not priors.options.use_in_global_positioning:
+            return None
+        if stage == "gp1" and not priors.options.use_in_gp1:
+            return None
+        return priors
 
     def filter_tracks(self, working):
         focal_priors = {
@@ -345,6 +361,12 @@ class GlobalPositioner:
         if self.options.second_pass.enabled:
             if self.options.track_filter.depth_prior_outlier_stages == "gp1":
                 depth_masks = {}
+            initial_depth_map_scales = result.depth_map_scales
+            if self._location_priors("gp2") is not None:
+                # Bring GP1 into the prior frame (scale and translation) before refining with the priors.
+                initial_depth_map_scales = self.location_priors.align_gp1_to_location_priors_4dof(
+                    working, dict(initial_depth_map_scales)
+                )
             logger.info("Running second global positioning ...")
             self.run_pass(
                 "gp2",
@@ -353,7 +375,7 @@ class GlobalPositioner:
                 replay_images,
                 depth_masks,
                 temporal_prior_specs,
-                initial_depth_map_scales=result.depth_map_scales,
+                initial_depth_map_scales=initial_depth_map_scales,
             )
         self.filter_tracks(working)
         self.solve_state.reconstruction = working

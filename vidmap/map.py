@@ -39,6 +39,11 @@ def build_parser() -> ArgumentParser:
     )
     parser.add_argument("-o", "--overwrite", action="store_true")
     parser.add_argument("--name", type=str)
+    parser.add_argument(
+        "--location-priors",
+        type=str,
+        help="Optional .npz of absolute location priors (per-image rotations and 2D-3D correspondences to world points) used in rotation averaging, global positioning, and BA.",
+    )
     from vidmap.run_options import add_run_arguments
 
     add_run_arguments(parser, mapping=True)
@@ -58,10 +63,21 @@ def _run_local(mapping_conf, frontend_conf, args, run_options) -> int:
         overwrite_outputs=args.overwrite,
         output_dir=output_dir,
     )
-    reconstruction_dir = output_dir / "rec"
-    reconstruction_dir.mkdir(parents=True, exist_ok=True)
-    reconstruction.write(reconstruction_dir)
-    logger.info("Reconstruction written to %s", reconstruction_dir)
+    if run_options.split_cuts:
+        from vidmap.mapper.sub_reconstruction import decompose_reconstruction, export_sub_reconstructions
+
+        models = decompose_reconstruction(
+            reconstruction,
+            min_shared_points=run_options.min_covisibility_points,
+            min_model_size=run_options.min_model_size,
+        )
+        written_recs = export_sub_reconstructions(models, output_dir)
+        logger.info("Reconstruction written to %s", [str(p) for p in written_recs])
+    else:
+        reconstruction_dir = output_dir / "rec"
+        reconstruction_dir.mkdir(parents=True, exist_ok=True)
+        reconstruction.write(reconstruction_dir)
+        logger.info("Reconstruction written to %s", reconstruction_dir)
     return 0
 
 
@@ -87,6 +103,15 @@ def main(argv=None):
     run_options = RunOptions.from_namespace(args)
     configure_logging(run_options.verbosity)
     frontend_overrides, mapping_overrides = _split_stage_overrides(overrides)
+    if args.time_varying_intrinsics:
+        from vidmap.run_options import TIME_VARYING_INTRINSICS_OVERRIDES
+
+        frontend_overrides = (*frontend_overrides, *TIME_VARYING_INTRINSICS_OVERRIDES)
+    if args.location_priors:
+        mapping_overrides = tuple(mapping_overrides) + (
+            "mapper.location_priors.enabled=true",
+            f"mapper.location_priors.path={args.location_priors}",
+        )
     frontend_conf = build_frontend_config(
         resolve_config_path(args.frontend_conf, FRONTEND_CONFIG_DIR),
         source_name=args.frontend_conf,
