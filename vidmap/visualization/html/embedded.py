@@ -485,6 +485,38 @@ def _trajectory_payload_from_sim3(
     return result
 
 
+def _frames_trajectory_payload(
+    reconstruction_dir: Path, frame_poses_path: Path, model_index: int
+) -> dict[str, object] | None:
+    """Camera centers of all localized frames of one (sub-)reconstruction, as a dense path for the viewer.
+
+    keyframePathCounts[i] is the number of frames up to keyframe i (in the viewer's timestamp order), so that the
+    keyframe slider reveals the dense path progressively while frusta remain at keyframes only.
+    """
+    import pycolmap
+
+    data = np.load(frame_poses_path)
+    sel = np.where(data["success"] & (data["model_index"] == model_index))[0]
+    if len(sel) < 2:
+        return None
+    sel = sel[np.argsort(data["timestamps"][sel], kind="stable")]
+    times = np.asarray(data["timestamps"][sel], dtype=np.float64)
+    centers = np.empty((len(sel), 3))
+    for j, i in enumerate(sel):
+        cam_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d(data["rotation_xyzw"][i]), data["translation"][i])
+        centers[j] = cam_from_world.inverse().translation
+
+    rec = pycolmap.Reconstruction(reconstruction_dir)
+    key_times = sorted(float(Path(img.name).stem) for img in rec.images.values() if img.has_pose)
+    counts = np.searchsorted(times, np.asarray(key_times) + 1e-6, side="right").tolist()
+    if counts:
+        counts[-1] = len(sel)
+    return {
+        "centers": [round(float(x), 5) for x in centers.reshape(-1)],
+        "keyframePathCounts": [int(c) for c in counts],
+    }
+
+
 def _embedded_run_payload(
     run_dir: str | Path,
     *,
@@ -492,6 +524,8 @@ def _embedded_run_payload(
     images_dir: str | Path | None = None,
     gt_reconstruction_dir: str | Path | None = None,
     dense_gt_reconstruction_dir: str | Path | None = None,
+    frame_poses: str | Path | None = None,
+    frame_model_index: int = 0,
 ) -> dict[str, object]:
     """Package one normalized run for the browser's ordinary load path."""
     run = Path(run_dir).expanduser().resolve(strict=True)
@@ -566,6 +600,10 @@ def _embedded_run_payload(
             )
             if dense_trajectory is not None:
                 payload["denseGtTrajectory"] = dense_trajectory
+    if frame_poses is not None:
+        frames_trajectory = _frames_trajectory_payload(reconstruction, Path(frame_poses), frame_model_index)
+        if frames_trajectory is not None:
+            payload["estimatedFramesTrajectory"] = frames_trajectory
     return payload
 
 
@@ -577,14 +615,22 @@ def write_embedded_viewer_html(
     images_dir: str | Path | None = None,
     gt_reconstruction_dir: str | Path | None = None,
     dense_gt_reconstruction_dir: str | Path | None = None,
+    frame_poses: str | Path | None = None,
+    frame_model_index: int = 0,
 ) -> Path:
-    """Write an embedded viewer that automatically loads one run or sub-reconstruction."""
+    """Write an embedded viewer that automatically loads one run or sub-reconstruction.
+
+    frame_poses: optional all-frame localization result (.npz from vidmap.localize_frames); its camera centers
+    replace the keyframe-only estimated trajectory line, while frusta and the slider stay on keyframes.
+    """
     payload = _embedded_run_payload(
         run_dir,
         reconstruction_dir=reconstruction_dir,
         images_dir=images_dir,
         gt_reconstruction_dir=gt_reconstruction_dir,
         dense_gt_reconstruction_dir=dense_gt_reconstruction_dir,
+        frame_poses=frame_poses,
+        frame_model_index=frame_model_index,
     )
     return write_html(output, scene.render_viewer_html(embedded_run=payload))
 
@@ -597,6 +643,7 @@ def write_all_embedded_viewers(
     base_name: str | None = None,
     gt_reconstruction_dir: str | Path | None = None,
     dense_gt_reconstruction_dir: str | Path | None = None,
+    frame_poses: str | Path | None = None,
 ) -> list[Path]:
     """Write embedded viewer HTMLs for all reconstructions or sub-reconstructions in a run."""
     run = Path(run_dir).expanduser().resolve(strict=True)
@@ -612,7 +659,7 @@ def write_all_embedded_viewers(
 
     written = []
     if sub_dirs:
-        for sub_dir in sub_dirs:
+        for model_index, sub_dir in enumerate(sub_dirs):
             stem = base_name if base_name is not None else "vidmap-viewer-embedded"
             sep = "-" if stem == "vidmap-viewer-embedded" else "_"
             out_file = out_dir / f"{stem}{sep}sub{sub_dir.name}.html"
@@ -623,6 +670,8 @@ def write_all_embedded_viewers(
                 images_dir=images_dir,
                 gt_reconstruction_dir=gt_reconstruction_dir,
                 dense_gt_reconstruction_dir=dense_gt_reconstruction_dir,
+                frame_poses=frame_poses,
+                frame_model_index=model_index,
             )
             written.append(out_file)
     else:
@@ -635,6 +684,7 @@ def write_all_embedded_viewers(
             images_dir=images_dir,
             gt_reconstruction_dir=gt_reconstruction_dir,
             dense_gt_reconstruction_dir=dense_gt_reconstruction_dir,
+            frame_poses=frame_poses,
         )
         written.append(out_file)
 
