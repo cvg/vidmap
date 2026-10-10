@@ -26,6 +26,11 @@ class BATriangulationOptions:
     # Keep correspondences of pairs invalidated upstream (e.g. rotation outliers) in the
     # BA correspondence graph used for track merging, completion, and re-triangulation.
     use_invalid_pairs: bool = False
+    # Attach the loop-closure observations used by global positioning to the BA tracks as regular
+    # observations, so that BA starts from the loops closed by GP instead of re-establishing them
+    # by re-triangulation (observations conflicting with an existing track are skipped; outliers
+    # are removed by the usual reprojection-error filtering).
+    promote_loop_closure_observations: bool = False
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

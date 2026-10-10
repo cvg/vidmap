@@ -148,6 +148,39 @@ class BundleAdjuster:
             self.observations,
         )
         self.triangulator_options = self.build_triangulator_options(self.options.triangulation)
+        if self.options.triangulation.promote_loop_closure_observations:
+            self.promote_loop_closure_observations()
+
+    def promote_loop_closure_observations(self) -> int:
+        """Attach the loop-closure observations of each track as regular track observations.
+
+        Global positioning constrains loop closures through per-track loop-closure observations
+        that are not part of the exported tracks. Without them, BA has to re-establish each loop
+        by re-triangulation, and weak loops (few shared points) are lost in the first solve.
+        Observations whose image is already in the track or whose keypoint already belongs to
+        another 3D point are skipped.
+        """
+        reconstruction = self.reconstruction
+        promoted = skipped = 0
+        for point3D_id, record in self.solve_state.track_records().items():
+            observations = np.asarray(record.loop_closure_observations)
+            if len(observations) == 0 or not reconstruction.exists_point3D(point3D_id):
+                continue
+            track_image_ids = {element.image_id for element in reconstruction.point3D(point3D_id).track.elements}
+            for image_id, point2D_idx in observations.tolist():
+                if image_id in track_image_ids or image_id not in reconstruction.images:
+                    skipped += 1
+                    continue
+                image = reconstruction.image(image_id)
+                if not image.has_pose or image.point2D(point2D_idx).has_point3D():
+                    skipped += 1
+                    continue
+                self.observations.add_observation(point3D_id, pycolmap.TrackElement(image_id, point2D_idx))
+                track_image_ids.add(image_id)
+                promoted += 1
+        self.solve_state.import_tracks()
+        logger.info("Promoted %d loop-closure observations to BA tracks (%d skipped)", promoted, skipped)
+        return promoted
 
     def build_observation_graph(self) -> pycolmap.CorrespondenceGraph:
         graph = pycolmap.CorrespondenceGraph()
