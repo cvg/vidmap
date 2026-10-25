@@ -35,6 +35,9 @@ class ViewGraphCalibrator:
         if not self.enabled:
             return
 
+        if any(camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE") for camera in cameras.values()):
+            raise ValueError("Distorted cameras must be calibrated before depth in the frontend")
+
         logger.info("Running view graph calibration...")
 
         if self.options.unlock_focal:

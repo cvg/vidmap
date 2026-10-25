@@ -102,9 +102,7 @@ class KeyframeSelector:
         self.aliked_model = aliked_model
         self.oW = original_width
         self.oH = original_height
-        self.bootstrap_intrinsics = (
-            np.asarray(bootstrap_intrinsics, dtype=np.float64) if bootstrap_intrinsics is not None else None
-        )
+        self.bootstrap_intrinsics = bootstrap_intrinsics
         self.keyframe_ids = [0]
         self.seg_start_frame = 0
         self.pair_source_idx = 0

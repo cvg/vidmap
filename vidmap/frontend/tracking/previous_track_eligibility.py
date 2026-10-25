@@ -22,6 +22,7 @@ def select_previous_track_mask(
     options,
     scale_ratio,
     current_size,
+    camera=None,
 ):
     """Return the previous tracks eligible to extend into the current frame."""
     if previous_keypoints is None:
@@ -62,6 +63,12 @@ def select_previous_track_mask(
             ransac_kwargs["min_iterations"] = options.tvg_min_iterations
         ransac_opt = poselib.RansacOptions(ransac_kwargs)
         bundle_opt = poselib.BundleOptions(bundle_kwargs)
+        scaled = None
+        if camera is not None and camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE"):
+            import pycolmap
+
+            scaled = pycolmap.Camera(camera.todict())
+            scaled.rescale(*current_size)
         tvg_killed = 0
 
         for k in range(1, history.reach):
@@ -75,8 +82,26 @@ def select_previous_track_mask(
 
             pts_src = np.ascontiguousarray(hist_pos[valid], dtype=np.float64)
             pts_dst = np.ascontiguousarray(warped_np[base_mask][valid], dtype=np.float64)
-            F, info = poselib.estimate_fundamental(pts_src, pts_dst, ransac_opt, bundle_opt)
-            inlier_mask = np.array(info["inliers"])
+            if scaled is not None:
+                result = pycolmap.estimate_relative_pose(
+                    scaled,
+                    pts_src + 0.5,
+                    scaled,
+                    pts_dst + 0.5,
+                    pycolmap.RANSACOptions(
+                        max_error=options.tvg_max_epipolar_error,
+                        min_num_trials=ransac_kwargs["min_iterations"],
+                        max_num_trials=options.tvg_max_iterations,
+                    ),
+                )
+                inlier_mask = (
+                    np.zeros(len(pts_src), dtype=bool)
+                    if result is None
+                    else np.asarray(result["inlier_mask"], dtype=bool)
+                )
+            else:
+                _, info = poselib.estimate_fundamental(pts_src, pts_dst, ransac_opt, bundle_opt)
+                inlier_mask = np.array(info["inliers"])
 
             outlier_local = np.where(valid)[0][~inlier_mask]
             base_mask[survivor_idx[outlier_local]] = False

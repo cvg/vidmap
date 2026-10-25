@@ -49,8 +49,7 @@ def filter_vgc_pair(args):
     feat2 = features_cache[image_id2]
     K1 = k_cache[camera_id_cache[image_id1]]
     K2 = k_cache[camera_id_cache[image_id2]]
-    F = np.asarray(pair.geometry.F)
-    E = K2.T @ F @ K1
+    E = np.asarray(pair.geometry.E) if pair.geometry.F is None else K2.T @ np.asarray(pair.geometry.F) @ K1
     U, _S, Vt = np.linalg.svd(E)
     if np.linalg.det(U) < 0:
         U = -U
@@ -159,6 +158,11 @@ class ViewGraphFilter:
 
         _K_cache = {cid: cam.calibration_matrix() for cid, cam in cameras.items()}
         _features_cache = {image_id: native.point2D_coords(image) for image_id, image in images.items()}
+        for image_id, image in images.items():
+            camera = cameras[image.camera_id]
+            if camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE"):
+                _features_cache[image_id] = camera.cam_from_img(_features_cache[image_id])
+                _K_cache[image.camera_id] = np.eye(3)
         _camera_id_cache = {image_id: image.camera_id for image_id, image in images.items()}
 
         valid_configurations = {

@@ -105,6 +105,7 @@ def mapper_inputs_manifest(
     frame_sequence: dict,
     panorama: dict | None = None,
     calibration: CalibrationEvidence | None = None,
+    distortion_calibrated: bool = False,
 ) -> dict:
     """Build deterministic provenance for canonical mapper-input payloads."""
     directory = resolve_mapper_inputs_directory(directory)
@@ -113,7 +114,7 @@ def mapper_inputs_manifest(
         name: dict(proof)
         for name, proof in _verified_artifacts(directory, _artifact_signature(directory, names)).items()
     }
-    return _tagged_manifest(artifacts, frontend_identity, frame_sequence, panorama, calibration)
+    return _tagged_manifest(artifacts, frontend_identity, frame_sequence, panorama, calibration, distortion_calibrated)
 
 
 def _artifact_signature(
@@ -146,9 +147,12 @@ def _tagged_manifest(
     frame_sequence: dict,
     panorama: dict | None = None,
     calibration: CalibrationEvidence | None = None,
+    distortion_calibrated: bool = False,
 ) -> dict[str, object]:
     """Build the current tagged mapper-input manifest."""
     validate_frame_sequence(frame_sequence)
+    if distortion_calibrated != (calibration is not None and calibration.model == "SIMPLE_DIVISIONAL"):
+        raise ValueError("Distorted inputs must complete calibration before depth and publication")
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "frontend_identity": dict(frontend_identity),
@@ -158,6 +162,8 @@ def _tagged_manifest(
     }
     if panorama is not None:
         manifest["panorama"] = panorama
+    if distortion_calibrated:
+        manifest["distortion_calibrated"] = True
     return manifest
 
 
@@ -167,6 +173,15 @@ def _tagged_identity(manifest: Mapping[str, object], *, manifest_path: Path) -> 
     if schema_version != MANIFEST_SCHEMA_VERSION:
         raise ValueError(f"Mapper inputs require manifest schema {MANIFEST_SCHEMA_VERSION}: {manifest_path}")
     fields = {"schema_version", "frontend_identity", "artifacts", "frame_sequence", "calibration"}
+    if not fields <= set(manifest):
+        raise ValueError(f"Missing mapper-input manifest fields: {manifest_path}")
+    calibration = manifest["calibration"]
+    if calibration is not None and (not isinstance(calibration, dict) or "model" not in calibration):
+        raise ValueError(f"Invalid mapper-input calibration: {manifest_path}")
+    if calibration is not None and calibration["model"] == "SIMPLE_DIVISIONAL":
+        fields.add("distortion_calibrated")
+        if "distortion_calibrated" not in manifest or manifest["distortion_calibrated"] is not True:
+            raise ValueError("Distorted mapper inputs require calibration before depth; regenerate the frontend")
     if set(manifest) not in (fields, fields | {"panorama"}):
         raise ValueError(f"Invalid mapper-input manifest fields: {manifest_path}")
     validate_frame_sequence(manifest["frame_sequence"])
@@ -186,6 +201,7 @@ def write_mapper_inputs_manifest(
     frame_sequence: dict,
     panorama: dict | None = None,
     calibration: CalibrationEvidence | None = None,
+    distortion_calibrated: bool = False,
 ) -> None:
     payload = mapper_inputs_manifest(
         directory,
@@ -193,6 +209,7 @@ def write_mapper_inputs_manifest(
         frame_sequence=frame_sequence,
         panorama=panorama,
         calibration=calibration,
+        distortion_calibrated=distortion_calibrated,
     )
     (Path(directory) / MANIFEST_NAME).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
@@ -347,6 +364,7 @@ class MapperInputs:
             manifest["frame_sequence"],
             manifest["panorama"] if "panorama" in manifest else None,
             evidence,
+            "distortion_calibrated" in manifest,
         )
         if manifest != expected_manifest:
             raise ValueError(f"Mapper-input manifest does not match written payloads: {manifest_path}")
@@ -359,6 +377,12 @@ class MapperInputs:
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"Invalid mapper-input manifest: {manifest_path}") from error
         return _tagged_identity(manifest, manifest_path=manifest_path)
+
+    def distortion_calibrated(self) -> bool:
+        """Whether finalized inputs already calibrated distortion before depth."""
+        manifest = json.loads((self.directory / MANIFEST_NAME).read_text())
+        _tagged_identity(manifest, manifest_path=self.directory / MANIFEST_NAME)
+        return "distortion_calibrated" in manifest
 
     def calibration(self) -> CalibrationEvidence | None:
         """Read original prediction associations without inferring camera membership."""

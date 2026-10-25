@@ -193,6 +193,10 @@ def validate_incremental_item(hfile, name: str, metadata: Mapping[str, Any]) -> 
     if stage in {"geocalib_per_image", "geocalib_batch"} or (
         stage == "depth" and metadata["payload_format"] == "per-image-keypoint-depth-calibration"
     ):
+        if metadata["payload_format"] == "shared-division-geocalibration":
+            distortion = require("distortion", ndim=1)[...]
+            if distortion.shape != (1,) or not np.isfinite(distortion).all():
+                raise CacheMetadataMismatch("Division calibration requires one finite distortion coefficient")
         K = require("K", ndim=2)[...]
         if K.shape != (3, 3) or not np.isfinite(K).all() or min(K[0, 0], K[1, 1]) <= 0:
             raise CacheMetadataMismatch("Calibration requires finite positive PINHOLE intrinsics")

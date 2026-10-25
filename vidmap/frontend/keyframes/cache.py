@@ -33,6 +33,7 @@ def admitted_frames_cache_metadata(
     highres_options,
     keyframe_options,
     salient_options,
+    bootstrap_camera=None,
 ):
     """Bind admission to the reference stream and its native frame timeline."""
     scene_parser = input_snapshot.capture
@@ -62,10 +63,16 @@ def admitted_frames_cache_metadata(
             name for name in sequence if name in scene_parser.forced_keyframe_names
         ]
     if intrinsics_source == "geocalib":
-        bootstrap_config, bootstrap_inputs = keyframe_bootstrap_cache_identity(sequence)
-        config["bootstrap_geocalib"] = bootstrap_config
-        ordered_inputs["bootstrap"] = bootstrap_inputs
-        ordered_inputs["bootstrap_image_content"] = image_fingerprint(bootstrap_inputs["images"])
+        if bootstrap_camera is not None:
+            config["bootstrap_geocalib"] = {
+                "camera_model": bootstrap_camera.model_name,
+                "params": bootstrap_camera.params.tolist(),
+            }
+        else:
+            bootstrap_config, bootstrap_inputs = keyframe_bootstrap_cache_identity(sequence)
+            config["bootstrap_geocalib"] = bootstrap_config
+            ordered_inputs["bootstrap"] = bootstrap_inputs
+            ordered_inputs["bootstrap_image_content"] = image_fingerprint(bootstrap_inputs["images"])
     else:
         config["ground_truth_intrinsics"] = {"policy": "ordered-effective-reconstruction-calibration-v1"}
         ordered_inputs["ground_truth_intrinsics"] = keyframe_selector.ground_truth_intrinsics_plan(

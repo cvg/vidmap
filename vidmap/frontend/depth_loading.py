@@ -60,15 +60,23 @@ def stack_window(images: list[torch.Tensor]) -> torch.Tensor:
 class _Da3ImageDataset(ImageDataset):
     """Load one image and apply DA3 preprocessing in a DataLoader worker."""
 
-    def __init__(self, root: Path, image_names, process_res: int):
+    def __init__(self, root: Path, image_names, process_res: int, projections=None):
         super().__init__(root, ImageDatasetOptions(), paths=image_names)
         self.process_res = process_res
+        self.projections = {} if projections is None else projections
+        self.remaps = {}
 
     def __getitem__(self, index: int):
         name = self.names[index]
         with Image.open(self.root / name) as opened:
             image = np.asarray(opened.convert("RGB"))
         height, width = image.shape[:2]
+        if name in self.projections:
+            projection = self.projections[name]
+            key = id(projection)
+            if key not in self.remaps:
+                self.remaps[key] = projection.image_remap()
+            image = cv2.remap(image, self.remaps[key], None, cv2.INTER_LINEAR)
         return {
             "image": _prepare_da3_image(image, self.process_res),
             "original_size": np.array([width, height]),
@@ -135,9 +143,10 @@ def create_da3_window_loader(
     num_workers: int,
     pin_memory: bool = True,
     stream_sequences,
+    projections=None,
 ) -> DataLoader:
     """Create the ordered worker pool that prepares DA3 input windows."""
-    image_dataset = _Da3ImageDataset(rgb_dir, image_names, process_res)
+    image_dataset = _Da3ImageDataset(rgb_dir, image_names, process_res, projections)
     dataset = WindowDataset(image_dataset, pending_names, window_size, stream_sequences)
     return DataLoader(
         dataset,

@@ -38,6 +38,12 @@ def point_covariance_trace(model: Any, point3D: Any) -> float:
         depth = camera_point[2]
         if depth <= 0:
             continue
+        if camera.model not in (pycolmap.CameraModelId.PINHOLE, pycolmap.CameraModelId.SIMPLE_PINHOLE):
+            from vidmap.utils.camera_geometry import projection_jacobian
+
+            jacobian = projection_jacobian(camera, camera_point) @ rotation
+            hessian += jacobian.T @ jacobian
+            continue
         jacobian = (
             np.asarray(
                 [

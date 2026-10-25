@@ -1,6 +1,7 @@
 """Keyframe scoring, propagation, and per-frame feature frontend."""
 
 import numpy as np
+import pycolmap
 import torch
 import torch.nn.functional as F
 
@@ -88,6 +89,9 @@ def _as_numpy_points(points):
 
 
 def _normalized_xy(kps, k):
+    if isinstance(k, pycolmap.Camera):
+        return k.cam_from_img(kps + 0.5)
+    k = np.asarray(k, dtype=np.float64)
     x = (kps[:, 0] - k[0, 2]) / k[0, 0]
     y = (kps[:, 1] - k[1, 2]) / k[1, 1]
     return np.stack([x, y], axis=1)
@@ -119,8 +123,8 @@ def compute_normalized_keypoint_motion_score(
     if source_K is None or target_K is None:
         return 1.0
 
-    xy0 = _normalized_xy(original, np.asarray(source_K, dtype=np.float64))
-    xy1 = _normalized_xy(tracked, np.asarray(target_K, dtype=np.float64))
+    xy0 = _normalized_xy(original, source_K)
+    xy1 = _normalized_xy(tracked, target_K)
     drift = np.linalg.norm(xy1 - xy0, axis=1)
     good_mask = visible & (drift <= float(max_normalized_keypoint_drift))
     frac_good = float(np.mean(good_mask))
@@ -158,8 +162,8 @@ def score_keyframe_lookahead(
     target_on_grid = target_on_grid.detach().cpu().numpy()
     visible = visible.detach().cpu().numpy()
     target = unscale_keypoints(target_on_grid, np.divide(target_original_size, target_grid_size))
-    source_xy = _normalized_xy(source, np.asarray(source_calibration, dtype=np.float64))
-    target_xy = _normalized_xy(target, np.asarray(target_calibration, dtype=np.float64))
+    source_xy = _normalized_xy(source, source_calibration)
+    target_xy = _normalized_xy(target, target_calibration)
     drift = np.linalg.norm(target_xy - source_xy, axis=1)
     if not np.any(visible):
         return None

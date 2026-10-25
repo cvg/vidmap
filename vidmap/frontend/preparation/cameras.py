@@ -8,6 +8,7 @@ import pycolmap
 from vidmap.datasets.capture import PreparedCapture
 from vidmap.frontend.options.preparation import CameraPriorEstimationOptions, CameraProcessingOptions
 from vidmap.frontend.rig import resolve_rig_options
+from vidmap.utils.camera_geometry import DISTORTED_CAMERA_MODELS
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,10 @@ class CameraPreparationPlan:
     allocation: Literal["input", "shared", "per_image"]
     camera_priors: CameraPriorEstimationOptions
     undistort_camera_ids: tuple[int, ...]
+
+    @property
+    def bootstrap_required(self) -> bool:
+        return self.camera_priors.camera_model in DISTORTED_CAMERA_MODELS
 
 
 def resolve_camera_preparation(capture: PreparedCapture, options) -> CameraPreparationPlan:
@@ -34,17 +39,33 @@ def resolve_camera_preparation(capture: PreparedCapture, options) -> CameraPrepa
         raise ValueError("Different per-camera calibration settings are not supported")
     if priors.initialization != options.camera_priors.initialization:
         raise ValueError("Camera processing cannot change the input calibration initialization mode")
+    if priors.camera_model not in pycolmap.CameraModelId.__members__:
+        raise ValueError(f"Unknown COLMAP camera model: {priors.camera_model}")
     has_multi_sensor_rig = any(rig.num_sensors() != 1 for rig in capture.rec.rigs.values())
     if capture.preserve_calibration:
         if priors.initialization != "supplied":
             raise ValueError("Preserved capture calibration requires supplied initialization")
         if options.keyframes.selection.intrinsics_source != "ground_truth":
             raise ValueError("Preserved capture calibration requires supplied keyframing intrinsics")
+        if priors.camera_model != "PINHOLE":
+            raise ValueError("Supplied camera models come from the capture, not the prediction model")
         allocation = "input"
     else:
         if has_multi_sensor_rig:
             raise ValueError("Camera regrouping requires single-sensor, single-image frames")
         allocation = "shared" if priors.initialization == "predicted" else "per_image"
+        if priors.camera_model in DISTORTED_CAMERA_MODELS:
+            if (
+                priors.estimator != "geocalib"
+                or priors.inference != "selected_batch"
+                or priors.initialization != "predicted"
+                or options.keyframes.selection.intrinsics_source != "geocalib"
+            ):
+                raise ValueError("Uncalibrated distortion requires monocular input and shared GeoCalib keyframing")
+            if len({(camera.model_name, camera.width, camera.height) for camera in capture.rec.cameras.values()}) != 1:
+                raise ValueError("Distortion bootstrap requires identical source camera models and dimensions")
+        elif priors.camera_model != "PINHOLE":
+            raise ValueError(f"Calibration prediction does not support {priors.camera_model}")
     if priors.inference == "selected_batch":
         num_cameras = 1
         if allocation == "input":
@@ -60,14 +81,15 @@ def resolve_camera_preparation(capture: PreparedCapture, options) -> CameraPrepa
         image_mode = settings[cid].image_mode
         if image_mode == "auto":
             image_mode = "undistort" if capture.preserve_calibration and distorted else "native"
-        if image_mode == "undistort" and distorted:
+        if image_mode == "undistort" and (distorted or priors.camera_model in DISTORTED_CAMERA_MODELS):
             if not capture.preserve_calibration:
                 raise ValueError("Undistortion requires supplied capture calibration")
             undistort.append(cid)
         elif distorted:
             if capture.preserve_calibration:
                 raise ValueError("Native calibrated distorted cameras are unsupported; select undistort")
-            raise ValueError("Native distorted source cameras are unsupported")
+            if camera.model_name not in DISTORTED_CAMERA_MODELS or camera.model_name != priors.camera_model:
+                raise ValueError("Native distorted source cameras require a supported matching preparation model")
     return CameraPreparationPlan(allocation, priors, tuple(undistort))
 
 
@@ -83,6 +105,10 @@ def prepare_capture(capture: PreparedCapture, plan: CameraPreparationPlan) -> Pr
         cid = 0 if plan.allocation == "shared" else index
         camera = source.camera(image.camera_id)
         if cid not in rec.cameras:
+            if plan.bootstrap_required:
+                camera = pycolmap.Camera.create_from_model_name(
+                    cid, plan.camera_priors.camera_model, camera.mean_focal_length(), camera.width, camera.height
+                )
             rec.add_camera_with_trivial_rig(
                 pycolmap.Camera(
                     camera_id=cid,
@@ -103,7 +129,7 @@ def prepare_capture(capture: PreparedCapture, plan: CameraPreparationPlan) -> Pr
 
 def initialize_selected_camera_geometry(working_rec, source_rec, image_names, plan: CameraPreparationPlan):
     """Resolve shared image dimensions from the selected images, without regrouping."""
-    if plan.allocation != "shared":
+    if plan.allocation != "shared" or plan.bootstrap_required:
         return
     names = set(image_names)
     images = sorted(

@@ -6,6 +6,7 @@ import signal
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -249,6 +250,32 @@ def run_geometric_verification(
 ) -> None:
     """Run one isolated geometric-verification attempt and fail contextually."""
     logger.info("Geometric verification of %s with %d pairs", database_path, len(pairs))
+    with pycolmap.Database.open(database_path) as db:
+        cameras = {camera.camera_id: camera for camera in db.read_all_cameras()}
+        if any(camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE") for camera in cameras.values()):
+            from vidmap.utils.camera_geometry import estimate_distorted_two_view
+
+            images = {image.name: image for image in db.read_all_images()}
+            geometry_options = pycolmap.TwoViewGeometryOptions(options)
+            geometry_options.compute_relative_pose = True
+            with ThreadPoolExecutor() as executor, pycolmap.DatabaseTransaction(db):
+                for start in tqdm(range(0, len(pairs), 32), disable=not verbose):
+                    pending = []
+                    for name1, name2 in pairs[start : start + 32]:
+                        image1, image2 = images[name1], images[name2]
+                        future = executor.submit(
+                            estimate_distorted_two_view,
+                            cameras[image1.camera_id],
+                            db.read_keypoints(image1.image_id)[:, :2],
+                            cameras[image2.camera_id],
+                            db.read_keypoints(image2.image_id)[:, :2],
+                            db.read_matches(image1.image_id, image2.image_id),
+                            geometry_options,
+                        )
+                        pending.append((image1.image_id, image2.image_id, future))
+                    for first, second, future in pending:
+                        db.write_two_view_geometry(first, second, future.result())
+            return
     with tempfile.TemporaryDirectory() as tmpdir:
         pairs_path = Path(tmpdir) / "pairs.txt"
         _write_pair_list(pairs, pairs_path)

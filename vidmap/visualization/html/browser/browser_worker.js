@@ -78,7 +78,37 @@
     const principalOffset = SINGLE_FOCAL_MODELS.has(modelId) ? 8 : 16;
     const cx = view.getFloat64(principalOffset, true);
     const cy = view.getFloat64(principalOffset + 8, true);
-    return {modelId: modelId, fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height};
+    const fisheye = modelId === 5 ? Array.from({length: 4}, (_, i) => view.getFloat64(32 + i * 8, true)) : null;
+    const distortion = [2, 3, 4, 6, 12, 13].includes(modelId)
+      ? Array.from({length: count - principalOffset / 8 - 2}, (_, i) => view.getFloat64(principalOffset + 16 + i * 8, true))
+      : null;
+    return {modelId: modelId, fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height, fisheye, distortion};
+  }
+
+  // Distorted normalized coordinates and their 2x2 projection Jacobian.
+  function perspectiveProjection(camera, x, y) {
+    const k = camera.distortion, r2 = x * x + y * y;
+    let radial, derivative, p1 = 0, p2 = 0;
+    if (camera.modelId === 12 || camera.modelId === 13) {
+      const root = Math.sqrt(1 - 4 * k[0] * r2);
+      radial = 2 / (1 + root);
+      derivative = 4 * k[0] / (root * (1 + root) ** 2);
+    } else {
+      const k2 = k.length > 1 ? k[1] : 0;
+      const k3 = camera.modelId === 6 ? k[4] : 0;
+      const numerator = 1 + r2 * (k[0] + r2 * (k2 + r2 * k3));
+      const denominator = camera.modelId === 6 ? 1 + r2 * (k[5] + r2 * (k[6] + r2 * k[7])) : 1;
+      const dNumerator = k[0] + r2 * (2 * k2 + 3 * r2 * k3);
+      const dDenominator = camera.modelId === 6 ? k[5] + r2 * (2 * k[6] + 3 * r2 * k[7]) : 0;
+      radial = numerator / denominator;
+      derivative = (dNumerator - radial * dDenominator) / denominator;
+      if (camera.modelId === 4 || camera.modelId === 6) [p1, p2] = [k[2], k[3]];
+    }
+    const cross = 2 * (x * y * derivative + p1 * x + p2 * y);
+    return [x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x),
+      y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y,
+      radial + 2 * x * x * derivative + 2 * p1 * y + 6 * p2 * x, cross, cross,
+      radial + 2 * y * y * derivative + 6 * p1 * y + 2 * p2 * x];
   }
 
   function databaseCameras(rows) {
@@ -431,6 +461,39 @@
       const pixelCorners = [[0, 0], [camera.width, 0], [camera.width, camera.height], [0, camera.height]];
       const corners = pixelCorners.map(([u, v]) => {
         const ray = [(u - camera.cx) / camera.fx, (v - camera.cy) / camera.fy, 1];
+        if (camera.modelId === 5) {
+          const radius = Math.hypot(ray[0], ray[1]);
+          const [k1, k2, k3, k4] = camera.fisheye;
+          let theta = radius;
+          for (let iteration = 0; iteration < 50; ++iteration) {
+            const t2 = theta * theta;
+            const projected = theta * (1 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4))));
+            const derivative = 1 + t2 * (3 * k1 + t2 * (5 * k2 + t2 * (7 * k3 + t2 * 9 * k4)));
+            const step = (projected - radius) / derivative;
+            theta -= step;
+            if (Math.abs(step) < 1e-12) break;
+            if (iteration === 49) throw new Error("Fisheye corner unprojection did not converge");
+          }
+          const scale = radius > 0 ? Math.tan(theta) / radius : 1;
+          ray[0] *= scale;
+          ray[1] *= scale;
+        }
+        if (camera.modelId === 12 || camera.modelId === 13) {
+          const denominator = 1 + camera.distortion[0] * (ray[0] ** 2 + ray[1] ** 2);
+          ray[0] /= denominator;
+          ray[1] /= denominator;
+        } else if (camera.distortion !== null) {
+          const targetX = ray[0], targetY = ray[1];
+          for (let iteration = 0; iteration < 50; ++iteration) {
+            const [x, y, a, b, c, d] = perspectiveProjection(camera, ray[0], ray[1]);
+            const ex = x - targetX, ey = y - targetY, det = a * d - b * c;
+            const dx = (d * ex - b * ey) / det, dy = (a * ey - c * ex) / det;
+            ray[0] -= dx;
+            ray[1] -= dy;
+            if (Math.max(Math.abs(dx), Math.abs(dy)) < 1e-12) break;
+            if (iteration === 49) throw new Error("Camera corner unprojection did not converge");
+          }
+        }
         const r = image.rotation;
         const world = [
           center[0] + 0.5 * scale * (r[0] * ray[0] + r[3] * ray[1] + r[6] * ray[2]),
@@ -635,16 +698,39 @@
         const y = r[3] * px + r[4] * py + r[5] * pz + t[1];
         const z = r[6] * px + r[7] * py + r[8] * pz + t[2];
         if (!(z > 0)) continue;
-        const ax = camera.fx / z;
-        const az = -camera.fx * x / (z * z);
-        const by = camera.fy / z;
-        const bz = -camera.fy * y / (z * z);
-        const gx0 = ax * r[0] + az * r[6];
-        const gx1 = ax * r[1] + az * r[7];
-        const gx2 = ax * r[2] + az * r[8];
-        const gy0 = by * r[3] + bz * r[6];
-        const gy1 = by * r[4] + bz * r[7];
-        const gy2 = by * r[5] + bz * r[8];
+        let ax = camera.fx / z, ay = 0, az = -camera.fx * x / (z * z);
+        let bx = 0, by = camera.fy / z, bz = -camera.fy * y / (z * z);
+        if (camera.modelId === 5) {
+          const qx = x / z, qy = y / z, radius2 = qx * qx + qy * qy;
+          const radius = Math.sqrt(radius2), theta = Math.atan(radius), t2 = theta * theta;
+          const [k1, k2, k3, k4] = camera.fisheye;
+          const radial = 1 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4)));
+          const derivative = 1 + t2 * (3 * k1 + t2 * (5 * k2 + t2 * (7 * k3 + t2 * 9 * k4)));
+          const scale = radius > 1e-8 ? theta * radial / radius : 1;
+          const d = radius > 1e-8 ? (derivative / (1 + radius2) - scale) / radius2 : 0;
+          ax = camera.fx * (scale + d * qx * qx) / z;
+          ay = camera.fx * d * qx * qy / z;
+          az = -(ax * qx + ay * qy);
+          bx = camera.fy * d * qx * qy / z;
+          by = camera.fy * (scale + d * qy * qy) / z;
+          bz = -(bx * qx + by * qy);
+        }
+        if (camera.distortion !== null) {
+          const qx = x / z, qy = y / z;
+          const [, , a, b, c, d] = perspectiveProjection(camera, qx, qy);
+          ax = camera.fx * a / z;
+          ay = camera.fx * b / z;
+          az = -(ax * qx + ay * qy);
+          bx = camera.fy * c / z;
+          by = camera.fy * d / z;
+          bz = -(bx * qx + by * qy);
+        }
+        const gx0 = ax * r[0] + ay * r[3] + az * r[6];
+        const gx1 = ax * r[1] + ay * r[4] + az * r[7];
+        const gx2 = ax * r[2] + ay * r[5] + az * r[8];
+        const gy0 = bx * r[0] + by * r[3] + bz * r[6];
+        const gy1 = bx * r[1] + by * r[4] + bz * r[7];
+        const gy2 = bx * r[2] + by * r[5] + bz * r[8];
         h00 += gx0 * gx0 + gy0 * gy0;
         h01 += gx0 * gx1 + gy0 * gy1;
         h02 += gx0 * gx2 + gy0 * gy2;

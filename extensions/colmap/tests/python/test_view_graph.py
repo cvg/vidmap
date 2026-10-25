@@ -72,6 +72,37 @@ def test_essential_inlier_scoring_keeps_all_exact_inliers():
     np.testing.assert_array_equal(problem[2].pair(pair_id).inlier_indices, np.arange(5))
 
 
+@pytest.mark.parametrize(
+    "model,params",
+    [
+        ("SIMPLE_RADIAL", [400, 320, 240, 0.4]),
+        ("OPENCV", [400, 420, 320, 240, 0.15, -0.03, 0.002, -0.001]),
+        ("OPENCV_FISHEYE", [400, 420, 320, 240, 0, 0, 0, 0]),
+        ("RADIAL_FISHEYE", [400, 320, 240, 0.01, -0.001]),
+    ],
+)
+def test_non_pinhole_inliers_use_original_pixel_errors(model, params):
+    xyz = np.random.default_rng(4).uniform([-2, -1, 3], [2, 1, 6], (64, 3))
+    (rec, graph, data), pid = calibrated_two_view(xyz)
+    camera = rec.camera(1)
+    camera.model = pycolmap.CameraModelId(model)
+    camera.params = params
+    pose = graph.edges[pid].cam2_from_cam1
+    first, second = camera.img_from_cam(xyz), camera.img_from_cam(pose * xyz)
+    second[:, 1] += np.linspace(0, 8, len(xyz))
+    for iid, pixels in ((1, first), (2, second)):
+        for index, xy in enumerate(pixels):
+            rec.image(iid).point2D(index).xy = xy
+    native.prepare_image_bearings(rec, data)
+    options = native.InlierThresholdOptions()
+    options.max_epipolar_error_essential = 2.0
+    options.min_angle_from_epipole_deg = 0
+    expected = np.flatnonzero(native.relative_pose_residuals(pose, camera, first, camera, second) < 4)
+    assert 0 < len(expected) < len(xyz)
+    native.score_image_pair_inliers(options, rec, graph, data)
+    np.testing.assert_array_equal(data.pair(pid).inlier_indices, expected)
+
+
 def test_pair_filters_preserve_empty_pair_ratio_behavior():
     problem, pair_id = calibrated_two_view(np.array([[0.0, 0.0, 5.0]]))
     assert native.filter_pairs_by_inlier_ratio(0.5, *problem[1:]) == 1

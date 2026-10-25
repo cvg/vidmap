@@ -23,10 +23,12 @@ class CalibrationEvidence:
             raise ValueError("Calibration evidence requires an enabled predictor")
         if self.inference not in {"selected_batch", "per_view"}:
             raise ValueError("Unknown calibration inference")
-        if self.model != "PINHOLE" or self.pixel_domain != "working_images":
+        if self.model not in {"PINHOLE", "SIMPLE_DIVISIONAL"} or self.pixel_domain != "working_images":
             raise ValueError("Unsupported calibration prediction domain")
         if self.estimator == "da3" and (self.inference != "per_view" or self.model != "PINHOLE"):
             raise ValueError("DA3 calibration requires per-view pinhole predictions")
+        if self.model == "SIMPLE_DIVISIONAL" and self.inference != "selected_batch":
+            raise ValueError("Divisional calibration requires selected-batch GeoCalib predictions")
         if not self.observations:
             raise ValueError("Calibration results require camera associations")
         if len(set(self.observations)) != len(self.observations):

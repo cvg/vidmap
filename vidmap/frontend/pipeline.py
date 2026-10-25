@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass as result_dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,7 @@ from vidmap.frontend.preparation.tcorr_filtering import CorrespondenceFilter
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.options import ReplayCacheOptions
 from vidmap.mapper.replay.cache import ReplayCache
+from vidmap.mapper.replay.evidence.stages import database_file_summary
 from vidmap.utils.device import resolve_device
 from vidmap.utils.loop_closure_masks import write_loop_closure_masks
 
@@ -25,6 +27,8 @@ if TYPE_CHECKING:
     import torch
 
     from vidmap.configuration.config import FrontendConfig
+    from vidmap.frontend.depth import DepthFrontendResult
+    from vidmap.frontend.keyframes.processing import KeyframePlan
 
 __all__ = [
     "Frontend",
@@ -42,8 +46,6 @@ class FrontendArtifacts:
     sparse_features: IncrementalArtifactContract
     sparse_matches: IncrementalArtifactContract
     extended_matches: IncrementalArtifactContract
-    depth: IncrementalArtifactContract
-    full_depth: IncrementalArtifactContract | None = None
 
 
 @result_dataclass(frozen=True)
@@ -52,7 +54,7 @@ class TrackingFrontendResult:
 
     paths: FrontendPaths
     artifacts: FrontendArtifacts
-    keyframe_sequence: tuple[str, ...]
+    keyframes: KeyframePlan
     retrieval_pairs: tuple[ImagePair, ...]
     tcorr: Mapping[ImagePair, Any]
     lc_masks: Mapping[ImagePair, Any]
@@ -63,26 +65,19 @@ class TrackingFrontendResult:
         if not isinstance(self.tcorr, Mapping) or not isinstance(self.lc_masks, Mapping):
             raise TypeError("tcorr and lc_masks must be mappings")
         validate_correspondence_alignment(self.tcorr, self.lc_masks)
-        object.__setattr__(self, "keyframe_sequence", tuple(self.keyframe_sequence))
         object.__setattr__(self, "retrieval_pairs", tuple(tuple(pair) for pair in self.retrieval_pairs))
         object.__setattr__(self, "tcorr", immutable_array_mapping(self.tcorr))
         object.__setattr__(self, "lc_masks", immutable_array_mapping(self.lc_masks))
 
+    @property
+    def keyframe_sequence(self) -> tuple[str, ...]:
+        return self.keyframes.names
 
-def validate_tracking_result(result: TrackingFrontendResult, *, geocalib_inference: str | None) -> None:
-    """Reject inconsistent optional artifacts at the tracking boundary."""
+
+def validate_tracking_result(result: TrackingFrontendResult) -> None:
+    """Reject incomplete correspondence artifacts before database preparation."""
     if len(result.keyframe_sequence) < 2 or not result.artifacts.sparse_matches.expected_items:
         raise CacheMetadataMismatch("Frontend requires at least two keyframes and one track pair")
-    if result.artifacts.depth is None:
-        raise CacheMetadataMismatch("Depth frontend is enabled but its certified artifact is unavailable")
-    calibration = result.calibration
-    if geocalib_inference is not None:
-        if calibration is None or calibration.evidence.estimator != "geocalib" or calibration.artifact is None:
-            raise CacheMetadataMismatch("GeoCalib is enabled but its certified artifact is unavailable")
-        if calibration.evidence.inference != geocalib_inference:
-            raise CacheMetadataMismatch("GeoCalib inference disagrees with its calibration result")
-    elif calibration is not None and calibration.evidence.estimator == "geocalib":
-        raise CacheMetadataMismatch("GeoCalib is disabled but a calibration result was exposed")
 
 
 class Frontend:
@@ -143,38 +138,136 @@ class Frontend:
 
     def run(self, *, frontend_identity: Mapping[str, object]) -> MapperInputs:
         """Run the complete frontend and mapper-input publication workflow."""
-        tracking, verification = self._execute_verified_boundary(pre_geom_db_stop=False)
+        tracking, verification, depth = self._execute_verified_boundary(pre_geom_db_stop=False)
         mapper_inputs = write_verified_mapper_inputs(
             self.mapper_inputs_dir,
             tracking,
             verification,
+            depth=depth,
+            distortion_calibrated=self.preparation_plan.bootstrap_required,
             frontend_identity=frontend_identity,
             panorama=self.scene_parser.panorama_metadata(),
         )
         publish_full_depth_output(
             mapper_inputs.directory.parent,
             tracking.paths.full_depth_maps_path,
-            tracking.artifacts.full_depth,
+            depth.full,
         )
         verification.database_path.unlink()
         return mapper_inputs
 
     def run_pre_geom(self) -> Path:
         """Run frontend through deterministic pre-GV database construction."""
-        _, verification = self._execute_verified_boundary(pre_geom_db_stop=True)
+        _, verification, _ = self._execute_verified_boundary(pre_geom_db_stop=True)
         return verification.database_path
 
     def _execute_verified_boundary(self, *, pre_geom_db_stop: bool):
-        """Execute the shared tracking-to-database boundary in its canonical order."""
-        # Tracking owns all learned predictions and correspondence artifacts.
-        tracking = self.run_tracking()
+        """Calibrate native distorted images before choosing the depth projection."""
+        if self.preparation_plan.bootstrap_required and not pre_geom_db_stop:
+            # Import the required mapping runtime before expensive tracking starts.
+            from vidmap.mapper.runtime import load_mapping_runtime
 
+            load_mapping_runtime()
+
+        tracking = self.run_tracking()
+        if self.preparation_plan.bootstrap_required:
+            verification = self._verify(tracking, pre_geom_db_stop=pre_geom_db_stop)
+            if pre_geom_db_stop:
+                return tracking, verification, None
+            reconstruction = self._calibrate_distortion(verification.database_path)
+            from vidmap.frontend.depth_projection import resolve_depth_projections
+
+            projections = resolve_depth_projections(reconstruction, reconstruction.cameras)
+            del reconstruction  # Projections own the camera snapshots; release keypoints before inference.
+            depth = self._estimate_depth(tracking, projections=projections)
+        else:
+            depth = self._estimate_depth(tracking)
+            tracking = self._complete_camera_prediction(tracking, depth)
+            verification = self._verify(tracking, pre_geom_db_stop=pre_geom_db_stop)
+        if not pre_geom_db_stop and self.replay.write_enabled("database"):
+            self.replay.write_json("database", "summary.json", database_file_summary(verification.database_path))
+        return tracking, verification, depth
+
+    def _calibrate_distortion(self, database_path: Path):
+        """Refine cameras without changing verified pairs or original predictor evidence."""
+        import pycolmap
+
+        from vidmap.mapper.inputs.database import load_finalized_database
+        from vidmap.mapper.stages.distortion_calibration import calibrate_distorted_view_graph
+        from vidmap.mapper.stages.vgc_filter import ViewGraphFilter
+
+        options = self.preparation.distortion_calibration
+        state = load_finalized_database(database_path)
+        exclusions = ViewGraphFilter(
+            solve_state=state,
+            options=options.filter,
+            calibration_enabled=True,
+            initial_exclusion_ids=set(),
+        ).filter()
+        calibrate_distorted_view_graph(state, options, exclusions)
+        with pycolmap.Database.open(database_path) as database:
+            with pycolmap.DatabaseTransaction(database):
+                for camera in state.reconstruction.cameras.values():
+                    database.update_camera(camera)
+        return state.reconstruction
+
+    def _estimate_depth(self, tracking, *, projections=None) -> DepthFrontendResult:
+        from vidmap.frontend.depth import DepthEstimator
+
+        # Ordinary depth uses the original per-image geometry, before regrouping.
+        capture = tracking.capture if self.preparation_plan.bootstrap_required else self.scene_parser
+        return DepthEstimator(
+            scene_parser=capture,
+            paths=tracking.paths,
+            force_recompute=self.force_recompute,
+            keyframes=tracking.keyframes,
+            options=self.options.depth,
+            calibration_enabled=self.preparation_plan.camera_priors.estimator == "da3",
+            depth_projections=projections,
+            image_content_fingerprint=self.input_snapshot.image_content_fingerprint(tracking.keyframe_sequence),
+            device=self.device,
+        ).estimate(cache_full_depth_maps=self.cache_full_depth_maps)
+
+    def _complete_camera_prediction(self, tracking, depth):
+        from vidmap.frontend.geocalib import CameraPriorEstimator
+
+        options = self.preparation_plan.camera_priors
+        if options.estimator == "none":
+            return tracking
+        paths = tracking.paths
+        if options.estimator == "da3":
+            path, artifact = paths.depth_maps_path, depth.sampled
+        else:
+            artifact = CameraPriorEstimator(
+                rgb_dir=self.scene_parser.rgb_dir,
+                per_image_path=paths.geocalib_per_image_path,
+                batch_path=paths.geocalib_batch_path,
+                force_recompute=self.force_recompute,
+                keyframe_names=tracking.keyframe_sequence,
+                options=options,
+                image_content_fingerprint=self.input_snapshot.image_content_fingerprint(tracking.keyframe_sequence),
+                device=self.device,
+            ).estimate()
+            path = (
+                paths.geocalib_batch_path if options.inference == "selected_batch" else paths.geocalib_per_image_path
+            )
+        calibration = CalibrationResult.from_artifact(
+            path=path,
+            reconstruction=tracking.capture.rec,
+            image_names=tracking.keyframe_sequence,
+            options=options,
+            artifact=artifact,
+        )
+        return replace(tracking, calibration=calibration)
+
+    def _verify(self, tracking, *, pre_geom_db_stop):
         reconstruction = tracking.capture.rec
         if self.estimate_intrinsics:
             reconstruction = copy_unposed_reconstruction(reconstruction, tracking.keyframe_sequence)
             if tracking.calibration is None:
                 raise ValueError("Predicted initialization requires calibration results")
-            apply_calibration(tracking.calibration, reconstruction)
+            if not self.preparation_plan.bootstrap_required:
+                apply_calibration(tracking.calibration, reconstruction)
 
         correspondence_filter = CorrespondenceFilter(
             options=self.preparation.lc,
@@ -196,16 +289,15 @@ class Frontend:
             capture=tracking.capture,
             options=self.preparation.geom_verif,
             database_path=self.outputs_dir / ("database_pre_geom.db" if pre_geom_db_stop else "database_complete.db"),
-            replay=self.replay,
             repro_dir=self.repro_dir,
             estimate_intrinsics=self.estimate_intrinsics,
             pre_geom_db_stop=pre_geom_db_stop,
         )
         verification = geometric_verifier.verify(tracking, reconstruction, filtered.tcorr)
-        return tracking, verification
+        return verification
 
     def run_tracking(self) -> TrackingFrontendResult:
-        """Run tracking, depth, and optional GeoCalib stages."""
+        """Run tracking and any calibration needed for keyframing."""
         from vidmap.frontend.tracking.composition import TrackingPipeline
 
         tracking_pipeline = TrackingPipeline(
@@ -217,7 +309,6 @@ class Frontend:
             preparation_plan=self.preparation_plan,
             prepared_capture=self.prepared_capture,
             force_recompute=self.force_recompute,
-            cache_full_depth_maps=self.cache_full_depth_maps,
             deterministic=self.deterministic,
             repro_dir=self.repro_dir,
             device=self.device,

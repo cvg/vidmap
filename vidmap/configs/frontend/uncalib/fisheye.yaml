@@ -1,0 +1,5 @@
+defaults:
+  - geocalib
+
+camera_priors:
+  camera_model: OPENCV_FISHEYE

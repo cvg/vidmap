@@ -1,12 +1,13 @@
 """Schemas owned by mapper-input preparation."""
 
 from dataclasses import field as dc_field
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from pydantic_core import ArgsKwargs
 
-from vidmap.configuration.validators import dataclass
+from vidmap.configuration.validators import dataclass, instantiate_nested_options
+from vidmap.mapper.options.view_graph import VGCFilterOptions
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -15,6 +16,7 @@ class CameraPriorEstimationOptions:
     inference: Literal["per_view", "selected_batch"] = "selected_batch"
     initialization: Literal["predicted", "supplied"] = "predicted"
     max_images: int = 30
+    camera_model: str = dc_field(default="PINHOLE", metadata={"omit_default": True})
 
     @model_validator(mode="after")
     def validate_applicable_options(self):
@@ -51,12 +53,29 @@ class LCOptions:
     min_lc_score: float = 0.0
 
 
+@dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
+class DistortionCalibrationOptions:
+    """View-graph calibration used to choose the native-image depth crop."""
+
+    filter: VGCFilterOptions = dc_field(default_factory=VGCFilterOptions)
+    max_distortion_pairs: Annotated[int, Field(gt=0)] = 100
+    max_distortion_matches_per_pair: Annotated[int, Field(gt=0)] = 500
+
+    @model_validator(mode="before")
+    @classmethod
+    def instantiate_filter(cls, raw):
+        return instantiate_nested_options(raw, {"filter": VGCFilterOptions})
+
+
 @dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
 class PreparationOptions:
     """Frontend-owned policy for producing finalized mapper inputs."""
 
     lc: LCOptions = dc_field(default_factory=LCOptions)
     geom_verif: GeomVerifOptions = dc_field(default_factory=GeomVerifOptions)
+    distortion_calibration: DistortionCalibrationOptions = dc_field(
+        default_factory=DistortionCalibrationOptions, metadata={"omit_default": True}
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -71,6 +90,7 @@ class PreparationOptions:
         for name, option_type in {
             "lc": LCOptions,
             "geom_verif": GeomVerifOptions,
+            "distortion_calibration": DistortionCalibrationOptions,
         }.items():
             value = raw.get(name)
             if value is None:
