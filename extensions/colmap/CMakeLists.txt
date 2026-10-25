@@ -17,7 +17,7 @@ find_package(pybind11 3.1.0 CONFIG REQUIRED)
 set(VIDMAP_COLMAP_VERSION "4.3.0")
 set(
   VIDMAP_COLMAP_REVISION
-  "b1972bc226f58e095c8b75bc214f4bb2d8ba57e4"
+  "6cde3c7f078aa53aa2ecb39d900c0f89121819a2"
   CACHE STRING
   "Upstream COLMAP revision used by vidmap_native"
 )
@@ -72,7 +72,6 @@ set(
     src/bindings/mapping_sidecars.cc
     src/bindings/view_graph.cc
     src/bindings/tracks.cc
-    src/bindings/global_positioning.cc
 )
 
 pybind11_add_module(

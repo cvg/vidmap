@@ -240,45 +240,35 @@ def run_global_positioning(
         normal_depth = _loss(pass_options.loss_normal_depth)
         loop_depth = _loss(pass_options.loss_lc_depth)
         outlier_depth = _loss(options.track_filter.loss_normal_depth_outlier) if depth_outliers_marked else trivial
-        depth_groups, counts = gp_costs.split_depth_observations(selections, sidecars, depth_outlier_masks or {})
-        for image_id in counts:
-            value = initial_depth_map_scales.get(image_id, 1.0)
-            depth_scales[image_id] = np.array(
-                [np.log(max(1e-9, value)) if common.use_log_scale_for_depth_map_scales else value], dtype=float
-            )
-        for (loop, outlier), selection in depth_groups.items():
-            loss = loop_depth if loop else outlier_depth if outlier else normal_depth
-            gp_costs.append_depth_observations(
-                problem,
-                reconstruction,
-                sidecars,
-                selection,
-                depth_scales,
-                loss,
-                common.use_log_scale_for_depth_map_scales,
-                (
-                    native.MetricDepthResidualType.LOG_LINEAR
-                    if common.smooth_log_linear_transition
-                    else (
-                        native.MetricDepthResidualType.LOG
-                        if second_pass and options.second_pass.use_log_depth_residual
-                        else native.MetricDepthResidualType.LINEAR
-                    )
-                ),
-                common.zero_residuals_behind_camera,
-                common.log_linear_threshold,
-            )
-        diagnostics.num_metric_depth_residuals = sum(counts.values())
-        prior_loss = _loss(LossConfig(name=pass_options.scale_reg_loss_name, weight=pass_options.scale_reg_weight))
-        prior_cost = pyceres.factors.NormalPrior(
-            np.array([0.0 if common.use_log_scale_for_depth_map_scales else 1.0]),
-            np.array([[pass_options.scale_prior_stddev**2]]),
+        depth_groups, counts = gp_costs.split_depth_observations(
+            positioner,
+            reconstruction,
+            selections,
+            sidecars,
+            {} if depth_outlier_masks is None else depth_outlier_masks,
         )
-        for image_id, count in counts.items():
+        for image_id in counts:
+            value = initial_depth_map_scales[image_id] if image_id in initial_depth_map_scales else 1.0
+            depth_scales[image_id] = np.array([np.log(value)], dtype=float)
+        depth_options = pycolmap.GPDepthConstraintOptions(
+            residual_type=pycolmap.DepthResidualType.LOG_LINEAR if second_pass else pycolmap.DepthResidualType.LINEAR,
+            log_linear_threshold=common.log_linear_threshold,
+        )
+        for (loop, outlier, image_id), (depths, explicit_observations) in depth_groups.items():
+            loss = loop_depth if loop else outlier_depth if outlier else normal_depth
             scale = depth_scales[image_id]
-            problem.add_residual_block(prior_cost, gp_costs.scaled_loss(prior_loss, count), [scale])
-            if not common.use_log_scale_for_depth_map_scales:
-                problem.set_parameter_lower_bound(scale, 0, 1e-5)
+            if depths:
+                diagnostics.num_metric_depth_residuals += pycolmap.append_gp_depth_constraints(
+                    positioner, reconstruction, image_id, depths, scale, depth_options, loss
+                )
+            if len(explicit_observations):
+                diagnostics.num_metric_depth_residuals += gp_costs.append_lc_depths(
+                    problem, reconstruction, sidecars, explicit_observations, scale, loss, depth_options
+                )
+        prior_loss = _loss(LossConfig(name=pass_options.scale_reg_loss_name, weight=pass_options.scale_reg_weight))
+        prior_cost = pyceres.factors.NormalPrior(np.zeros(1), np.array([[pass_options.scale_prior_stddev**2]]))
+        for image_id, count in counts.items():
+            problem.add_residual_block(prior_cost, gp_costs.scaled_loss(prior_loss, count), [depth_scales[image_id]])
         diagnostics.num_scale_prior_residuals = len(counts)
     # Add optional temporal acceleration priors.
     temporal = options.temporal_acceleration
@@ -356,9 +346,7 @@ def run_global_positioning(
             pose.translation = -(pose.rotation * center)
 
     result.success = True
-    result.depth_map_scales = {
-        i: float(np.exp(v[0]) if common.use_log_scale_for_depth_map_scales else v[0]) for i, v in depth_scales.items()
-    }
+    result.depth_map_scales = {i: float(np.exp(v[0])) for i, v in depth_scales.items()}
     diagnostics.num_depth_map_scales = len(depth_scales)
     diagnostics.num_camera_centers = len(frame_centers)
     diagnostics.num_point3D_parameters = num_points
