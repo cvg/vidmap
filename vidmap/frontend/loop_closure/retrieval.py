@@ -3,6 +3,7 @@
 import logging
 import pprint
 from collections import defaultdict
+from itertools import chain
 from pathlib import Path
 
 import h5py
@@ -22,7 +23,7 @@ from vidmap.frontend.models.megaloc import MegaLocDescriptorModel, megaloc_cache
 from vidmap.utils.device import empty_device_cache
 from vidmap.utils.logging import progress_bars_enabled
 
-RETRIEVAL_PAIR_SELECTION_POLICY_VERSION = 1
+RETRIEVAL_PAIR_SELECTION_POLICY_VERSION = 3
 
 logger = logging.getLogger(__name__)
 
@@ -164,33 +165,24 @@ def _pairs_from_score_matrix(scores, invalid, num_select, min_score, return_scor
     return pairs
 
 
-def _retrieve_pairs(path, reference_query_dict, num_matched, min_score, return_scores, *, device: torch.device):
+def _retrieve_pairs(
+    path, names, reference_query_pairs, num_matched, min_score, return_scores, *, device: torch.device
+):
     with h5py.File(str(path), "r", libver="latest") as hfile:
-
-        def has_descriptor(name):
-            return name in hfile and "global_descriptor" in hfile[name]
-
-        references = [name for name in reference_query_dict if has_descriptor(name)]
-        queries = list(
-            dict.fromkeys(
-                query for candidates in reference_query_dict.values() for query in candidates if has_descriptor(query)
-            )
-        )
-        if not references or not queries:
+        available = [name for name in dict.fromkeys(names) if name in hfile and "global_descriptor" in hfile[name]]
+        if not available:
             return []
-        reference_descriptors = _load_descriptors(references, hfile).to(device)
-        query_descriptors = _load_descriptors(queries, hfile).to(device)
-    reference_indices = {name: index for index, name in enumerate(references)}
-    query_indices = {name: index for index, name in enumerate(queries)}
+        descriptors = _load_descriptors(available, hfile).to(device)
+    indices = {name: index for index, name in enumerate(available)}
     pairs = []
-    for reference, candidates in reference_query_dict.items():
-        if reference not in reference_indices:
+    for reference, candidates in reference_query_pairs:
+        if reference not in indices:
             continue
-        valid_queries = [query for query in candidates if query in query_indices]
+        valid_queries = [query for query in candidates if query in indices]
         if not valid_queries:
             continue
-        reference_descriptor = reference_descriptors[reference_indices[reference] : reference_indices[reference] + 1]
-        candidate_descriptors = query_descriptors[[query_indices[query] for query in valid_queries]]
+        reference_descriptor = descriptors[indices[reference] : indices[reference] + 1]
+        candidate_descriptors = descriptors[[indices[query] for query in valid_queries]]
         similarities = torch.einsum("id,jd->ij", reference_descriptor, candidate_descriptors)
         self_mask = np.array([reference])[:, None] == np.array(valid_queries)[None]
         pair_indices = _pairs_from_score_matrix(
@@ -212,7 +204,7 @@ def _retrieve_pairs(path, reference_query_dict, num_matched, min_score, return_s
 
 def generate_retrieval_pairs(
     sequence,
-    tcorr,
+    tcorr_counts,
     sequential_pairs,
     retrieval_path,
     tcorr_min_matches,
@@ -220,39 +212,53 @@ def generate_retrieval_pairs(
     nquery,
     lc_pair_nms=False,
     lc_pair_nms_radius=2,
+    max_pairs_per_frame_pair: int | None = None,
     *,
+    frame_camera_indices,
     device: torch.device,
 ):
     """Generate retrieval pairs excluding sequential and sufficiently tracked pairs."""
     if not retrieval_path.exists():
         raise ValueError("Retrieval features not found. Run compute_retrieval_features step first.")
 
-    sequential_pairs_set = {frozenset(pair) for pair in sequential_pairs}
-    tcorr_pairs_set = {frozenset(pair) for pair, matches in tcorr.items() if len(matches) > tcorr_min_matches}
-    untracked_pairs = defaultdict(list)
-    for id_a in range(len(sequence)):
-        for id_b in range(len(sequence)):
-            if id_a == id_b:
-                continue
-            pair = frozenset([sequence[id_a], sequence[id_b]])
-            if pair not in tcorr_pairs_set and pair not in sequential_pairs_set:
-                untracked_pairs[sequence[id_a]].append(sequence[id_b])
+    excluded_images = defaultdict(set)
+    for first, second in chain(
+        sequential_pairs, (pair for pair, count in tcorr_counts.items() if count > tcorr_min_matches)
+    ):
+        excluded_images[first].add(second)
+        excluded_images[second].add(first)
 
-    if not untracked_pairs:
+    def candidates():
+        for reference in sequence:
+            excluded = excluded_images[reference]
+            frame = frame_camera_indices[reference][0]
+            queries = [name for name in sequence if name not in excluded and frame_camera_indices[name][0] != frame]
+            if queries:
+                yield reference, queries
+
+    reference_queries = iter(candidates())
+    first = next(reference_queries, None)
+    if first is None:
         logger.info("No untracked pairs found for retrieval")
         return []
 
+    limit_frame_pairs = max_pairs_per_frame_pair is not None
     retrieval_pairs = _retrieve_pairs(
         retrieval_path,
-        untracked_pairs,
+        sequence,
+        chain((first,), reference_queries),
         nquery,
         retrieval_min_score,
-        lc_pair_nms,
+        lc_pair_nms or limit_frame_pairs,
         device=device,
     )
+    if limit_frame_pairs:
+        retrieval_pairs = _limit_rig_frame_pairs(retrieval_pairs, frame_camera_indices, max_pairs_per_frame_pair)
     if lc_pair_nms:
         raw_count = len(retrieval_pairs)
-        retrieval_pairs = endpoint_nms_retrieval_pairs(retrieval_pairs, sequence, radius=lc_pair_nms_radius)
+        retrieval_pairs = endpoint_nms_retrieval_pairs(
+            retrieval_pairs, sequence, radius=lc_pair_nms_radius, frame_camera_indices=frame_camera_indices
+        )
         logger.info(
             "LC pair endpoint NMS radius=%d: %d -> %d pairs",
             lc_pair_nms_radius,
@@ -260,18 +266,20 @@ def generate_retrieval_pairs(
             len(retrieval_pairs),
         )
     else:
+        if limit_frame_pairs:
+            retrieval_pairs = [(name0, name1) for name0, name1, _ in retrieval_pairs]
         retrieval_pairs = natsorted(tuple(natsorted(pair)) for pair in {frozenset(pair) for pair in retrieval_pairs})
 
     logger.info("Generated %d retrieval pairs, excluding sequential pairs", len(retrieval_pairs))
     return retrieval_pairs
 
 
-def endpoint_nms_retrieval_pairs(scored_pairs, sequence, radius):
+def endpoint_nms_retrieval_pairs(scored_pairs, sequence, radius, frame_camera_indices):
     """Keep the best retrieval edge per local query/target neighborhood."""
     if radius < 0:
         raise ValueError(f"lc_pair_nms_radius must be non-negative, got {radius}")
 
-    seq_index = {name: idx for idx, name in enumerate(sequence)}
+    seq_index = {name: frame_camera_indices[name][0] for name in sequence}
     best_by_pair = {}
     for name0, name1, score in scored_pairs:
         if name0 not in seq_index or name1 not in seq_index or name0 == name1:
@@ -292,14 +300,31 @@ def endpoint_nms_retrieval_pairs(scored_pairs, sequence, radius):
         key=lambda item: (-item[0], item[2][0], item[2][1]),
     )
     accepted = []
-    accepted_endpoints = []
+    accepted_endpoints = defaultdict(list)
     for _score, endpoints, pair in candidates:
+        camera_pair = tuple(frame_camera_indices[name][1] for name in pair)
         suppress = any(
             abs(endpoints[0] - previous[0]) <= radius and abs(endpoints[1] - previous[1]) <= radius
-            for previous in accepted_endpoints
+            for previous in accepted_endpoints[camera_pair]
         )
         if suppress:
             continue
         accepted.append(pair)
-        accepted_endpoints.append(endpoints)
+        accepted_endpoints[camera_pair].append(endpoints)
+    # Preserve temporal source/target order for inference; only persisted match
+    # rows are canonicalized, after sampling the directed dense field.
     return natsorted(accepted)
+
+
+def _limit_rig_frame_pairs(scored_pairs, frame_camera_indices, maximum):
+    """Bound verification per exposure pair while keeping the strongest views."""
+    accepted, seen, counts = [], set(), defaultdict(int)
+    for name0, name1, score in sorted(scored_pairs, key=lambda item: (-item[2], item[0], item[1])):
+        image_pair = frozenset((name0, name1))
+        frame_pair = frozenset((frame_camera_indices[name0][0], frame_camera_indices[name1][0]))
+        if image_pair in seen or counts[frame_pair] >= maximum:
+            continue
+        seen.add(image_pair)
+        counts[frame_pair] += 1
+        accepted.append((name0, name1, score))
+    return accepted

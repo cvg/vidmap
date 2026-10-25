@@ -14,12 +14,8 @@ logger = logging.getLogger("vidmap.frontend.keyframes.processing")
 
 def get_gt_frame_indices(sequence, scene_parser):
     """Return sequence indices for frames that have ground truth poses."""
-    gt_names = set()
-    total_images = 0
-    for image in scene_parser.rec.images.values():
-        total_images += 1
-        if image.has_pose:
-            gt_names.add(image.name)
+    gt_names = scene_parser.forced_keyframe_names
+    total_images = len(scene_parser.rec.images)
 
     gt_indices = []
     for idx, name in enumerate(sequence):

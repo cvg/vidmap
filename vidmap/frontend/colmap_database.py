@@ -9,21 +9,22 @@ from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pycolmap
 from tqdm import tqdm
 
-from vidmap.frontend.cache import CacheMetadataMismatch, read_pair_artifact, validate_incremental_cache
+from vidmap.datasets.capture import copy_unposed_reconstruction
+from vidmap.frontend.cache import validate_incremental_cache
 from vidmap.frontend.correspondences import ImagePair
+from vidmap.mapper.inputs.snapshot import require_finalized_sqlite
 from vidmap.utils.io import get_keypoints, get_matches
 from vidmap.utils.logging import progress_bars_enabled
 
 if TYPE_CHECKING:
     from vidmap.frontend.pipeline import TrackingFrontendResult
 
-CameraPolicy = Literal["transitive", "per_image", "shared"]
 logger = logging.getLogger(__name__)
 
 
@@ -99,22 +100,39 @@ def import_features(image_ids: Mapping[str, int], database_path: Path, features_
         db.close()
 
 
+def _transitive_reconstruction(reconstruction, image_names):
+    """Give each diagnostic image a fresh singleton camera, in name order."""
+    names = set(image_names)
+    images = sorted(
+        (image for image in reconstruction.images.values() if image.name in names), key=lambda image: image.name
+    )
+    if {image.name for image in images} != names:
+        raise ValueError("Database reconstruction is missing requested images")
+    selected = pycolmap.Reconstruction()
+    for camera_id, image in enumerate(images, start=1):
+        camera = pycolmap.Camera(reconstruction.camera(image.camera_id).todict())
+        camera.camera_id = camera_id
+        selected.add_camera_with_trivial_rig(camera)
+        selected.add_image_with_trivial_frame(
+            pycolmap.Image(name=image.name, camera_id=camera_id, image_id=image.image_id)
+        )
+    return selected
+
+
 def build_colmap_database(
     database_path: Path,
-    reconstruction,
+    reconstruction: pycolmap.Reconstruction,
     image_names: Sequence[str],
     sparse_features_path: Path,
     pairs: Sequence[ImagePair],
     *,
-    camera_policy: CameraPolicy,
     prior_focal_length: bool,
+    diagnostic_transitive: bool = False,
     sparse_matches_path: Path | None = None,
     matches: Mapping[ImagePair, object] | None = None,
     seed_two_view_geometry: bool = False,
-) -> dict[str, int]:
-    """Create and populate one frontend-owned COLMAP database."""
-    if camera_policy not in ("transitive", "per_image", "shared"):
-        raise ValueError(f"Unsupported camera policy: {camera_policy}")
+) -> pycolmap.Reconstruction:
+    """Serialize prepared topology, or explicitly flatten a diagnostic database."""
     if (sparse_matches_path is None) == (matches is None):
         raise ValueError("Exactly one match source is required")
     image_names = tuple(image_names)
@@ -123,85 +141,32 @@ def build_colmap_database(
     if len(set(image_names)) != len(image_names):
         raise ValueError("Database image names must be unique")
 
-    database_path.unlink(missing_ok=True)
+    require_finalized_sqlite(database_path)
     build_path = database_path.with_name(f".{database_path.name}.building")
     build_path.unlink(missing_ok=True)
-    db = pycolmap.Database.open(build_path)
-    base_succeeded = False
+    logger.info("Building COLMAP database at %s", build_path)
     try:
-        with pycolmap.DatabaseTransaction(db):
-            selected_names = set(image_names)
-            image_ids: dict[str, int] = {}
-            shared_camera_added = False
-            shared_camera_signature = None
-            transitive_camera_id = 1
-
-            for reconstruction_index, (image_id, image) in enumerate(
-                sorted(reconstruction.images.items(), key=lambda item: item[1].name)
-            ):
-                imname = image.name
-                if imname not in selected_names:
-                    continue
-                camera = reconstruction.cameras[image.camera_id]
-
-                image_ids[imname] = image_id
-
-                write_camera = True
-                if camera_policy == "shared":
-                    database_camera_id = 0
-                    signature = (
-                        camera.model,
-                        camera.width,
-                        camera.height,
-                        tuple(np.asarray(camera.params).tolist()),
-                    )
-                    if shared_camera_signature is None:
-                        shared_camera_signature = signature
-                    elif signature != shared_camera_signature:
-                        raise ValueError(
-                            "Shared-camera database policy requires identical camera models, dimensions, and parameters"
-                        )
-                    if shared_camera_added:
-                        write_camera = False
-                    else:
-                        shared_camera_added = True
+        with pycolmap.Database.open(build_path) as db:
+            with pycolmap.DatabaseTransaction(db):
+                if diagnostic_transitive:
+                    selected = _transitive_reconstruction(reconstruction, image_names)
                 else:
-                    if camera_policy == "transitive":
-                        database_camera_id = transitive_camera_id
-                        transitive_camera_id += 1
-                    else:
-                        database_camera_id = reconstruction_index
-
-                if write_camera:
-                    db.write_camera(
-                        pycolmap.Camera(
-                            camera_id=database_camera_id,
-                            model=camera.model,
-                            width=camera.width,
-                            height=camera.height,
-                            params=camera.params,
-                            has_prior_focal_length=prior_focal_length,
-                        ),
-                        use_camera_id=True,
-                    )
-                db.write_image(
-                    pycolmap.Image(name=imname, camera_id=database_camera_id, image_id=image_id),
-                    use_image_id=True,
-                )
-
-            missing_names = sorted(selected_names - set(image_ids))
-            if missing_names:
-                raise ValueError(f"Database reconstruction is missing requested image {missing_names[0]!r}")
-        base_succeeded = True
-    finally:
-        try:
-            db.close()
-        finally:
-            if not base_succeeded:
-                build_path.unlink(missing_ok=True)
-
-    imports_succeeded = False
-    try:
+                    selected = copy_unposed_reconstruction(reconstruction, image_names)
+                for camera in selected.cameras.values():
+                    camera.has_prior_focal_length = prior_focal_length
+                images = selected.images.values()
+                if diagnostic_transitive:
+                    images = sorted(images, key=lambda image: image.name)
+                image_ids = {image.name: image.image_id for image in images}
+                camera_ids = dict.fromkeys(selected.image(image_id).camera_id for image_id in image_ids.values())
+                for camera_id in camera_ids:
+                    db.write_camera(selected.camera(camera_id), use_camera_id=True)
+                for rig in selected.rigs.values():
+                    db.write_rig(rig, use_rig_id=True)
+                for frame in selected.frames.values():
+                    db.write_frame(frame, use_frame_id=True)
+                for image_id in image_ids.values():
+                    db.write_image(selected.image(image_id), use_image_id=True)
         import_features(image_ids, build_path, sparse_features_path)
         _import_matches(
             image_ids,
@@ -211,12 +176,10 @@ def build_colmap_database(
             matches=matches,
             seed_two_view_geometry=seed_two_view_geometry,
         )
-        imports_succeeded = True
+        build_path.replace(database_path)
     finally:
-        if not imports_succeeded:
-            build_path.unlink(missing_ok=True)
-    build_path.replace(database_path)
-    return image_ids
+        build_path.unlink(missing_ok=True)
+    return selected
 
 
 def create_database_from_frontend(
@@ -225,14 +188,11 @@ def create_database_from_frontend(
     database_path: Path,
     *,
     estimate_intrinsics: bool,
-    matches: dict[ImagePair, object] | None = None,
-) -> dict[str, int]:
+    matches: Mapping[ImagePair, object],
+) -> pycolmap.Reconstruction:
     """Build a COLMAP database from a validated frontend result."""
     paths = frontend_result.paths
     artifacts = frontend_result.artifacts
-    pairs = read_pair_artifact(paths.track_pairs_path, artifacts.track_pairs.metadata)
-    if tuple(pairs) != tuple(frontend_result.track_pairs):
-        raise CacheMetadataMismatch("Track-pair cache changed after frontend")
     validate_incremental_cache(
         paths.sparse_features_path,
         artifacts.sparse_features.metadata,
@@ -243,21 +203,13 @@ def create_database_from_frontend(
         artifacts.sparse_matches.metadata,
         artifacts.sparse_matches.expected_items,
     )
-
-    import_pairs = (
-        tuple(frontend_result.track_pairs)
-        if matches is None
-        else tuple(sorted(matches, key=lambda pair: (str(pair[0]), str(pair[1]))))
-    )
     return build_colmap_database(
         database_path,
         initial_reconstruction,
         frontend_result.keyframe_sequence,
         paths.sparse_features_path,
-        import_pairs,
-        camera_policy="shared" if estimate_intrinsics else "per_image",
+        tuple(sorted(matches, key=lambda pair: (str(pair[0]), str(pair[1])))),
         prior_focal_length=not estimate_intrinsics,
-        sparse_matches_path=paths.sparse_matches_path if matches is None else None,
         matches=matches,
     )
 

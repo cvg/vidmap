@@ -26,6 +26,23 @@ from .native_options import build_inlier_threshold_options
 logger = logging.getLogger(__name__)
 
 
+def _fixed_stereo_pose(rec, first, second):
+    """Use calibrated sensor poses for two simultaneous views of one frame."""
+    if first.camera_id == second.camera_id:
+        raise ValueError("Same-frame relative pose requires distinct calibrated sensors")
+    rig = rec.rigs[rec.frames[first.frame_id].rig_id]
+    poses = []
+    for image in (first, second):
+        camera = rec.cameras[image.camera_id]
+        if not camera.has_prior_focal_length:
+            raise ValueError("Same-frame relative pose requires fixed calibrated intrinsics")
+        pose = pycolmap.Rigid3d() if rig.is_ref_sensor(camera.sensor_id) else rig.sensor_from_rig(camera.sensor_id)
+        if pose is None or not np.isfinite(pose.matrix()).all() or abs(np.linalg.norm(pose.rotation.quat) - 1) > 1e-8:
+            raise ValueError("Same-frame relative pose requires finite fixed sensor transforms")
+        poses.append(pose)
+    return poses[1] * poses[0].inverse()
+
+
 @dataclass(frozen=True)
 class RelativePoseResult:
     inlier_thresholds: InlierThresholdOptions
@@ -45,10 +62,26 @@ class RelativePoseEstimator:
         rec = self.solve_state.reconstruction
         cameras = rec.cameras
         images = rec.images
-        consecutive_pair_ids = self.consecutive_pair_ids
+        consecutive_pair_ids = set(self.consecutive_pair_ids)
         inlier_thresholds = self.inlier_threshold_options
         native_inlier_thresholds = build_inlier_threshold_options(inlier_thresholds)
         filtered_consecutive_pairs = set()
+        valid_pair_ids = []
+        fixed_poses = {}
+        for pair_id in tqdm(
+            state.pair_order,
+            desc="Filtering valid image pairs",
+            disable=not progress_bars_enabled(),
+        ):
+            if not state.pose_graph.is_valid(pair_id):
+                continue
+            valid_pair_ids.append(pair_id)
+            first_id, second_id = pycolmap.pair_id_to_image_pair(pair_id)
+            first, second = images[first_id], images[second_id]
+            if first.frame_id == second.frame_id:
+                if pair_id in consecutive_pair_ids:
+                    raise ValueError("consecutive_pair_ids must contain temporal pairs, not same-frame stereo")
+                fixed_poses[pair_id] = _fixed_stereo_pose(rec, first, second)
         identity_pose = pycolmap.Rigid3d()
         for pair_id, edge in state.pose_graph.edges.items():
             edge.cam2_from_cam1 = identity_pose
@@ -75,14 +108,6 @@ class RelativePoseEstimator:
             for image_id, image in images.items()
         }
 
-        valid_pair_ids = []
-        for image_pair_id in tqdm(
-            state.pair_order,
-            desc="Filtering valid image pairs",
-            disable=not progress_bars_enabled(),
-        ):
-            if state.pose_graph.is_valid(image_pair_id):
-                valid_pair_ids.append(image_pair_id)
         logger.info("Estimating relative poses for %d image pairs", len(valid_pair_ids))
 
         write_replay = self.replay.write_enabled("relative_pose")
@@ -97,8 +122,18 @@ class RelativePoseEstimator:
             image_valid_cache=image_valid_cache,
         )
         pair_args_list = []
+        results: dict[int, MDRPResult] = {}
         for image_pair_id in valid_pair_ids:
             image_pair = state.pair_data(image_pair_id)
+            if image_pair_id in fixed_poses:
+                results[image_pair_id] = {
+                    "is_valid": True,
+                    "cam2_from_cam1": fixed_poses[image_pair_id],
+                    "inliers": np.empty(0, dtype=np.int32),
+                    # No depth-scale fit: retain the neutral replay-only value.
+                    "rel_depth_scale": 1.0,
+                }
+                continue
             pair_args_list.append(
                 (
                     image_pair_id,
@@ -107,7 +142,6 @@ class RelativePoseEstimator:
                 )
             )
 
-        results: dict[int, MDRPResult] = {}
         if self.options.max_workers == 1:
             for pair_args in tqdm(
                 pair_args_list,
@@ -176,6 +210,12 @@ class RelativePoseEstimator:
                     newly_filtered,
                 )
             filtered_consecutive_pairs = current
+
+        if write_replay:
+            for pair_id in fixed_poses:
+                results[pair_id]["inliers"] = np.asarray(
+                    state.pair_data(pair_id).inlier_indices, dtype=np.int32
+                ).copy()
 
         summary = (
             relative_pose_summary(

@@ -298,7 +298,7 @@ def validate_complete_payload(path: Path, metadata: Mapping[str, Any]) -> None:
             if set(hfile.keys()) == {PAYLOAD_DATASET} and isinstance(hfile[PAYLOAD_DATASET], h5py.Dataset):
                 data = hfile[PAYLOAD_DATASET][:]
                 stage = metadata.get("stage")
-                if stage in {"track_pairs", "retrieval_pairs"}:
+                if stage == "retrieval_pairs":
                     if data.ndim != 2 or data.shape[1] != 2 or data.dtype.kind not in {"O", "S", "U"}:
                         raise CacheMetadataMismatch(f"{path}: malformed pair payload")
                     decode_pair_array(path, data)

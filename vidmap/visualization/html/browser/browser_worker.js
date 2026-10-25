@@ -60,16 +60,25 @@
       const height = checkedCount(view.getBigUint64(offset + 16, true), "camera height");
       offset += 24;
       requireBytes(view, offset, parameterCount * 8, "camera parameters");
-      const fx = view.getFloat64(offset, true);
-      const fy = SINGLE_FOCAL_MODELS.has(modelId) ? fx : view.getFloat64(offset + 8, true);
-      const principalOffset = SINGLE_FOCAL_MODELS.has(modelId) ? 8 : 16;
-      const cx = view.getFloat64(offset + principalOffset, true);
-      const cy = view.getFloat64(offset + principalOffset + 8, true);
-      cameras.set(cameraId, {fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height});
+      cameras.set(cameraId, cameraParameters(modelId, width, height,
+        new DataView(buffer, offset, parameterCount * 8)));
       offset += parameterCount * 8;
     }
     if (offset !== view.byteLength) throw new Error(`Unexpected trailing cameras.bin bytes: ${view.byteLength - offset}`);
     return cameras;
+  }
+
+  function cameraParameters(modelId, width, height, view) {
+    const count = CAMERA_PARAMETER_COUNTS[modelId];
+    if (count === undefined || view.byteLength !== count * 8) {
+      throw new Error("Invalid native camera parameters");
+    }
+    const fx = view.getFloat64(0, true);
+    const fy = SINGLE_FOCAL_MODELS.has(modelId) ? fx : view.getFloat64(8, true);
+    const principalOffset = SINGLE_FOCAL_MODELS.has(modelId) ? 8 : 16;
+    const cx = view.getFloat64(principalOffset, true);
+    const cy = view.getFloat64(principalOffset + 8, true);
+    return {modelId: modelId, fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height};
   }
 
   function quaternionRotation(w, x, y, z) {
@@ -159,6 +168,17 @@
     return candidates.length === 1 ? candidates[0] : null;
   }
 
+  function filenameTimestamps(names) {
+    const tokens = names.map(numericTimestampToken);
+    if (tokens.length === 0 || tokens.some(token => token === null)) return null;
+    const values = tokens.map(Number);
+    const unique = values.every(
+      (value, index) => Number.isFinite(value) && (index === 0 || value > values[index - 1])
+    );
+    const scale = unique ? inferredTimestampScale(tokens, values) : null;
+    return scale === null ? null : values.map(value => (value - values[0]) / scale);
+  }
+
   function imageTimeline(images) {
     const entries = Array.from(images.entries()).map(([imageId, image]) => ({
       imageId: imageId,
@@ -174,22 +194,112 @@
     } else {
       entries.sort((left, right) => left.imageId - right.imageId);
     }
-    let timestampsSeconds = null;
-    if (hasNumericNames && entries.length > 0) {
-      const tokens = entries.map(entry => entry.token);
-      const values = tokens.map(Number);
-      const unique = values.every(
-        (value, index) => Number.isFinite(value) && (index === 0 || value > values[index - 1])
-      );
-      const scale = unique ? inferredTimestampScale(tokens, values) : null;
-      if (scale !== null) timestampsSeconds = values.map(value => (value - values[0]) / scale);
-    }
+    const timestampsSeconds = filenameTimestamps(entries.map(entry => entry.name));
     if (timestampsSeconds === null) entries.sort((left, right) => left.imageId - right.imageId);
     return {
       imageIds: entries.map(entry => entry.imageId),
       names: entries.map(entry => entry.name),
       timestampsSeconds: timestampsSeconds
     };
+  }
+
+  function parseFrames(buffer, images) {
+    const view = new DataView(buffer);
+    requireBytes(view, 0, 8, "frames.bin header");
+    const count = checkedCount(view.getBigUint64(0, true), "frame count");
+    const frames = new Map();
+    const assigned = new Set();
+    let offset = 8;
+    for (let index = 0; index < count; ++index) {
+      requireBytes(view, offset, 68, "frame record");
+      const frameId = view.getUint32(offset, true);
+      const rigId = view.getUint32(offset + 4, true);
+      const dataCount = view.getUint32(offset + 64, true);
+      offset += 68;
+      requireBytes(view, offset, dataCount * 16, "frame data IDs");
+      if (frames.has(frameId)) throw new Error("Duplicate COLMAP frame ID");
+      const members = new Map();
+      for (let item = 0; item < dataCount; ++item, offset += 16) {
+        const type = view.getInt32(offset, true);
+        const cameraId = view.getUint32(offset + 4, true);
+        const imageId = checkedCount(view.getBigUint64(offset + 8, true), "frame image ID");
+        if (type !== 0) continue;
+        if (members.has(cameraId) || assigned.has(imageId) ||
+            (images.has(imageId) && images.get(imageId).cameraId !== cameraId)) {
+          throw new Error("COLMAP frame membership contradicts images.bin");
+        }
+        members.set(cameraId, imageId);
+        if (images.has(imageId)) assigned.add(imageId);
+      }
+      frames.set(frameId, {frameId, rigId, members});
+    }
+    if (offset !== view.byteLength || assigned.size !== images.size) {
+      throw new Error("COLMAP frames must cover all registered images exactly once");
+    }
+    return frames;
+  }
+
+  function frameTimeline(images, framesBuffer = null, sequence = null) {
+    const actual = framesBuffer === null ? null : parseFrames(framesBuffer, images);
+    const camerasByRig = new Map();
+    for (const frame of actual?.values() ?? []) {
+      if (!camerasByRig.has(frame.rigId)) camerasByRig.set(frame.rigId, new Set());
+      for (const cameraId of frame.members.keys()) camerasByRig.get(frame.rigId).add(cameraId);
+    }
+    if (sequence === null && Array.from(camerasByRig.values()).every(cameras => cameras.size <= 1)) {
+      const ordinary = imageTimeline(images);
+      return {...ordinary,
+        frames: ordinary.imageIds.map((id, i) => ({frameId: null, rigId: null,
+          cameraIds: [images.get(id).cameraId], imageIndices: [i]})),
+        frameImageOffsets: ordinary.imageIds.map((_, i) => i).concat([ordinary.imageIds.length])};
+    }
+    if (actual === null) throw new Error("Capture grouping requires actual COLMAP frames.bin");
+    const timesByFrame = new Map();
+    let ordered;
+    if (sequence !== null) {
+      const ids = sequence.frame_ids, times = sequence.timestamps_ns;
+      if (Object.keys(sequence).sort().join(',') !== 'frame_ids,timestamps_ns' ||
+          !Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length ||
+          ids.some(id => !Number.isSafeInteger(id) || id < 0 || id >= 4294967295) ||
+          (times !== null && (!Array.isArray(times) || times.length !== ids.length ||
+            times.some((time, i) => typeof time !== 'bigint' || (i > 0 && time <= times[i-1]))))) {
+        throw new Error("Invalid mapper frame sequence");
+      }
+      const selected = new Set(ids);
+      if (Array.from(actual.keys()).some(id => !selected.has(id))) {
+        throw new Error("Mapper frame sequence does not cover COLMAP frames");
+      }
+      if (times !== null) ids.forEach((id, i) => timesByFrame.set(id, times[i]));
+      ordered = ids.filter(id => actual.has(id)).map(id => actual.get(id));
+    } else {
+      ordered = Array.from(actual.values()).sort((a,b) => a.frameId-b.frameId);
+    }
+    for (const [rigId, cameras] of camerasByRig) {
+      camerasByRig.set(rigId, Array.from(cameras).sort((a,b) => a-b));
+    }
+    const imageIds = [], names = [], frames = [], frameImageOffsets = [0], times = [];
+    for (const record of ordered) {
+      if (!Array.from(record.members.values()).some(id => images.has(id))) continue;
+      const cameraIds = camerasByRig.get(record.rigId);
+      const imageIndices = cameraIds.map(cameraId => {
+        const id = record.members.get(cameraId);
+        if (!images.has(id)) return null;
+        const index = imageIds.length;
+        imageIds.push(id);
+        names.push(images.get(id).name);
+        return index;
+      });
+      frames.push({frameId:record.frameId,rigId:record.rigId,cameraIds,imageIndices});
+      frameImageOffsets.push(imageIds.length);
+      if (timesByFrame.size) times.push(timesByFrame.get(record.frameId));
+    }
+    if (frames.length === 0) throw new Error("No registered capture frames");
+    // Native grouping/order stays authoritative. Ordinary single-image captures
+    // may omit explicit timing even when filenames already encode it.
+    const inferred = frames.every(frame => frame.cameraIds.length === 1)
+      ? filenameTimestamps(names) : null;
+    return {imageIds,names,frames,frameImageOffsets,
+      timestampsSeconds:times.length === 0 ? inferred : times.map(value => Number(value-times[0])/1e9)};
   }
 
   function cameraCenter(image) {
@@ -481,6 +591,8 @@
     parseCameras: parseCameras,
     parseImages: parseImages,
     imageTimeline: imageTimeline,
+    frameTimeline: frameTimeline,
+    parseFrames: parseFrames,
     cameraGeometry: cameraGeometry,
     parsePointsForDisplay: parsePointsForDisplay,
     computeCovariances: computeCovariances,
@@ -495,7 +607,7 @@
         if (message.command === "load") {
           const buffers = message.buffers;
           const images = parseImages(buffers["images.bin"]);
-          const timeline = imageTimeline(images);
+          const timeline = frameTimeline(images, message.framesBuffer ?? null, message.frameSequence ?? null);
           const keyframeImageIds = timeline.imageIds;
           const points = parsePointsForDisplay(
             buffers["points3D.bin"],

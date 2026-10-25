@@ -42,7 +42,8 @@ def solve(problem, sequence_ids=None, **option_values):
     return set(problem[0].reg_image_ids())
 
 
-def test_disconnected_graph_solves_only_the_largest_component():
+@pytest.mark.parametrize("threshold", [0.0, 2.0])
+def test_disconnected_graph_preserves_dev_output_policy(threshold):
     image_ids = [1, 2, 3, 4, 5]
     edges = [
         (1, 2, [0.0, 0.04, 0.0]),
@@ -51,10 +52,13 @@ def test_disconnected_graph_solves_only_the_largest_component():
     ]
     problem = rotation_problem(image_ids, set(image_ids), edges)
 
-    before = {i: problem[0].image(i).cam_from_world().matrix().copy() for i in (4, 5)}
-    solve(problem)
-    for i, pose in before.items():
-        np.testing.assert_array_equal(problem[0].image(i).cam_from_world().matrix(), pose)
+    before = {i: problem[0].image(i).cam_from_world().params.copy() for i in (4, 5)}
+    assert solve(problem, max_rotation_error_deg=threshold) == ({1, 2, 3} if threshold else set(image_ids))
+    assert all(edge.valid for edge in problem[1].edges.values())
+    for image_id, pose in before.items():
+        assert problem[0].image(image_id).has_pose == (threshold == 0)
+        if threshold == 0:
+            np.testing.assert_array_equal(problem[0].image(image_id).cam_from_world().params, pose)
     for a, b, angle_axis in edges[:2]:
         relative = (
             problem[0].image(b).cam_from_world().rotation * problem[0].image(a).cam_from_world().rotation.inverse()
@@ -129,12 +133,18 @@ def test_vidmap_losses_and_tracking_initialization(monkeypatch, skip_loops):
     def capture(options, local_graph, reconstruction):
         losses.append(options.ceres.loss_function_type)
         assert set(local_graph.edges) == set(graph.edges) - {loop_id}
+        assert options.skip_initialization == (len(losses) > 1)
+        assert not options.refine_sensor_from_rig
         rotations = {i: image.cam_from_world().rotation.matrix().copy() for i, image in reconstruction.images.items()}
         owner = create(options, local_graph, reconstruction)
         assert owner.problem.num_residual_blocks() == 2
-        for image_id, image in reconstruction.images.items():
-            expected = rotations[image_id] if options.skip_initialization else np.eye(3)
-            np.testing.assert_allclose(image.cam_from_world().rotation.matrix(), expected, atol=1e-12)
+        if options.skip_initialization:
+            for image_id, image in reconstruction.images.items():
+                np.testing.assert_allclose(image.cam_from_world().rotation.matrix(), rotations[image_id], atol=1e-12)
+        # Even though the loop is inconsistent, tracking edges initialize all rotations to identity.
+        if len(losses) == 1:
+            for image in reconstruction.images.values():
+                np.testing.assert_allclose(image.cam_from_world().rotation.matrix(), np.eye(3), atol=1e-12)
 
         class Solve:
             problem = owner.problem
@@ -178,8 +188,13 @@ def test_loop_closures_bridge_nearest_temporal_gaps(monkeypatch, skip_loops, all
         if all_loops or (first, second) != (1, 2):
             pair.are_loop_closure = np.ones(10, dtype=np.uint8)
     create = pycolmap.create_default_ceres_rotation_averager
+    graphs = []
 
     def capture(options, local_graph, reconstruction):
+        if graphs:
+            assert local_graph is graphs[0]
+        graphs.append(local_graph)
+        assert options.skip_initialization == (len(graphs) > 1)
         assert {pid for pid, edge in local_graph.edges.items() if edge.valid} == {
             pycolmap.image_pair_to_pair_id(a, b) for a, b in [(1, 2), (2, 3), (1, 4)]
         }
@@ -190,6 +205,7 @@ def test_loop_closures_bridge_nearest_temporal_gaps(monkeypatch, skip_loops, all
         np.testing.assert_allclose(reconstruction.image(4).cam_from_world().rotation.matrix(), expected, atol=1e-12)
 
         class Solve:
+            problem = owner.problem
             add_relative_rotation_residual = owner.add_relative_rotation_residual
 
             def solve(self):
@@ -215,7 +231,9 @@ def test_loop_closures_bridge_nearest_temporal_gaps(monkeypatch, skip_loops, all
     monkeypatch.setattr(pycolmap, "create_default_ceres_rotation_averager", capture)
     # Pair (1, 4) is closer in time than (3, 4), despite fewer inliers and a larger ID gap.
     solve(problem, sequence_ids=[3, 2, 1, 4, 5, 6], filter_risky_loop_closure_pairs=skip_loops)
+    assert len(graphs) == 2
     assert all(edge.num_matches == 0 for edge in graph.edges.values())
+    assert all(edge.valid for edge in graph.edges.values())
 
 
 def test_filtering_every_edge_fails():

@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--images",
         type=Path,
-        help="Optional image root for embedded keyframe previews (requires --run-dir).",
+        help="Optional image root (requires --run-dir).",
     )
     parser.add_argument(
         "-o",

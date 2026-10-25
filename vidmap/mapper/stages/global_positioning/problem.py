@@ -17,15 +17,15 @@ from vidmap.mapper.playback_trace import SolverPlaybackOptions
 
 @dataclass(frozen=True)
 class TemporalAccelerationPrior:
-    prev_image_id: int
-    image_id: int
-    next_image_id: int
+    prev_frame_id: int
+    frame_id: int
+    next_frame_id: int
     dt_prev: float
     dt_next: float
     sqrt_observation_count: float
 
     def __post_init__(self):
-        ids = (self.prev_image_id, self.image_id, self.next_image_id)
+        ids = (self.prev_frame_id, self.frame_id, self.next_frame_id)
         values = (self.dt_prev, self.dt_next, self.sqrt_observation_count)
         if len(set(ids)) != 3 or any(not np.isfinite(v) or v <= 0 for v in values):
             raise ValueError("invalid temporal acceleration prior")
@@ -59,17 +59,17 @@ def _loss(config):
     return pyceres.LossFunction(dict(name=config.name, params=[config.scale], magnitude=config.weight))
 
 
-def prepare_observations(reconstruction, sidecars, options: GPOptions, image_timeline=()):
+def prepare_observations(reconstruction, sidecars, options: GPOptions, frame_timeline=()):
     first = options.first_pass
     if first.sequential_support_warmup_rounds:
-        if len(image_timeline) != reconstruction.num_images() or set(image_timeline) != set(reconstruction.images):
-            raise ValueError("Sequential support requires an exact unique image timeline")
+        if len(frame_timeline) != reconstruction.num_frames() or set(frame_timeline) != set(reconstruction.frames):
+            raise ValueError("Sequential support requires an exact unique frame timeline")
     return gp_costs.prepare_observations(
         reconstruction,
         sidecars,
         options.track_filter.min_num_views_per_track,
         options.common.use_lc_observations,
-        image_timeline,
+        frame_timeline,
         first.sequential_support_observations_per_track if first.sequential_support_warmup_rounds else 0,
     )
 
@@ -123,9 +123,7 @@ def run_global_positioning(
     playback_options = playback_options or SolverPlaybackOptions()
     playback_options.validate()
     images = reconstruction.images
-    for image in images.values():
-        if image.has_pose and not image.is_ref_in_frame():
-            raise ValueError("VidMap global positioning requires reference cameras")
+    rig_scene = gp_costs.validate_fixed_rigs(reconstruction)
 
     # GP1 initializes positions; GP2 starts from the GP1 result.
     gp_options = pycolmap.GlobalPositionerOptions(
@@ -141,6 +139,8 @@ def run_global_positioning(
         experimental_observation_stddev=pixel_stddev,
         uncalibrated_observation_weight=1.0,
     )
+    if rig_scene:
+        gp_options.refine_sensor_from_rig = False
     normal_geometry = _loss(
         pass_options.loss_normal_geometry
         if options.common.use_metric_depth_constraint
@@ -178,18 +178,15 @@ def run_global_positioning(
         positioner = pycolmap.create_default_global_positioner(
             gp_options, pycolmap.PoseGraph(), reconstruction, default_loss
         )
+        gp_costs.collect_default_observations(positioner, reconstruction, selections[0], pixel_stddev)
     finally:
         gp_costs.swap_tracks(reconstruction, selected_tracks)
     del selected_tracks
     problem = positioner.problem
-    centers = {
-        image_id: positioner.frame_center_parameter_block(image.frame_id)
-        for image_id, image in images.items()
-        if image.has_pose
-    }
-    centers = {i: center for i, center in centers.items() if center is not None}
-    if len({images[image_id].frame_id for image_id in centers}) != len(centers):
-        raise ValueError("VidMap global positioning requires one image per frame")
+    # Retain first-image traversal order for deterministic appended initialization.
+    frames = {image.frame_id: image.frame for image in images.values() if image.has_pose}
+    frame_centers = {fid: positioner.frame_center_parameter_block(fid) for fid in frames}
+    frame_centers = {fid: center for fid, center in frame_centers.items() if center is not None}
     random = np.random.default_rng(common.random_seed if common.random_seed >= 0 else None)
     if gp_options.generate_random_points:
         gp_costs.initialize_points(problem, reconstruction, options.track_filter.min_num_views_per_track, random)
@@ -199,17 +196,16 @@ def run_global_positioning(
     if capture_state:
         point_ids, points_xyz, _ = native.point3D_table(reconstruction)
         result.initial_point3D_xyz = dict(zip(point_ids.tolist(), points_xyz))
-    gp_costs.collect_default_observations(problem, reconstruction, centers, selections[0])
 
     extra_centers = {}
-    for image_id, image in reconstruction.images.items():
-        if image_id in centers or not image.has_pose:
+    for frame_id, frame in frames.items():
+        if frame_id in frame_centers:
             continue
         if gp_options.generate_random_positions:
             center = random.uniform(-100.0, 100.0, 3)
         else:
-            center = image.projection_center().copy()
-        extra_centers[image_id] = centers[image_id] = center
+            center = frame.rig_from_world.inverse().translation.copy()
+        extra_centers[frame_id] = frame_centers[frame_id] = center
 
     # Keep appended parameter storage alive through both solves.
     _appended_scales = [
@@ -217,7 +213,7 @@ def run_global_positioning(
             positioner,
             reconstruction,
             selection,
-            centers,
+            frame_centers,
             loss,
             pixel_stddev,
             gp_options.initialize_scales_from_geometry,
@@ -226,7 +222,8 @@ def run_global_positioning(
         for selection, loss in zip(selections[1:], geometry_losses[1:])
         if len(selection)
     ]
-    if not options.common.use_metric_depth_constraint and gp_options.optimize_scales:
+
+    if not rig_scene and not options.common.use_metric_depth_constraint and gp_options.optimize_scales:
         gp_costs.fix_first_observation_scale(problem, selections)
     regular, loop, num_points, has_support = gp_costs.observation_counts(selections)
     if warmup_rounds and not has_support:
@@ -295,25 +292,23 @@ def run_global_positioning(
             getattr(temporal, prefix + "_huber_width") / temporal.stddev,
         )
         for prior in temporal_priors:
+            frame_ids = (prior.prev_frame_id, prior.frame_id, prior.next_frame_id)
             cost = gp_costs.temporal_acceleration_cost(prior.dt_prev, prior.dt_next, temporal.stddev)
             weighted = gp_costs.scaled_loss(loss, temporal_weight * prior.sqrt_observation_count**2)
             problem.add_residual_block(
                 cost,
                 weighted,
-                [centers[i] for i in (prior.prev_image_id, prior.image_id, prior.next_image_id)],
+                [frame_centers[fid] for fid in frame_ids],
             )
             diagnostics.num_temporal_acceleration_residuals += 1
 
-    for image_id in list(extra_centers):
-        if not problem.has_parameter_block(extra_centers[image_id]):
-            del extra_centers[image_id]
-            del centers[image_id]
+    frame_centers = {fid: center for fid, center in frame_centers.items() if problem.has_parameter_block(center)}
     if capture_state:
-        result.initial_frame_centers = {images[i].frame_id: center.copy() for i, center in centers.items()}
+        result.initial_frame_centers = {fid: center.copy() for fid, center in frame_centers.items()}
 
     # Configure parameter ordering, solver options and playback.
     positioner.extend_parameter_block_ordering(
-        [(block, 2) for arrays in (extra_centers, depth_scales) for block in arrays.values()]
+        [(block, 2) for arrays in (frame_centers, depth_scales) for block in arrays.values()]
     )
     solver_options = pyceres.SolverOptions(positioner.solver_options)
     apply_solver_backend(solver_options, options.solver_backend)
@@ -324,7 +319,7 @@ def run_global_positioning(
         playback_callback,
         playback_options,
         reconstruction,
-        centers,
+        frame_centers,
         selections,
         geometry_losses,
         problem,
@@ -353,27 +348,19 @@ def run_global_positioning(
     diagnostics.update(summary)
     capture.emit("final", warmup_rounds + diagnostics.num_iterations - 1)
 
-    # Write optimized centers back to camera poses.
-    # Finalize also writes factory centers whose observations were all rejected.
-    inactive_translations = {
-        image.frame_id: image.frame.rig_from_world.translation.copy()
-        for image_id, image in images.items()
-        if image.has_pose and image_id not in centers
-    }
     if not positioner.finalize(summary):
         raise RuntimeError("Global positioning finalization failed")
-    for frame_id, translation in inactive_translations.items():
-        reconstruction.frame(frame_id).rig_from_world.translation = translation
-    for image_id, center in extra_centers.items():
-        pose = reconstruction.frame(images[image_id].frame_id).rig_from_world
-        pose.translation = -(pose.rotation * center)
+    for fid, center in extra_centers.items():
+        if fid in frame_centers:
+            pose = reconstruction.frame(fid).rig_from_world
+            pose.translation = -(pose.rotation * center)
 
     result.success = True
     result.depth_map_scales = {
         i: float(np.exp(v[0]) if common.use_log_scale_for_depth_map_scales else v[0]) for i, v in depth_scales.items()
     }
     diagnostics.num_depth_map_scales = len(depth_scales)
-    diagnostics.num_camera_centers = len(centers)
+    diagnostics.num_camera_centers = len(frame_centers)
     diagnostics.num_point3D_parameters = num_points
     del capture, problem, positioner
     return result
@@ -397,18 +384,23 @@ def _scale_values(selections):
 
 
 class _Playback(pyceres.IterationCallback):
-    def __init__(self, callback, options, reconstruction, centers, observations, losses, problem):
+    def __init__(self, callback, options, reconstruction, frame_centers, observations, losses, problem):
         super().__init__()
         self.callback, self.options = callback, options
-        self.centers = centers
+        self.frame_centers = frame_centers
         self.reconstruction = reconstruction
         self.observations = observations
         self.losses = losses
         if callback is None:
             return
-        self.image_ids = list(options.image_ids) or sorted(centers)
+        self.image_ids = list(options.image_ids) or sorted(
+            i for i, image in reconstruction.images.items() if image.frame_id in frame_centers
+        )
         self.point_ids = gp_costs.playback_point_ids(problem, reconstruction, list(options.point3D_ids), 200000)
-        if any(i not in centers for i in self.image_ids):
+        if any(
+            i not in reconstruction.images or reconstruction.image(i).frame_id not in frame_centers
+            for i in self.image_ids
+        ):
             raise ValueError("Playback image is not active in global positioning")
         self.offset = 0
 
@@ -425,7 +417,7 @@ class _Playback(pyceres.IterationCallback):
         image_ids = self.image_ids
         point_ids = self.point_ids
         camera_values, point_values = native.playback_coordinates(
-            self.reconstruction, image_ids, point_ids, self.centers
+            self.reconstruction, image_ids, point_ids, self.frame_centers
         )
         self.callback(
             dict(

@@ -17,7 +17,7 @@ find_package(pybind11 3.1.0 CONFIG REQUIRED)
 set(VIDMAP_COLMAP_VERSION "4.3.0")
 set(
   VIDMAP_COLMAP_REVISION
-  "9e653da3baaaada926bda6c5286568413fb3e675"
+  "b1972bc226f58e095c8b75bc214f4bb2d8ba57e4"
   CACHE STRING
   "Upstream COLMAP revision used by vidmap_native"
 )

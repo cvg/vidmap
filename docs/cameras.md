@@ -1,0 +1,71 @@
+# Camera setup
+
+Set your input/output paths and choose the config names below (without `.yaml`):
+
+```bash
+python -m vidmap.run --input_data /data/images --output /results/run \
+  --frontend-conf FRONTEND_CONFIG --mapping-conf MAPPING_CONFIG
+```
+
+| Input | `FRONTEND_CONFIG` | `MAPPING_CONFIG` |
+|---|---|---|
+| Uncalibrated monocular | `uncalib/base` | `uncalib/base` |
+| Calibrated examples below | Saved config name | `calib/base` |
+
+## Monocular
+
+The default configuration uses uncalibrated monocular input.
+
+### Calibrated monocular
+
+Use a one-camera rig. Save `vidmap/configs/frontend/my_camera.yaml`:
+
+```yaml
+defaults: [calib/base]
+rig:
+  cameras:
+    - camera_model_name: PINHOLE
+      camera_params: [500, 500, 420, 420]
+```
+
+Replace the calibration with yours. Put timestamp-named images (e.g. `1.000.png`)
+in `/data/images/cam0/`.
+
+## Camera rigs
+
+Example four-camera rig: a stereo pair (0–1), an oblique camera (2), and a rear camera (3).
+
+![Four-camera rig viewing directions](assets/rig-example.svg)
+
+Use synchronized images in `cam0/` through `cam3/`;
+see [input folders and frame association](files.md#input-images). Save `vidmap/configs/frontend/my_rig.yaml`:
+
+```yaml
+defaults: [calib/rig]
+rig:
+  cameras:
+    - camera_model_name: PINHOLE
+      camera_params: [500, 500, 420, 420]  # fx, fy, cx, cy (pixels)
+    - camera_model_name: PINHOLE
+      camera_params: [500, 500, 420, 420]
+      cam_from_rig_rotation: [1, 0, 0, 0]
+      cam_from_rig_translation: [-0.1, 0, 0]
+    - camera_model_name: PINHOLE
+      camera_params: [500, 500, 420, 420]
+      cam_from_rig_rotation: [0.9238795325112867, 0, -0.3826834323650898, 0]
+      cam_from_rig_translation: [-0.1414214, 0, -0.1414214]
+    - camera_model_name: PINHOLE
+      camera_params: [500, 500, 420, 420]
+      cam_from_rig_rotation: [0, 0, 1, 0]
+      cam_from_rig_translation: [0.1, 0, -0.15]
+  match_same_timestamp: [[0, 1], [1, 2]]
+  flag_same_timestamp_as_sequential: [[0, 1]]
+```
+
+Camera 0 is the reference and the default keyframing camera.
+
+In this example:
+
+- **0–1:** Reliable stereo overlap: included in `match_same_timestamp` and `flag_same_timestamp_as_sequential` for sequential losses.
+- **1–2:** Overlap with a larger viewpoint change: included only in `match_same_timestamp`, using loop-closure losses.
+- **3:** No overlap: omitted from `match_same_timestamp`.

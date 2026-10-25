@@ -34,6 +34,12 @@ def config_to_dict(obj):
         values = {}
         for field in dataclasses.fields(obj):
             value = getattr(obj, field.name)
+            if field.metadata.get("omit_default", False):
+                default = field.default
+                if default is dataclasses.MISSING and field.default_factory is not dataclasses.MISSING:
+                    default = field.default_factory()
+                if value == default:
+                    continue
             values[field.name] = config_to_dict(value)
         return values
     if isinstance(obj, dict):

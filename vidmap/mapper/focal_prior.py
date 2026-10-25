@@ -19,22 +19,23 @@ def native_focal_priors(prior, *, camera_ids, loss, scale=1.0, weight=1.0):
     return records
 
 
-def load_focal_prior(path, state, *, log_focal_stddev=None, shared=False):
-    images = state.reconstruction.images
+def load_focal_prior(path, state, evidence, *, log_focal_stddev=None):
     cameras = state.reconstruction.cameras
-    if shared and len(cameras) != 1:
-        raise ValueError("Selected shared calibration requires one camera")
-    associations = (
-        [("batch_calibration", next(iter(cameras)))]
-        if shared
-        else [(images[i].name, images[i].camera_id) for i in state.image_order]
-    )
-    if not associations:
-        raise ValueError("Calibration results require camera associations")
+    images = {image.name: image for image in state.reconstruction.images.values()}
+    shared = evidence.inference == "selected_batch"
+    ordered = evidence.observations
+    if not shared:
+        by_name = {observation.image_name: observation for observation in ordered}
+        ordered = tuple(by_name.pop(state.reconstruction.images[i].name) for i in state.image_order)
+        if by_name or len(ordered) != len(evidence.observations):
+            raise ValueError("Per-view calibration observations disagree with database images")
     observations = {}
     with h5py.File(path, "r") as hfile:
-        for name, camera_id in associations:
-            result = hfile[name]
+        for observation in ordered:
+            camera_id = observation.camera_id
+            if observation.image_name is not None and images[observation.image_name].camera_id != camera_id:
+                raise ValueError("Calibration observation disagrees with database camera membership")
+            result = hfile[observation.key]
             camera = cameras[camera_id]
             if tuple(result["image_size"][:]) != (camera.width, camera.height):
                 raise ValueError("Calibration dimensions disagree with database")

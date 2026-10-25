@@ -14,14 +14,17 @@ namespace vidmap {
 
 struct MetricDepthError
     : public colmap::AutoDiffCostFunctor<MetricDepthError, 1, 3, 3, 1> {
-  MetricDepthError(const Eigen::Quaterniond& rotation,
-                   double depth_prior,
-                   double sigma_depth,
-                   bool use_log_scale,
-                   MetricDepthResidualType residual_type,
-                   bool zero_residual_behind,
-                   double log_linear_threshold)
+  MetricDepthError(
+      const Eigen::Quaterniond& rotation,
+      double depth_prior,
+      double sigma_depth,
+      bool use_log_scale,
+      MetricDepthResidualType residual_type,
+      bool zero_residual_behind,
+      double log_linear_threshold,
+      const Eigen::Vector3d& rig_translation = Eigen::Vector3d::Zero())
       : rotation_(rotation),
+        rig_translation_(rig_translation),
         depth_prior_(depth_prior),
         sigma_depth_(sigma_depth),
         use_log_scale_(use_log_scale),
@@ -45,8 +48,10 @@ struct MetricDepthError
     using Vector3 = Eigen::Matrix<T, 3, 1>;
     const Vector3 point_world = Eigen::Map<const Vector3>(point3D);
     const Vector3 center_world = Eigen::Map<const Vector3>(camera_center);
-    const T estimated_depth =
-        (rotation_.cast<T>() * (point_world - center_world))[2];
+    Vector3 displacement = point_world - center_world;
+    if (!rig_translation_.isZero(0.0))
+      displacement += rig_translation_.cast<T>();
+    const T estimated_depth = (rotation_.cast<T>() * displacement)[2];
     const T scale =
         use_log_scale_ ? ceres::exp(depth_map_scale[0]) : depth_map_scale[0];
     const T scaled_prior = scale * T(depth_prior_);
@@ -91,6 +96,7 @@ struct MetricDepthError
   }
 
   const Eigen::Quaterniond rotation_;
+  const Eigen::Vector3d rig_translation_;
   const double depth_prior_;
   const double sigma_depth_;
   const bool use_log_scale_;

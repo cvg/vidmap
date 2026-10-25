@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, AbstractSet
 
-from vidmap.frontend.cache import CacheMetadataMismatch, read_pair_artifact, validate_incremental_cache
+from vidmap.calibration import CalibrationEvidence
+from vidmap.frontend.cache import CacheMetadataMismatch, validate_incremental_cache
 from vidmap.mapper.inputs import (
     CANONICAL_NAMES,
     DATABASE_NAME,
@@ -16,7 +17,6 @@ from vidmap.mapper.inputs import (
     LC_MASKS_NAME,
     MANIFEST_NAME,
     REQUIRED_PAYLOAD_NAMES,
-    TRACK_PAIRS_NAME,
     VGC_FILTERED_PAIRS_NAME,
     MapperInputs,
     require_finalized_sqlite,
@@ -28,21 +28,22 @@ from vidmap.utils.loop_closure_masks import write_loop_closure_masks
 if TYPE_CHECKING:
     from vidmap.frontend.pipeline import TrackingFrontendResult
     from vidmap.frontend.preparation.geometric_verification import GeometricVerificationResult
-    from vidmap.frontend.preparation.tcorr_filtering import FilteredCorrespondences
 
 
 def write_mapper_inputs(
     directory: Path,
     sources: Mapping[str, Path],
     lc_masks: Mapping[tuple[str, str], object] | None,
-    vgc_filtered_pairs: AbstractSet[tuple[str, str]] | None,
+    vgc_filtered_pairs: AbstractSet[tuple[str, str]] | None = None,
     *,
     frontend_identity: Mapping[str, object],
+    frame_sequence: dict,
+    calibration: CalibrationEvidence | None = None,
 ) -> MapperInputs:
     """Replace the directory with one self-contained mapper-input generation."""
     directory = resolve_mapper_inputs_directory(directory)
     source_names = set(sources)
-    generated_names = {LC_MASKS_NAME, VGC_FILTERED_PAIRS_NAME, MANIFEST_NAME}
+    generated_names = {VGC_FILTERED_PAIRS_NAME, MANIFEST_NAME}
     unexpected = source_names - (CANONICAL_NAMES - generated_names)
     if unexpected:
         raise ValueError(f"Unexpected mapper-input names: {sorted(unexpected)}")
@@ -59,6 +60,8 @@ def write_mapper_inputs(
         if name == DATABASE_NAME:
             require_finalized_sqlite(source)
 
+    if lc_masks is not None and LC_MASKS_NAME in source_paths:
+        raise ValueError("Loop-closure masks must have exactly one source")
     if directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True)
@@ -75,14 +78,20 @@ def write_mapper_inputs(
             )
             + "\n"
         )
-    write_mapper_inputs_manifest(directory, frontend_identity=frontend_identity)
-    return MapperInputs.from_directory(directory, expected_identity=frontend_identity)
+    write_mapper_inputs_manifest(
+        directory,
+        frontend_identity=frontend_identity,
+        frame_sequence=frame_sequence,
+        calibration=calibration,
+    )
+    result = MapperInputs.from_directory(directory, expected_identity=frontend_identity)
+    result.validate()
+    return result
 
 
 def write_verified_mapper_inputs(
     directory: Path,
     state: TrackingFrontendResult,
-    filtered: FilteredCorrespondences,
     verification: GeometricVerificationResult,
     *,
     frontend_identity: Mapping[str, object],
@@ -93,13 +102,6 @@ def write_verified_mapper_inputs(
     if depth_contract is None:
         raise CacheMetadataMismatch("Depth mapper input has no frontend cache contract")
 
-    verification.database_provenance.validate(verification.database_path)
-    track_pairs = read_pair_artifact(
-        paths.track_pairs_path,
-        state.artifacts.track_pairs.metadata,
-    )
-    if tuple(track_pairs) != state.track_pairs:
-        raise CacheMetadataMismatch("Track-pair cache changed before mapper-input publication")
     validate_incremental_cache(
         paths.depth_maps_path,
         depth_contract.metadata,
@@ -108,27 +110,34 @@ def write_verified_mapper_inputs(
 
     sources = {
         DATABASE_NAME: verification.database_path,
-        TRACK_PAIRS_NAME: paths.track_pairs_path,
+        LC_MASKS_NAME: paths.lc_masks_path,
         DEPTH_MAPS_NAME: paths.depth_maps_path,
     }
-    if state.artifacts.geocalib is not None:
+    calibration = state.calibration
+    if calibration is not None and calibration.evidence.estimator == "geocalib":
         from vidmap.mapper.inputs.snapshot import calibration_artifact_name
 
-        contract = state.artifacts.geocalib
-        calibration = frontend_identity["boundary_options"]
-        filename = calibration_artifact_name(calibration["estimator"], calibration["inference"])
-        path = (
-            paths.geocalib_batch_path
-            if calibration["inference"] == "selected_batch"
-            else paths.geocalib_per_image_path
-        )
-        validate_incremental_cache(path, contract.metadata, contract.expected_items)
-        sources[filename] = path
+        contract = calibration.artifact
+        validate_incremental_cache(calibration.path, contract.metadata, contract.expected_items)
+        filename = calibration_artifact_name(calibration.evidence.estimator, calibration.evidence.inference)
+        sources[filename] = calibration.path
 
     return write_mapper_inputs(
         directory,
         sources,
-        filtered.lc_masks,
-        verification.vgc_filtered_pairs,
+        None,
         frontend_identity=frontend_identity,
+        frame_sequence=verification.frame_sequence,
+        calibration=None if calibration is None else calibration.evidence,
     )
+
+
+def prepare_frame_sequence(capture, allocated):
+    """Carry allocated frame IDs forward in capture order."""
+
+    frames = allocated.frames
+    ids = [fid for fid in capture.frame_ids if fid in frames]
+    if set(ids) != set(frames):
+        raise ValueError("Allocated frame inventory disagrees with selected capture")
+    times = None if capture.frame_timestamps_ns is None else [capture.frame_timestamps_ns[fid] for fid in ids]
+    return {"frame_ids": ids, "timestamps_ns": times}

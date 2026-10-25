@@ -5,6 +5,7 @@
 
 #include "stages/depth_prior.h"
 #include "stages/intrinsics_prior.h"
+#include "stages/rig_geometry.h"
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -41,6 +42,7 @@ PYBIND11_MODULE(bundle_adjustment, m) {
           using Losses = std::vector<std::unique_ptr<ceres::LossFunction>>;
           auto losses = std::make_unique<Losses>();
           auto& image = reconstruction.Image(image_id);
+          const auto sensor_from_rig = vidmap::FixedSensorFromRig(image);
           double* pose = image.FramePtr()->RigFromWorld().params.data();
           if (fix_pose || problem.HasParameterBlock(pose)) {
             losses->reserve(count);
@@ -48,17 +50,14 @@ PYBIND11_MODULE(bundle_adjustment, m) {
               if (weights[i] == 0.0) continue;
               double* point = reconstruction.Point3D(point_ids[i]).xyz.data();
               if (!problem.HasParameterBlock(point)) continue;
-              if (!image.IsRefInFrame()) {
-                throw std::invalid_argument(
-                    "VidMap depth constraints require a reference camera");
-              }
               losses->push_back(colmap::CreateCeresLossFunction(
                   robust_mask[i] ? loss_type
                                  : colmap::CeresLossFunctionType::TRIVIAL,
                   robust_scales[i],
                   weights[i]));
               problem.AddResidualBlock(
-                  vidmap::LogScaledDepthErrorCostFunctor::Create(depths[i]),
+                  vidmap::LogScaledDepthErrorCostFunctor::Create(
+                      depths[i], sensor_from_rig),
                   losses->back().get(),
                   pose,
                   point,

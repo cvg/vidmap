@@ -20,6 +20,8 @@ from vidmap.frontend.options import (
     PreparationOptions,
     RoMaV2Options,
 )
+from vidmap.frontend.options.preparation import CameraProcessingOptions
+from vidmap.frontend.options.rig import CameraId, RigOptions
 from vidmap.mapper.options import MapperOptions
 
 
@@ -40,6 +42,10 @@ class FrontendConfig:
     depth: DepthEstimationOptions = dc_field(default_factory=DepthEstimationOptions)
     camera_priors: CameraPriorEstimationOptions = dc_field(default_factory=CameraPriorEstimationOptions)
     preparation: PreparationOptions = dc_field(default_factory=PreparationOptions)
+    rig: RigOptions | None = dc_field(default=None, metadata={"omit_default": True})
+    camera_processing: dict[CameraId, CameraProcessingOptions] = dc_field(
+        default_factory=dict, metadata={"omit_default": True}
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -48,6 +54,8 @@ class FrontendConfig:
         if not isinstance(values, dict):
             return values
         values = dict(values)
+        if isinstance(values.get("rig"), dict):
+            values["rig"] = RigOptions(**values["rig"])
         for name, option_type in {
             "roma": RoMaV2Options,
             "keyframes": KeyframeOptions,

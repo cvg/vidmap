@@ -4,12 +4,15 @@
 #include "colmap/scene/camera.h"
 #include "colmap/scene/reconstruction.h"
 
-#include <numeric>
+#include <cstdint>
+#include <limits>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "stages/metric_depth.h"
+#include "stages/rig_geometry.h"
 #include "stages/weighted_motion_averaging.h"
 #include "vidmap_native/mapping_sidecars.h"
 #include <Eigen/LU>
@@ -80,13 +83,13 @@ struct ObservationSelection {
   std::vector<Observation> observations;
 };
 using TrackMap = std::map<colmap::point3D_t, colmap::Track>;
-using Centers = std::unordered_map<colmap::image_t, double*>;
+using Centers = std::unordered_map<colmap::frame_t, double*>;
 
 Centers CenterPointers(const py::dict& arrays) {
   Centers centers;
   for (const auto& item : arrays) {
     auto array = item.second.cast<py::array_t<double>>();
-    centers.emplace(item.first.cast<colmap::image_t>(), array.mutable_data());
+    centers.emplace(item.first.cast<colmap::frame_t>(), array.mutable_data());
   }
   return centers;
 }
@@ -101,31 +104,32 @@ std::map<ObservationKind, ObservationSelection> PrepareObservations(
     const vidmap::MappingSidecars& sidecars,
     size_t minimum_track_length,
     bool include_loop,
-    const std::vector<colmap::image_t>& image_order,
+    const std::vector<colmap::frame_t>& frame_order,
     size_t support_count) {
   std::map<ObservationKind, ObservationSelection> selected;
-  std::unordered_map<colmap::image_t, size_t> timeline;
-  for (size_t i = 0; i < image_order.size(); ++i)
-    timeline.emplace(image_order[i], i);
+  std::unordered_map<colmap::frame_t, size_t> timeline;
+  for (size_t i = 0; i < frame_order.size(); ++i)
+    timeline.emplace(frame_order[i], i);
   for (const auto& [point_id, point] : reconstruction.Points3D()) {
     const auto& regular = point.track.Elements();
     if (regular.size() < minimum_track_length) continue;
     std::vector<bool> support(regular.size(), false);
     if (support_count) {
-      std::vector<size_t> order(regular.size());
-      std::iota(order.begin(), order.end(), 0);
-      const size_t count = std::min(order.size(), support_count);
-      std::partial_sort(
-          order.begin(),
-          order.begin() + count,
-          order.end(),
-          [&](auto a, auto b) {
-            return std::make_pair(timeline.at(regular[a].image_id),
-                                  regular[a].point2D_idx) <
-                   std::make_pair(timeline.at(regular[b].image_id),
-                                  regular[b].point2D_idx);
-          });
-      for (size_t i = 0; i < count; ++i) support[order[i]] = true;
+      std::set<size_t> support_ranks;
+      for (const auto& element : regular) {
+        const auto rank =
+            timeline.at(reconstruction.Image(element.image_id).FrameId());
+        if (support_ranks.size() < support_count ||
+            rank < *support_ranks.rbegin()) {
+          support_ranks.insert(rank);
+          if (support_ranks.size() > support_count)
+            support_ranks.erase(std::prev(support_ranks.end()));
+        }
+      }
+      for (size_t i = 0; i < regular.size(); ++i)
+        support[i] = timeline.at(
+                         reconstruction.Image(regular[i].image_id).FrameId()) <=
+                     *support_ranks.rbegin();
     }
     auto append = [&](const colmap::TrackElement& element,
                       const colmap::TrackElement& anchor,
@@ -135,11 +139,13 @@ std::map<ObservationKind, ObservationSelection> PrepareObservations(
       selected[{loop, image.CameraPtr()->HasPriorFocalLength(), early}]
           .observations.push_back({point_id, element, anchor, loop, early});
     };
-    std::unordered_set<colmap::image_t> regular_images;
+    std::set<std::pair<colmap::image_t, colmap::point2D_t>> regular_features;
     for (size_t row = 0; row < regular.size(); ++row) {
-      if (!regular_images.insert(regular[row].image_id).second)
+      if (!regular_features
+               .emplace(regular[row].image_id, regular[row].point2D_idx)
+               .second)
         throw std::invalid_argument(
-            "A regular track must have at most one observation per image");
+            "A regular track must not repeat the same image feature");
       append(regular[row], {}, false, support[row]);
     }
     const auto extra = sidecars.tracks.find(point_id);
@@ -177,6 +183,8 @@ PYBIND11_MAKE_OPAQUE(TrackMap);
 
 PYBIND11_MODULE(global_positioning, m) {
   py::module_::import("pyceres");
+  py::module_::import("pycolmap");
+  m.def("validate_fixed_rigs", &vidmap::ValidateFixedRigScene);
   py::classh<ceres::LossFunctionWrapper, ceres::LossFunction>(m, "MutableLoss")
       .def(py::init([](ceres::LossFunction* loss) {
              return std::make_unique<ceres::LossFunctionWrapper>(
@@ -218,39 +226,78 @@ PYBIND11_MODULE(global_positioning, m) {
           for (auto& [id, track] : tracks)
             std::swap(reconstruction.Point3D(id).track, track);
         });
-  m.def("collect_default_observations",
-        [](ceres::Problem& problem,
-           colmap::Reconstruction& reconstruction,
-           const py::dict& centers,
-           ObservationSelection& selected) {
-          std::unordered_map<const double*, colmap::point3D_t> points;
-          for (const auto& [id, point] : reconstruction.Points3D())
-            points.emplace(point.xyz.data(), id);
-          std::unordered_map<const double*, colmap::image_t> images;
-          for (const auto& [id, pointer] : CenterPointers(centers))
-            images.emplace(pointer, id);
-          std::map<std::pair<colmap::point3D_t, colmap::image_t>, Observation*>
-              observations;
-          for (auto& obs : selected.observations)
-            observations.emplace(std::make_pair(obs.point_id, obs.ImageId()),
-                                 &obs);
-          std::vector<ceres::ResidualBlockId> residuals;
-          problem.GetResidualBlocks(&residuals);
-          for (auto residual : residuals) {
-            std::vector<double*> blocks;
-            problem.GetParameterBlocksForResidualBlock(residual, &blocks);
-            auto& obs =
-                *observations.at({points.at(blocks[1]), images.at(blocks[0])});
-            obs.center = blocks[0];
-            obs.point = blocks[1];
-            obs.scale = blocks[2];
+  m.def(
+      "collect_default_observations",
+      [](colmap::GlobalPositioner& positioner,
+         colmap::Reconstruction& reconstruction,
+         ObservationSelection& selected,
+         std::optional<double> stddev) {
+        auto& problem = positioner.Problem();
+        // Pinned COLMAP allocates one contiguous scale vector in native
+        // point/track traversal order. Ceres residual order is unspecified.
+        // Validate this layout before using it to identify repeated views of
+        // the same point in the same rig frame.
+        std::vector<ceres::ResidualBlockId> residuals;
+        problem.GetResidualBlocks(&residuals);
+        std::vector<std::vector<double*>> blocks(residuals.size());
+        uintptr_t first = std::numeric_limits<uintptr_t>::max();
+        for (size_t i = 0; i < residuals.size(); ++i) {
+          problem.GetParameterBlocksForResidualBlock(residuals[i], &blocks[i]);
+          THROW_CHECK_EQ(blocks[i].size(), 3);
+          first = std::min(first, reinterpret_cast<uintptr_t>(blocks[i][2]));
+        }
+        std::vector<const std::vector<double*>*> ordered(residuals.size());
+        for (const auto& block : blocks) {
+          const auto offset = reinterpret_cast<uintptr_t>(block[2]) - first;
+          THROW_CHECK_EQ(offset % sizeof(double), 0);
+          THROW_CHECK_LT(offset / sizeof(double), ordered.size());
+          THROW_CHECK(ordered[offset / sizeof(double)] == nullptr);
+          ordered[offset / sizeof(double)] = &block;
+        }
+        using Key =
+            std::tuple<colmap::point3D_t, colmap::image_t, colmap::point2D_t>;
+        std::map<Key, Observation*> observations;
+        for (auto& obs : selected.observations)
+          observations.emplace(Key{obs.point_id, obs.ImageId(), obs.Index()},
+                               &obs);
+        size_t index = 0;
+        for (auto& [point_id, point] : reconstruction.Points3D()) {
+          for (const auto& element : point.track.Elements()) {
+            const auto& image = reconstruction.Image(element.image_id);
+            if (!image.HasPose()) continue;
+            const auto& camera = *image.CameraPtr();
+            const auto& pixel = image.Point2D(element.point2D_idx).xy;
+            std::optional<Eigen::Vector3d> ray;
+            if (stddev) {
+              const auto value = camera.CamRayFromImgWithJac(pixel);
+              if (!value) continue;
+              const Eigen::Matrix2d gram =
+                  value->jacobian.transpose() * value->jacobian;
+              const double variance = 2.0 / gram.inverse().trace();
+              if (!(variance > 0.0) || !std::isfinite(variance)) continue;
+              ray = value->ray;
+            } else {
+              ray = camera.CamRayFromImg(pixel);
+            }
+            if (!ray) continue;
+            THROW_CHECK_LT(index, ordered.size());
+            const auto& block = *ordered[index++];
+            auto& obs = *observations.at(
+                Key{point_id, element.image_id, element.point2D_idx});
+            obs.point = reconstruction.Point3D(point_id).xyz.data();
+            obs.center = positioner.FrameCenterParameterBlock(image.FrameId());
+            obs.scale = block[2];
+            THROW_CHECK_EQ(block[image.IsRefInFrame() ? 0 : 1], obs.center);
+            THROW_CHECK_EQ(block[image.IsRefInFrame() ? 1 : 0], obs.point);
           }
-          auto& obs = selected.observations;
-          obs.erase(std::remove_if(obs.begin(),
-                                   obs.end(),
-                                   [](const auto& o) { return !o.scale; }),
-                    obs.end());
-        });
+        }
+        THROW_CHECK_EQ(index, ordered.size());
+        auto& obs = selected.observations;
+        obs.erase(
+            std::remove_if(
+                obs.begin(), obs.end(), [](const auto& o) { return !o.scale; }),
+            obs.end());
+      });
   m.def("initialize_points",
         [](ceres::Problem& problem,
            colmap::Reconstruction& reconstruction,
@@ -369,11 +416,13 @@ PYBIND11_MODULE(global_positioning, m) {
             ray = camera.CamRayFromImg(pixel);
           }
           if (!ray) continue;
-          double* center_data = center_pointers.at(image_id);
+          double* center_data = center_pointers.at(image.FrameId());
           auto& point = reconstruction.Point3D(point_id).xyz;
           const Eigen::Vector3d direction = rotation.transpose() * *ray;
-          const Eigen::Vector3d delta =
+          Eigen::Vector3d delta =
               point - Eigen::Map<const Eigen::Vector3d>(center_data);
+          const auto offset = vidmap::RigTranslationInWorld(image);
+          delta += offset;
           double* scale = scales.mutable_data(count);
           *scale =
               initialize_from_geometry
@@ -385,11 +434,13 @@ PYBIND11_MODULE(global_positioning, m) {
           auto* cost =
               covariance
                   ? colmap::CovarianceWeightedCostFunctor<
-                        colmap::BATAPairwiseDirectionCostFunctor>::
-                        Create(*covariance, direction)
-                  : colmap::BATAPairwiseDirectionCostFunctor::Create(direction);
+                        colmap::
+                            RigBATAPairwiseDirectionConstantRigCostFunctor>::
+                        Create(*covariance, direction, offset)
+                  : colmap::RigBATAPairwiseDirectionConstantRigCostFunctor::
+                        Create(direction, offset);
           problem.AddResidualBlock(
-              cost, loss.get(), center_data, point.data(), scale);
+              cost, loss.get(), point.data(), center_data, scale);
           if (!ordering->IsMember(point.data()))
             ordering->AddElementToGroup(point.data(), 1);
           problem.SetParameterLowerBound(scale, 0, 1e-5);
@@ -458,7 +509,9 @@ PYBIND11_MODULE(global_positioning, m) {
                 use_log_scales,
                 residual_type,
                 zero_residual_behind,
-                log_linear_threshold);
+                log_linear_threshold,
+                vidmap::RigTranslationInWorld(
+                    reconstruction.Image(obs.ImageId())));
             problem.AddResidualBlock(cost,
                                      loss.get(),
                                      obs.center,
@@ -518,7 +571,7 @@ PYBIND11_MODULE(global_positioning, m) {
                   b{anchor_image, obs.anchor.point2D_idx};
               auto& edge = edges[std::minmax(obs.ImageId(), anchor_image)];
               edge.matches.insert(std::minmax(a, b));
-              const double* parameters[] = {obs.center, obs.point, obs.scale};
+              const double* parameters[] = {obs.point, obs.center, obs.scale};
               Eigen::Vector3d residual;
               // Evaluate the cost directly: Problem::Evaluate is unavailable in
               // callbacks.

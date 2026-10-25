@@ -40,8 +40,17 @@ def load_finalized_database(
         sidecars = native.MappingSidecars()
         pose_graph = pycolmap.PoseGraph()
 
+        rigs = database.read_all_rigs()
+        frames = database.read_all_frames()
+        if not rigs or not frames:
+            raise ValueError("Finalized database requires native rig/frame metadata")
         for cam in database.read_all_cameras():
-            rec.add_camera_with_trivial_rig(cam)
+            rec.add_camera(cam)
+        for rig in rigs:
+            rec.add_rig(rig)
+        for frame in frames:
+            frame.rig_from_world = pycolmap.Rigid3d(translation=np.full(3, np.nan))
+            rec.add_frame(frame)
 
         images_colmap = database.read_all_images()
         logger.info("Loading %d images from the finalized database", len(images_colmap))
@@ -55,7 +64,8 @@ def load_finalized_database(
                 image_id=image_id,
                 keypoints=features,
             )
-            rec.add_image_with_trivial_frame(gimg, pycolmap.Rigid3d(translation=np.full(3, np.nan)))
+            gimg.frame_id = img.frame_id
+            rec.add_image(gimg)
             sidecars.add_image(image_id, native.ImageData())
         pair_ids, matches = database.read_all_matches()
         total_pairs = len(pair_ids)
@@ -78,7 +88,7 @@ def load_finalized_database(
             rec.image(img1_id)
             rec.image(img2_id)
             data = native.PairData()
-            data.geometry = pycolmap.TwoViewGeometry(config=cfg, F=two_view.F, H=two_view.H)
+            data.geometry = pycolmap.TwoViewGeometry(config=cfg, F=two_view.F, H=two_view.H, E=two_view.E)
             data.all_matches = np.asarray(feat_matches, dtype=np.uint32).reshape((-1, 2))
             sidecars.add_pair(int(pair_id), data)
             edge = pycolmap.PoseGraphEdge()

@@ -30,6 +30,7 @@ estimate camera poses, camera intrinsics, and a sparse 3D map.
 
 - 🔧 [Setup](#setup) — Install dependencies and prepare the environment.
 - 🚀 [Run VidMap](#execution) — Reconstruct a video or image sequence.
+- 📷 [Camera rigs](#camera-rigs) — Configure your cameras.
 - 👀 [Visualization](#visualization) — Explore your reconstruction in the browser or Rerun.
 - 🛠️ [Pipeline Configurations](#configuration) — Customize the frontend and mapping settings.
 - ⚡ [Speed up VidMap](#speed-up-vidmap) — Find settings to make extraction and mapping faster.
@@ -46,7 +47,7 @@ git clone --recursive https://github.com/cvg/vidmap.git && cd vidmap
 
 Build and install [COLMAP](https://github.com/colmap/colmap) and its PyCOLMAP bindings
 [from source](https://colmap.github.io/install.html#build-from-source).
-Last tested with [9e653da](https://github.com/colmap/colmap/commit/9e653da3baaaada926bda6c5286568413fb3e675).
+Last tested with: [COLMAP `b1972bc2`](https://github.com/colmap/colmap/commit/b1972bc226f58e095c8b75bc214f4bb2d8ba57e4).
 For GPU mapper acceleration, build them against
 [Ceres 2.3 or newer](https://ceres-solver.readthedocs.io/latest/installation.html)
 with CUDA and cuDSS instead ([see how to enable](#gpu-acceleration)).
@@ -102,6 +103,23 @@ Alternatively, `--input_data` may point to a directory of extracted frames.
 Both mapping commands write the final COLMAP model under `$OUTPUT_DIR/rec`.
 Resolved `frontend_config.yaml` and `mapping_config.yaml` are written directly
 under `$OUTPUT_DIR`.
+
+See [files and folders](docs/files.md) for image layouts, frame associations,
+configuration files and run artifacts.
+
+### Camera rigs
+
+| Input | Uncalibrated mono | Calibrated mono | Uncalibrated rig | Calibrated rig |
+|---|:---:|:---:|:---:|:---:|
+| Pinhole | [✓](docs/cameras.md#monocular) | [✓](docs/cameras.md#calibrated-monocular) | ✗ | [✓](docs/cameras.md#camera-rigs) |
+| Distorted perspective | ✗ | [✓](docs/cameras.md#calibrated-monocular)¹ | ✗ | [✓](docs/cameras.md#camera-rigs)¹ |
+| Fisheye | ✗ | [✓](docs/cameras.md#calibrated-monocular)¹ | ✗ | [✓](docs/cameras.md#camera-rigs)¹ |
+
+Distorted perspective models: `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `FULL_OPENCV`,
+`SIMPLE_DIVISION`, `DIVISION`. See [COLMAP camera models](https://colmap.github.io/cameras.html)
+for model definitions and parameter order.
+
+1. Undistorted to pinhole before mapping. Calibrated rigs may mix camera models.
 
 ## Visualization
 

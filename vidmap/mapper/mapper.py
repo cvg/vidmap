@@ -67,8 +67,8 @@ class Mapper:
         overwrite_outputs: bool = False,
         on_inputs_validated: Callable[[], None] | None = None,
     ):
-        boundary = self.mapper_inputs.frontend_identity()["boundary_options"]
-        need_factors = self._validate_calibration_request(boundary)
+        evidence = self.mapper_inputs.calibration()
+        need_factors = self._validate_calibration_request(evidence)
         if save_playback_trace:
             PlaybackTraceRecorder.preflight(self.sfm_outputs_dir, replace=overwrite_outputs)
             playback_options = PlaybackTraceOptions(
@@ -91,7 +91,7 @@ class Mapper:
             def admit_calibration(state):
                 nonlocal prior
                 if need_factors:
-                    prior = self._prepare_calibration(state, boundary)
+                    prior = self._prepare_calibration(state, evidence)
 
             mapping_stage_inputs = loader.load(on_database_loaded=admit_calibration)
 
@@ -125,10 +125,10 @@ class Mapper:
             remove_database_sidecars(working_database)
             working_database.unlink(missing_ok=True)
 
-    def _validate_calibration_request(self, boundary) -> bool:
+    def _validate_calibration_request(self, evidence) -> bool:
         """Check configuration before loading or publishing and resolve whether factors are needed."""
         calibration = self.conf.calibration
-        predictor = boundary["estimator"]
+        predictor = "none" if evidence is None else evidence.estimator
         if calibration.vgc_focal_prior and (predictor != "da3" or not calibration.vgc_enabled):
             raise ValueError("VGC focal prior requires enabled DA3 VGC")
         need_factors = calibration.vgc_focal_prior or (
@@ -138,17 +138,18 @@ class Mapper:
             raise ValueError("Focal regularization requires original predictor factors")
         return need_factors
 
-    def _prepare_calibration(self, solve_state, boundary):
+    def _prepare_calibration(self, solve_state, evidence):
         """Construct original-target factors from the validated mapper inputs."""
         calibration = self.conf.calibration
-        predictor = boundary["estimator"]
+        predictor = evidence.estimator
         cameras = solve_state.reconstruction.cameras
-        if any(c.model.name not in {"PINHOLE", "SIMPLE_PINHOLE"} for c in cameras.values()):
-            raise ValueError("Calibration requires pinhole cameras")
-        shared = boundary["inference"] == "selected_batch"
-        path = self.mapper_inputs.directory / calibration_artifact_name(predictor, boundary["inference"])
+        models = {"PINHOLE", "SIMPLE_PINHOLE"}
+        camera_ids = {observation.camera_id for observation in evidence.observations}
+        if any(cameras[camera_id].model.name not in models for camera_id in camera_ids):
+            raise ValueError("Calibration prediction model disagrees with database cameras")
+        path = self.mapper_inputs.directory / calibration_artifact_name(predictor, evidence.inference)
         log_focal_stddev = calibration.da3_log_focal_stddev if predictor == "da3" else None
-        return load_focal_prior(path, solve_state, log_focal_stddev=log_focal_stddev, shared=shared)
+        return load_focal_prior(path, solve_state, evidence, log_focal_stddev=log_focal_stddev)
 
     def _solve(self, mapping_stage_inputs, replay, playback_trace, prior):
         solve_start_time = sync_time()
@@ -197,7 +198,7 @@ class Mapper:
         rotation_averager = RotationAverager(
             solve_state=solve_state,
             options=self.conf.ra,
-            sequence_id_to_index=mapping_stage_inputs.sequence_id_to_index,
+            sequence_id_to_index=mapping_stage_inputs.timeline.image_indices,
             filtered_consecutive_pair_ids=relative_pose.filtered_consecutive_pairs,
             replay=replay,
         )
@@ -209,7 +210,7 @@ class Mapper:
             solve_state=solve_state,
             options=self.conf.depth_consistency,
             consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
-            sequence_id_to_index=mapping_stage_inputs.sequence_id_to_index,
+            sequence_id_to_index=mapping_stage_inputs.timeline.image_indices,
         )
         boundary_depth_outliers_marked = depth_consistency_filter.filter()
 
@@ -229,7 +230,7 @@ class Mapper:
         global_positioner = GlobalPositioner(
             solve_state=solve_state,
             consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
-            sequence_id_to_index=mapping_stage_inputs.sequence_id_to_index,
+            timeline=mapping_stage_inputs.timeline,
             inlier_thresholds=relative_pose.inlier_thresholds,
             boundary_depth_outliers_marked=boundary_depth_outliers_marked,
             options=self.conf.gp,

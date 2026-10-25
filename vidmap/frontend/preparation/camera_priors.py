@@ -2,8 +2,63 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
+import h5py
 import numpy as np
 import pycolmap
+
+from vidmap.calibration import CalibrationEvidence, CalibrationObservation
+from vidmap.frontend.cache.metadata import IncrementalArtifactContract
+
+
+@dataclass(frozen=True)
+class CalibrationResult:
+    """Certified original predictions and their working-camera associations."""
+
+    path: Path
+    artifact: IncrementalArtifactContract
+    evidence: CalibrationEvidence
+
+    @classmethod
+    def from_artifact(cls, *, path, reconstruction, image_names, options, artifact):
+        images = {image.name: image for image in reconstruction.images.values()}
+        shared = options.inference == "selected_batch"
+        if shared:
+            camera_ids = {images[name].camera_id for name in image_names}
+            if len(camera_ids) != 1:
+                raise ValueError("Selected shared calibration requires one camera")
+            observations = (CalibrationObservation(camera_ids.pop(), "batch_calibration", None),)
+        else:
+            observations = tuple(CalibrationObservation(images[name].camera_id, name, name) for name in image_names)
+        evidence = CalibrationEvidence(
+            options.estimator,
+            options.inference,
+            "PINHOLE",
+            "working_images",
+            observations,
+        )
+        return cls(Path(path), artifact, evidence)
+
+
+def apply_calibration(result: CalibrationResult, reconstruction: pycolmap.Reconstruction) -> None:
+    """Initialize from original predictions without changing the stored targets."""
+    evidence = result.evidence
+    images = {image.name: image.camera_id for image in reconstruction.images.values()}
+    if {observation.camera_id for observation in evidence.observations} != set(images.values()):
+        raise ValueError("Calibration observations disagree with initialization cameras")
+    if (
+        evidence.inference == "per_view"
+        and {observation.image_name: observation.camera_id for observation in evidence.observations} != images
+    ):
+        raise ValueError("Calibration observations disagree with initialization image membership")
+    with h5py.File(result.path, "r") as hfile:
+        apply_camera_priors(
+            results=[hfile[observation.key] for observation in evidence.observations],
+            shared=evidence.inference == "selected_batch",
+            reconstruction=reconstruction,
+        )
 
 
 def _validate_intrinsics(values, *, label: str, positive: bool) -> np.ndarray:
@@ -60,7 +115,7 @@ def apply_camera_priors(*, results, shared, reconstruction):
         raise ValueError("Predicted initialization requires calibration results")
     cameras = {image.camera_id: reconstruction.cameras[image.camera_id] for image in reconstruction.images.values()}
     if any(c.model.name not in {"PINHOLE", "SIMPLE_PINHOLE"} for c in cameras.values()):
-        raise ValueError("Calibration initialization requires pinhole cameras")
+        raise ValueError("Unsupported camera model for calibration initialization")
     if len({(c.model.name, c.width, c.height) for c in cameras.values()}) != 1:
         raise ValueError("Shared initialization requires identical camera models and dimensions")
     camera = next(iter(cameras.values()))

@@ -8,7 +8,7 @@ from pathlib import Path
 class FrontendPaths:
     """Filesystem artifacts produced or consumed by one frontend run."""
 
-    track_pairs_path: Path
+    admitted_frames_path: Path
     retrieval_pairs_path: Path
     sparse_features_path: Path
     sparse_matches_path: Path
@@ -20,6 +20,10 @@ class FrontendPaths:
     full_depth_maps_path: Path | None = None
     geocalib_per_image_path: Path | None = None
     geocalib_batch_path: Path | None = None
+
+    @property
+    def lc_masks_path(self) -> Path:
+        return self.sparse_matches_path.with_name(f"lc_masks-{self.sparse_matches_path.stem}.json")
 
 
 def _path_component(value, label):
@@ -49,7 +53,7 @@ def build_frontend_paths(
     if cache_variant:
         trajectory_frontend_dir /= _path_component(cache_variant, "cache_variant")
 
-    track_pairs_path = trajectory_frontend_dir / "track_pairs.h5"
+    admitted_frames_path = trajectory_frontend_dir / "selected_frames.h5"
     retrieval_pairs_path = trajectory_frontend_dir / "retrieval_pairs.h5"
     salient_features_path = trajectory_frontend_dir / "salient_features.h5"
     sparse_features_path = trajectory_frontend_dir / "sparse_features.h5"
@@ -63,7 +67,7 @@ def build_frontend_paths(
         geocalib_batch_path = trajectory_frontend_dir / "geocalib_batch.h5"
 
     return FrontendPaths(
-        track_pairs_path=track_pairs_path,
+        admitted_frames_path=admitted_frames_path,
         retrieval_pairs_path=retrieval_pairs_path,
         sparse_features_path=sparse_features_path,
         sparse_matches_path=sparse_matches_path,

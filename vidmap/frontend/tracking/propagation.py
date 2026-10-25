@@ -22,8 +22,8 @@ from tqdm import tqdm
 from vidmap.frontend.h5_write_queue import H5WriteQueue, save_keypoints, write_pair_matches
 from vidmap.frontend.image_dataset import ImageDatasetOptions, get_image_size
 from vidmap.frontend.keyframes.selection import score_keyframe_lookahead
+from vidmap.frontend.loop_closure.matching import queue_extended_matches
 from vidmap.frontend.paths import FrontendPaths
-from vidmap.frontend.tracking.kernels import select_lc_matches_from_dense
 from vidmap.frontend.tracking.multiflow import build_multiflow_window
 from vidmap.frontend.tracking.state import SparseTrackState
 from vidmap.frontend.video_images import RomaVideoImageDataset, load_roma_resolution_pair
@@ -84,28 +84,16 @@ def _write_sequential_match(
     writer_queue,
 ):
     """Convert one reused dense field into a queued sequential sparse match."""
-    pair_name = names_to_pair(name0, name1)
-    kpts0 = get_keypoints(sparse_features_path, name0)
-    kpts1 = get_keypoints(sparse_features_path, name1)
-    width0, height0 = get_image_size(scene_parser, name0)
-    width1, height1 = get_image_size(scene_parser, name1)
-    lc_matches = select_lc_matches_from_dense(
-        kpts0,
-        kpts1,
+    queue_extended_matches(
+        name0,
+        name1,
+        get_keypoints(sparse_features_path, name0),
+        get_keypoints(sparse_features_path, name1),
         dense.matches,
         dense.certainty,
-        source_size=(width0, height0),
-        target_size=(width1, height1),
-        lc_match_thresh=match_threshold,
-    )
-    writer_queue.put(
-        (
-            pair_name,
-            {
-                "matches0": torch.from_numpy(lc_matches["matches0"])[None],
-                "matching_scores0": torch.from_numpy(lc_matches["matching_scores0"]).float()[None],
-            },
-        )
+        scene_parser=scene_parser,
+        match_threshold=match_threshold,
+        writer_queue=writer_queue,
     )
 
 

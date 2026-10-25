@@ -13,6 +13,7 @@ import pycolmap
 
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.inputs.database import copy_finalized_database, load_finalized_database
+from vidmap.mapper.inputs.timeline import MappingTimeline, mapping_timeline
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.mapper import SetupOptions
@@ -20,7 +21,6 @@ from vidmap.mapper.replay.cache import ReplayCache
 from vidmap.mapper.replay.evidence.canonical import snapshot_images
 from vidmap.mapper.replay.evidence.stages import database_file_summary, database_to_native_summary
 from vidmap.utils.image_sampling import sample_at_keypoints
-from vidmap.utils.io import ordered_pair_images
 from vidmap.utils.loop_closure_masks import read_loop_closure_masks
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class MappingStageInputs:
 
     solve_state: SolveState
     consecutive_pair_ids: list[int]
-    sequence_id_to_index: dict[int, int]
+    timeline: MappingTimeline
     vgc_exclusion_ids: set[int]
 
 
@@ -120,7 +120,6 @@ class MappingInputLoader:
     def load(self, *, on_database_loaded: Callable[[SolveState], None] | None = None) -> MappingStageInputs:
         self.inputs.validate()
         database_path = self.inputs.database_path
-        consecutive_pairs = self.inputs.read_track_pairs()
         lc_masks = read_loop_closure_masks(self.inputs.lc_masks_path)
         vgc_filtered_pairs = self.inputs.read_vgc_filtered_pairs()
         if not database_path.exists():
@@ -193,22 +192,11 @@ class MappingInputLoader:
                 len(vgc_exclusion_ids),
             )
 
-        # The temporal track-pair file must describe exactly one adjacent chain
-        # over the finalized database images.
-        images = state.reconstruction.images
-        sequence_names = ordered_pair_images(consecutive_pairs)
-        if consecutive_pairs != list(zip(sequence_names, sequence_names[1:])):
-            raise ValueError("Mapper track pairs must form one ordered adjacent image chain")
-        name_to_id = {image.name: image_id for image_id, image in images.items()}
-        if set(sequence_names) != set(name_to_id):
-            raise ValueError("Mapper track-pair sequence does not match finalized database images")
-        sequence_ids = [name_to_id[name] for name in sequence_names]
-        sequence_id_to_index = {sid: idx for idx, sid in enumerate(sequence_ids)}
+        timeline = mapping_timeline(self.inputs.frame_sequence(), state.reconstruction)
 
         consecutive_pair_ids = []
-        for pair in consecutive_pairs:
-            pair_id = pair_name_to_pid.get(frozenset(pair))
-            if pair_id is not None:
+        for pair_id in timeline.consecutive_pair_ids:
+            if pair_id in state.pose_graph.edges:
                 consecutive_pair_ids.append(pair_id)
 
         # Finalize native pair classifications only
@@ -218,6 +206,6 @@ class MappingInputLoader:
         return MappingStageInputs(
             solve_state=state,
             consecutive_pair_ids=consecutive_pair_ids,
-            sequence_id_to_index=sequence_id_to_index,
+            timeline=timeline,
             vgc_exclusion_ids=vgc_exclusion_ids,
         )

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from vidmap.datasets.local import IMAGE_SUFFIXES, LocalImageParser
+from vidmap.datasets.local import IMAGE_SUFFIXES
 from vidmap.mapper import Mapper
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.run_options import RunOptions
@@ -31,49 +31,6 @@ _VIDEO_MANIFEST_SCHEMA_VERSION = 1
 _VIDEO_DECODE_PROFILE = "ffmpeg-jpeg-q2-vsync0-best-effort-timestamps-v1"
 LOCAL_INPUT_MANIFEST_NAME = "local_input.json"
 _LOCAL_INPUT_SCHEMA_VERSION = 1
-
-
-def reconstruct(
-    mapping_conf,
-    frontend_conf,
-    input_path: str | Path,
-    *,
-    workspace: str | Path,
-    mapper_inputs_dir: str | Path | MapperInputs,
-    run_options: RunOptions | None = None,
-    imnames=None,
-    intrinsics_path: str | Path | None = None,
-    overwrite_outputs: bool = False,
-    output_dir: str | Path | None = None,
-):
-    """Reconstruct an image directory or MP4 using the shared mapping API."""
-    mapper_inputs = resolve_mapper_inputs(frontend_conf, mapper_inputs_dir)
-    estimate_intrinsics = frontend_conf.pipeline.camera_priors.initialization == "predicted"
-    if estimate_intrinsics and intrinsics_path is not None:
-        raise ValueError("The selected uncalibrated config cannot be combined with --intrinsics")
-    if not estimate_intrinsics and intrinsics_path is None:
-        raise ValueError("The selected calibrated config requires --intrinsics")
-
-    workspace = Path(workspace).expanduser()
-    image_dir = prepare_reconstruction_images(input_path, workspace)
-    scene_parser = LocalImageParser(
-        image_dir=image_dir,
-        imnames=imnames,
-        intrinsics_path=intrinsics_path,
-        estimate_intrinsics=estimate_intrinsics,
-    )
-    output_dir = workspace if output_dir is None else Path(output_dir).expanduser()
-    run_options = RunOptions() if run_options is None else run_options
-    return run_mapping(
-        mapping_conf,
-        frontend_conf=frontend_conf,
-        mapper_inputs=mapper_inputs,
-        run_options=run_options,
-        scene_parser=scene_parser,
-        output_dir=output_dir,
-        scene_name=scene_parser.scene,
-        overwrite_outputs=overwrite_outputs,
-    )
 
 
 def resolve_mapper_inputs(frontend_conf, mapper_inputs: str | Path | MapperInputs) -> MapperInputs:
@@ -117,7 +74,12 @@ def prepare_reconstruction_images(input_path: str | Path, workspace: str | Path)
     return decode_video_frames(source, Path(workspace).expanduser())
 
 
-def write_local_input_provenance(directory: str | Path, image_dir: str | Path, *, overwrite: bool = False) -> Path:
+def write_local_input_provenance(
+    directory: str | Path,
+    image_dir: str | Path,
+    *,
+    overwrite: bool = False,
+) -> Path:
     """Record the resolved RGB root needed to visualize a local reconstruction."""
     directory = Path(directory).expanduser()
     image_dir = Path(image_dir).expanduser().resolve()
@@ -130,7 +92,7 @@ def write_local_input_provenance(directory: str | Path, image_dir: str | Path, *
         "image_dir": str(image_dir),
     }
     if path.is_file() and not overwrite:
-        if _read_local_input_provenance(path) != image_dir:
+        if _read_local_input_provenance(path) != payload:
             raise ValueError(f"Local input provenance already identifies different images: {path}")
         return path
     directory.mkdir(parents=True, exist_ok=True)
@@ -144,12 +106,18 @@ def write_local_input_provenance(directory: str | Path, image_dir: str | Path, *
 
 
 def local_input_image_dir(mapper_inputs: str | Path | MapperInputs) -> Path | None:
-    """Return the RGB root recorded in a mapper-inputs boundary, when present."""
+    """Return recorded reconstruction images."""
     directory = (
         Path(mapper_inputs).expanduser() if isinstance(mapper_inputs, (str, Path)) else Path(mapper_inputs.directory)
     )
     source = directory / LOCAL_INPUT_MANIFEST_NAME
-    return _read_local_input_provenance(source) if source.is_file() else None
+    if not source.is_file():
+        return None
+    payload = _read_local_input_provenance(source)
+    root = Path(payload["image_dir"]).expanduser()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Recorded local input image directory is missing: {root}")
+    return root
 
 
 def extract_point_colors(
@@ -187,7 +155,7 @@ def local_run_image_dir(run: str | Path) -> Path | None:
     return local_input_image_dir(Path(run).expanduser() / "mapper_inputs")
 
 
-def _read_local_input_provenance(path: Path) -> Path:
+def _read_local_input_provenance(path: Path) -> dict:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -201,10 +169,7 @@ def _read_local_input_provenance(path: Path) -> Path:
         or not payload["image_dir"]
     ):
         raise ValueError(f"Invalid local input provenance: {path}")
-    image_dir = Path(payload["image_dir"]).expanduser()
-    if not image_dir.is_dir():
-        raise FileNotFoundError(f"Recorded local input image directory is missing: {image_dir}")
-    return image_dir
+    return payload
 
 
 def decode_video_frames(video_path: str | Path, workspace: str | Path) -> Path:

@@ -6,13 +6,32 @@ import pycolmap
 import pytest
 import vidmap_native._core as native
 
-from tests.mapper.test_bundle_adjustment_problem import _options as _ba_options
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.positioning import GPOptions
 from vidmap.mapper.playback_trace import SolverPlaybackOptions
 from vidmap.mapper.stages.bundle_adjustment.problem import run_bundle_adjustment
 from vidmap.mapper.stages.global_positioning import problem as gp
 from vidmap.mapper.stages.global_positioning.problem import TemporalAccelerationPrior
+
+
+def _ba_options(state, *, num_threads=1):
+    from vidmap.mapper.options.solver import SolverBackendOptions
+    from vidmap.mapper.stages.bundle_adjustment.options import build_bundle_adjustment_options
+
+    return build_bundle_adjustment_options(
+        reconstruction=state.reconstruction,
+        image_order=state.image_order,
+        camera_ids=[],
+        variable_point3D_ids=[],
+        optimize_intrinsics=True,
+        refine_principal_point=False,
+        fix_rotations=False,
+        reprojection_loss="trivial",
+        reprojection_scale=1.0,
+        reprojection_weight=1.0,
+        num_threads=num_threads,
+        solver_backend=SolverBackendOptions(),
+    )
 
 
 def _gp_options(rounds=0):
@@ -32,7 +51,10 @@ def _gp_options(rounds=0):
 
 def _run_gp(options, state, callback=None, *, timeline=None, **kwargs):
     prepared = gp.prepare_observations(
-        state.reconstruction, state.sidecars, options, state.image_order if timeline is None else timeline
+        state.reconstruction,
+        state.sidecars,
+        options,
+        tuple(dict.fromkeys(state.image(i).frame_id for i in state.image_order)) if timeline is None else timeline,
     )
     create = pycolmap.create_default_global_positioner
 
@@ -110,7 +132,7 @@ def test_continuous_support_reduces_cost():
 
 
 def test_sequential_support_requires_complete_unique_timeline():
-    with pytest.raises(ValueError, match="unique image timeline"):
+    with pytest.raises(ValueError, match="unique frame timeline"):
         _run_gp(_gp_options(2), _playback_problem([1, 2, 3]), timeline=[1, 2])
 
 

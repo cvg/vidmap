@@ -1,16 +1,19 @@
 // Track establishment over explicit regular and loop-closure observations.
+#include "colmap/geometry/triangulation.h"
 #include "colmap/math/union_find.h"
 #include "colmap/scene/two_view_geometry.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
+#include "stages/rig_geometry.h"
 #include "vidmap_native/tracks.h"
 
 namespace vidmap {
@@ -302,7 +305,51 @@ TrackMap EstablishTracksFromCorrGraph(
   return tracks;
 }
 
+// Two calibrated sensors at one exposure provide metric stereo support even
+// when neither observation has a monocular depth prior. Temporal two-view
+// tracks still use the original depth gate.
+bool HasTriangulatableStereo(const colmap::Reconstruction& reconstruction,
+                             const NativeTrack& track) {
+  std::map<ImageId, colmap::point2D_t> features;
+  const auto insert = [&](const TrackElement& observation) {
+    const auto [it, added] =
+        features.emplace(observation.image_id, observation.point2D_idx);
+    return added || it->second == observation.point2D_idx;
+  };
+  for (const auto& observation : track.observations)
+    if (!insert(observation)) return false;
+  for (const auto& observation : track.loop_closure_observations)
+    if (!insert(observation.observation)) return false;
+  if (features.size() != 2) return false;
+  const auto first = features.begin();
+  const auto second = std::next(first);
+  const auto& image1 = reconstruction.Image(first->first);
+  const auto& image2 = reconstruction.Image(second->first);
+  if (image1.FrameId() != image2.FrameId() ||
+      image1.CameraId() == image2.CameraId() ||
+      !image1.CameraPtr()->HasPriorFocalLength() ||
+      !image2.CameraPtr()->HasPriorFocalLength())
+    return false;
+  const auto relative =
+      FixedSensorFromRig(image2) * colmap::Inverse(FixedSensorFromRig(image1));
+  if (relative.translation().norm() <= 1e-6) return false;
+  const auto ray1 =
+      image1.CameraPtr()->CamRayFromImg(image1.Point2D(first->second).xy);
+  const auto ray2 =
+      image2.CameraPtr()->CamRayFromImg(image2.Point2D(second->second).xy);
+  if (!ray1 || !ray2 || !ray1->allFinite() || !ray2->allFinite()) return false;
+  if ((relative.rotation() * *ray1).cross(*ray2).norm() <= 1e-6) return false;
+  Eigen::Vector3d point;
+  if (!colmap::TriangulateMidPoint(relative, *ray1, *ray2, &point) ||
+      !point.allFinite())
+    return false;
+  // Signed distance along the actual rays also works for non-perspective
+  // cameras; a positive camera-z test would incorrectly reject rear rays.
+  return point.dot(*ray1) > 1e-6 && (relative * point).dot(*ray2) > 1e-6;
+}
+
 TrackMap FilterTracksForProblem(
+    const colmap::Reconstruction& reconstruction,
     const MappingSidecars& sidecars,
     const std::vector<ImageId>& registered_image_ids,
     const TrackMap& tracks_full,
@@ -350,7 +397,9 @@ TrackMap FilterTracksForProblem(
           [&](const LoopClosureObservation& observation) {
             return HasValidDepthPrior(sidecars, observation.observation);
           });
-      if (!regular_depths_valid || !loop_closure_depths_valid) continue;
+      if ((!regular_depths_valid || !loop_closure_depths_valid) &&
+          !HasTriangulatableStereo(reconstruction, candidate))
+        continue;
     }
     selected.emplace(track_id, std::move(candidate));
   }
@@ -376,7 +425,8 @@ TrackEstablishmentResult EstablishAndCommitTracks(
                                            pair_order,
                                            options,
                                            loop_closure_second_pass);
-  auto selected = FilterTracksForProblem(sidecars, image_order, full, options);
+  auto selected = FilterTracksForProblem(
+      reconstruction, sidecars, image_order, full, options);
   TrackEstablishmentResult result;
   result.num_full_tracks = full.size();
   result.num_tracks = selected.size();

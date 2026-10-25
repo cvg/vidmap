@@ -148,7 +148,7 @@ __RECONSTRUCTION_SCRIPT__
     });
     let pointPositions = new Float32Array();
     let pointColors = new Uint8Array();
-    const keyframeTimeline = {names: [], pointOffsets: [0], imageIds: [], timestampsSeconds: null};
+    const keyframeTimeline = {names: [], pointOffsets: [0], imageIds: [], timestampsSeconds: null, frames: [], frameImageOffsets: [0]};
     let imageDirectory = null;
     let estimatedFrustaPositions = new Float32Array();
     let estimatedPathPositions = new Float32Array();
@@ -324,16 +324,23 @@ __RECONSTRUCTION_SCRIPT__
       return {width: width, height: height};
     }
 
-    function drawTrackedKeypoints(index) {
-      const canvas = document.getElementById("tracked-keypoints-overlay");
-      const preview = document.getElementById("keyframe-preview");
-      const width = preview.clientWidth;
-      const height = preview.clientHeight;
+    function overlayContext(image, canvas) {
       const pixelRatio = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(width * pixelRatio));
-      canvas.height = Math.max(1, Math.round(height * pixelRatio));
+      canvas.width = Math.max(1, Math.round(image.clientWidth * pixelRatio));
+      canvas.height = Math.max(1, Math.round(image.clientHeight * pixelRatio));
       const drawing = canvas.getContext("2d");
       drawing.clearRect(0, 0, canvas.width, canvas.height);
+      const size = imageDimensions(image);
+      const scale = Math.min(canvas.width / size.width, canvas.height / size.height);
+      const width = size.width * scale, height = size.height * scale;
+      const x = (canvas.width - width) / 2, y = (canvas.height - height) / 2;
+      drawing.beginPath(); drawing.rect(x, y, width, height); drawing.clip();
+      drawing.translate(x, y);
+      return {drawing, pixelRatio, scaleX: scale, scaleY: scale};
+    }
+
+    function drawTrackedImageKeypoints(index, preview, canvas) {
+      const {drawing, pixelRatio, scaleX, scaleY} = overlayContext(preview, canvas);
       const toggle = document.getElementById("tracked-keypoints-toggle");
       if (
         trackedKeypointPositions === null || trackedKeypointOffsets === null ||
@@ -342,9 +349,6 @@ __RECONSTRUCTION_SCRIPT__
       ) return;
       const begin = trackedKeypointOffsets[index];
       const end = trackedKeypointOffsets[index + 1];
-      const sourceDimensions = imageDimensions(preview);
-      const scaleX = canvas.width / sourceDimensions.width;
-      const scaleY = canvas.height / sourceDimensions.height;
       const radius = Math.max(1.7 * pixelRatio, 1);
       drawing.fillStyle = "rgba(0, 255, 170, 0.9)";
       drawing.strokeStyle = "rgba(0, 0, 0, 0.85)";
@@ -360,6 +364,111 @@ __RECONSTRUCTION_SCRIPT__
       }
     }
 
+    let previewGeneration = 0;
+    let framePreviewCards = [];
+    function drawTrackedKeypoints() {
+      for (const card of framePreviewCards) {
+        if (card.stage.hidden) continue;
+        if (card.imageIndex !== null) drawTrackedImageKeypoints(card.imageIndex, card.image, card.canvas);
+      }
+    }
+
+    async function showFramePreviews(frameIndex) {
+      const generation = ++previewGeneration;
+      const frame = keyframeTimeline.frames[frameIndex];
+      const container = document.getElementById("keyframe-previews");
+      if (frame === undefined) return;
+      container.dataset.loading = "true";
+      const directory = imageDirectory;
+      const cards = frame.cameraIds.map((cameraId, slot) => {
+        const figure = document.importNode(document.getElementById("keyframe-card").content.firstElementChild, true);
+        const caption = figure.querySelector("figcaption"), stage = figure.querySelector("div");
+        const image = figure.querySelector("img"), canvas = figure.querySelector("canvas");
+        figure.className = "keyframe-camera";
+        figure.dataset.cameraId = String(cameraId);
+        const imageIndex = frame.imageIndices[slot];
+        const name = imageIndex === null ? null : keyframeTimeline.names[imageIndex];
+        caption.textContent = `Camera ${cameraId} · ${name ?? "not registered in this frame"}`;
+        image.alt = `Selected frame camera ${cameraId}`;
+        image.dataset.imageIndex = imageIndex === null ? "" : String(imageIndex);
+        stage.hidden = name === null || directory === null;
+        if (name !== null && directory === null) caption.textContent += " · preview unavailable";
+        return {figure, image, canvas, imageIndex, stage, name};
+      });
+      // Decode every camera before revealing any image. A newer slider change
+      // invalidates the entire pending frame, never just one camera's request.
+      await Promise.all(cards.map(async card => {
+        if (card.stage.hidden) return;
+        try {
+          loadImage(card.image, directory, card.name);
+          await card.image.decode();
+        } catch (failure) {
+          card.stage.hidden = true;
+          card.figure.querySelector("figcaption").textContent += ` · preview failed: ${errorMessage(failure)}`;
+        }
+      }));
+      if (generation !== previewGeneration) return;
+      container.replaceChildren(...cards.map(card => card.figure));
+      container.dataset.frameIndex = String(frameIndex);
+      framePreviewCards = cards;
+      container.dataset.loading = "false";
+      drawTrackedKeypoints();
+      return true;
+    }
+
+    const selectedFrameGeometry = pointGeometry(new Float32Array());
+    const selectedFramePoints = new THREE.Points(selectedFrameGeometry, new THREE.PointsMaterial({
+      color: 0x00ffaa, size: 3.5, sizeAttenuation: false, depthTest: false, depthWrite: false
+    }));
+    selectedFramePoints.name = "selected-frame-observations";
+    selectedFramePoints.renderOrder = 105;
+    scene.add(selectedFramePoints);
+    let displayedPointIndex = new Map();
+    function installPointIds(ids) {
+      displayedPointIndex = new Map();
+      for (let index = 0; index < ids.length; ++index) displayedPointIndex.set(ids[index], index);
+    }
+    function updateSelectedFrameObservations(frameIndex) {
+      const frame = keyframeTimeline.frames[frameIndex];
+      const positions = [];
+      if (frame !== undefined && trackedKeypointPointIds !== null) {
+        const ids = frameObservationPointIds(frame.imageIndices, trackedKeypointPointIds, trackedKeypointOffsets);
+        for (const id of ids) {
+          const index = displayedPointIndex.get(id);
+          if (index !== undefined) positions.push(...pointPositions.subarray(index * 3, index * 3 + 3));
+        }
+      }
+      selectedFrameGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      selectedFrameGeometry.computeBoundingSphere();
+      selectedFramePoints.visible = document.getElementById("frame-observations-toggle").checked;
+      return positions.length / 3;
+    }
+
+    function updateFramePath(frameIndex) {
+      if (!keyframeTimeline.frames.some(frame => frame.cameraIds.length > 1)) {
+        updatePathPrefix(estimatedPath, estimatedPathPositions, keyframeTimeline.frameImageOffsets[frameIndex + 1]);
+        return;
+      }
+      const previous = new Map();
+      const positions = [];
+      for (const frame of keyframeTimeline.frames.slice(0, frameIndex + 1)) {
+        frame.cameraIds.forEach((cameraId, slot) => {
+          const key = `${frame.rigId}:${cameraId}`;
+          const index = frame.imageIndices[slot];
+          if (index === null) { previous.delete(key); return; }
+          const center = estimatedPathPositions.subarray(index * 3, index * 3 + 3);
+          if (previous.has(key)) positions.push(...previous.get(key), ...center);
+          previous.set(key, center);
+        });
+      }
+      const geometry = new THREE.LineSegmentsGeometry();
+      if (positions.length > 0) geometry.setPositions(positions);
+      estimatedPath.geometry.dispose();
+      estimatedPath.geometry = geometry;
+      estimatedPath.visible = positions.length > 0 && document.getElementById("paths-toggle").checked;
+      invalidateSceneRender();
+    }
+
     function installTrackedKeypoints(positions, pointIds, offsets) {
       if (offsets.length !== keyframeTimeline.names.length + 1) {
         throw new Error("Tracked-keypoint offsets must match the keyframe timeline");
@@ -370,7 +479,7 @@ __RECONSTRUCTION_SCRIPT__
       trackedKeypointPositions = positions;
       trackedKeypointPointIds = pointIds;
       trackedKeypointOffsets = offsets;
-      drawTrackedKeypoints(Number(document.getElementById("keyframe-slider").value));
+      drawTrackedKeypoints();
     }
 
     function installKeyframeTimeline(timeline) {
@@ -384,11 +493,16 @@ __RECONSTRUCTION_SCRIPT__
       keyframeTimeline.names = timeline.names;
       keyframeTimeline.imageIds = timeline.imageIds;
       keyframeTimeline.timestampsSeconds = timeline.timestampsSeconds;
+      keyframeTimeline.frames = timeline.frames;
+      keyframeTimeline.frameImageOffsets = timeline.frameImageOffsets;
+      document.getElementById("keyframe-preview-panel").classList.toggle("rig-frame", timeline.frames.some(f => f.cameraIds.length > 1));
       keyframeTimeline.pointOffsets = new Array(timeline.names.length + 1).fill(0);
       const slider = document.getElementById("keyframe-slider");
-      slider.max = String(timeline.names.length - 1);
+      slider.max = String(timeline.frames.length - 1);
       slider.value = slider.max;
       slider.disabled = false;
+      document.getElementById("keyframe-previous").disabled = timeline.frames.length < 2;
+      document.getElementById("keyframe-next").disabled = timeline.frames.length < 2;
       const play = document.getElementById("keyframe-play");
       const status = document.getElementById("keyframe-playback-status");
       play.disabled = timeline.timestampsSeconds === null;
@@ -397,14 +511,7 @@ __RECONSTRUCTION_SCRIPT__
 
     function drawLoopClosureKeypoints(image, canvas, keypoints, matchClasses) {
       if (!image.complete || !(image.naturalWidth > 0) || !(image.naturalHeight > 0)) return;
-      const pixelRatio = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(image.clientWidth * pixelRatio));
-      canvas.height = Math.max(1, Math.round(image.clientHeight * pixelRatio));
-      const drawing = canvas.getContext("2d");
-      drawing.clearRect(0, 0, canvas.width, canvas.height);
-      const sourceDimensions = imageDimensions(image);
-      const scaleX = canvas.width / sourceDimensions.width;
-      const scaleY = canvas.height / sourceDimensions.height;
+      const {drawing, pixelRatio, scaleX, scaleY} = overlayContext(image, canvas);
       const radius = Math.max(2 * pixelRatio, 1);
       drawing.strokeStyle = "rgba(0, 0, 0, 0.9)";
       drawing.lineWidth = Math.max(pixelRatio, 1);
@@ -437,7 +544,9 @@ __RECONSTRUCTION_SCRIPT__
     }
 
     function showLoopClosurePair(selection) {
-      if (imageDirectory === null) throw new Error("Load the reconstruction image source before opening a pair");
+      if (imageDirectory === null) {
+        throw new Error("Load the reconstruction image source before opening a pair");
+      }
       const panel = document.getElementById("loop-closure-pair-panel");
       activeLoopClosurePair = selection;
       const leftImage = document.getElementById("loop-closure-left-image");
@@ -474,12 +583,6 @@ __RECONSTRUCTION_SCRIPT__
       setLoopClosurePointHighlights(new Float32Array());
     }
 
-    function installImageDirectory(directory) {
-      imageDirectory = directory;
-      const slider = document.getElementById("keyframe-slider");
-      showKeyframe(Number(slider.value));
-    }
-
     function resetRunVisualState() {
       imageDirectory = null;
       closeLoopClosurePair();
@@ -488,11 +591,18 @@ __RECONSTRUCTION_SCRIPT__
       trackedKeypointOffsets = null;
       const empty = new Float32Array();
       replacePointGeometry(empty, null);
+      installPointIds([]);
+      updateSelectedFrameObservations(0);
       replaceEstimatedGeometry(empty, empty);
       replaceLoopClosureGeometry(new Uint32Array(), new Float32Array());
       error.style.display = "none";
       error.textContent = "";
       pauseKeyframePlayback();
+      ++previewGeneration;
+      framePreviewCards = [];
+      document.getElementById("keyframe-previews").replaceChildren();
+      keyframeTimeline.frames = [];
+      keyframeTimeline.frameImageOffsets = [0];
       keyframeTimeline.names = [];
       keyframeTimeline.imageIds = [];
       keyframeTimeline.timestampsSeconds = null;
@@ -501,14 +611,11 @@ __RECONSTRUCTION_SCRIPT__
       slider.max = "0";
       slider.value = "0";
       slider.disabled = true;
+      document.getElementById("keyframe-previous").disabled = true;
+      document.getElementById("keyframe-next").disabled = true;
       document.getElementById("keyframe-play").disabled = true;
       document.getElementById("keyframe-playback-status").textContent = "timestamps unavailable";
       document.getElementById("keyframe-label").textContent = "";
-      const preview = document.getElementById("keyframe-preview");
-      preview.removeAttribute("src");
-      preview.removeAttribute("data-source-width");
-      preview.removeAttribute("data-source-height");
-      drawTrackedKeypoints(0);
     }
 
     function setCovarianceRankLimit(limit) {
@@ -599,7 +706,8 @@ __RECONSTRUCTION_SCRIPT__
     let visibleLoopClosureIndices = initialLoopClosures.edgeIndices;
     scene.add(loopClosures);
     function updateLoopClosureGeometry(maximumKeyframe) {
-      const visible = visibleLoopClosureData(maximumKeyframe);
+      const maximumImage = (keyframeTimeline.frameImageOffsets[maximumKeyframe + 1] ?? 0) - 1;
+      const visible = visibleLoopClosureData(maximumImage);
       visibleLoopClosurePositions = visible.positions;
       visibleLoopClosureIndices = visible.edgeIndices;
       const minimumInput = document.getElementById("loop-closures-min-shared");
@@ -713,13 +821,15 @@ __RECONSTRUCTION_SCRIPT__
       updateLoopClosureGeometry(Number(document.getElementById("keyframe-slider").value));
       fitScene();
     }
-    function showKeyframe(index) {
+    async function showKeyframe(index) {
       if (keyframeTimeline.names.length === 0) return;
-      const bounded = Math.max(0, Math.min(index, keyframeTimeline.names.length - 1));
+      const bounded = Math.max(0, Math.min(index, keyframeTimeline.frames.length - 1));
       document.getElementById("keyframe-slider").value = String(bounded);
-      const pointCount = keyframeTimeline.pointOffsets[bounded + 1];
+      if (!(await showFramePreviews(bounded))) return;
+      const imageCount = keyframeTimeline.frameImageOffsets[bounded + 1];
+      const pointCount = keyframeTimeline.pointOffsets[imageCount];
       if (covarianceIndexActive) {
-        keyframeLimit.value = bounded;
+        keyframeLimit.value = imageCount - 1;
         pointsGeometry.setDrawRange(0, covarianceDrawCount);
       } else {
         pointsGeometry.setDrawRange(0, pointCount);
@@ -728,26 +838,19 @@ __RECONSTRUCTION_SCRIPT__
         ? ""
         : ` · ${keyframeTimeline.timestampsSeconds[bounded].toFixed(3)} s`;
       document.getElementById("keyframe-label").textContent =
-        `${bounded + 1}/${keyframeTimeline.names.length}${timestampText} · ${keyframeTimeline.names[bounded]} · ${pointCount.toLocaleString()} cumulative points`;
-      const preview = document.getElementById("keyframe-preview");
-      if (imageDirectory !== null) {
-        loadImage(preview, imageDirectory, keyframeTimeline.names[bounded]);
-      }
-      preview.dataset.keyframeIndex = String(bounded);
-      drawTrackedKeypoints(bounded);
-      updatePathPrefix(estimatedPath, estimatedPathPositions, bounded + 1);
+        `${bounded + 1}/${keyframeTimeline.frames.length}${timestampText} · frame ${keyframeTimeline.frames[bounded].frameId ?? keyframeTimeline.names[bounded]} · ${pointCount.toLocaleString()} cumulative points`;
+      updateSelectedFrameObservations(bounded);
+      updateFramePath(bounded);
       const estimatedSize = Number(document.getElementById("estimated-frusta-size").value);
       updateFrustaPrefix(
-        estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, bounded + 1, estimatedSize
+        estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, imageCount, estimatedSize
       );
       updateLoopClosureGeometry(bounded);
     }
-    const keyframePreview = document.getElementById("keyframe-preview");
-    keyframePreview.onload = () => drawTrackedKeypoints(Number(keyframePreview.dataset.keyframeIndex));
     const keyframePreviewPanel = document.getElementById("keyframe-preview-panel");
     keyframePreviewPanel.ontoggle = () => {
       if (keyframePreviewPanel.open) {
-        requestAnimationFrame(() => drawTrackedKeypoints(Number(keyframeSlider.value)));
+        requestAnimationFrame(() => drawTrackedKeypoints());
       }
     };
     const loopClosurePairClose = document.getElementById("loop-closure-pair-close");
@@ -755,7 +858,7 @@ __RECONSTRUCTION_SCRIPT__
     if (typeof ResizeObserver !== "undefined") {
       const imagePanelResizeObserver = new ResizeObserver(() => {
         requestAnimationFrame(() => {
-          drawTrackedKeypoints(Number(keyframeSlider.value));
+          drawTrackedKeypoints();
           if (activeLoopClosurePair !== null) redrawLoopClosurePair(activeLoopClosurePair);
         });
       });
@@ -839,7 +942,7 @@ __RECONSTRUCTION_SCRIPT__
     function startKeyframePlayback() {
       if (keyframeTimeline.timestampsSeconds === null) return;
       let startIndex = Number(keyframeSlider.value);
-      if (startIndex >= keyframeTimeline.names.length - 1) {
+      if (startIndex >= keyframeTimeline.frames.length - 1) {
         startIndex = 0;
         showKeyframe(startIndex);
       }
@@ -848,7 +951,8 @@ __RECONSTRUCTION_SCRIPT__
       let displayedIndex = startIndex;
       keyframePlay.textContent = "pause";
       keyframePlaybackStatus.textContent = `${speed}× real time`;
-      function advance(now) {
+      async function advance(now) {
+        const request = keyframePlaybackRequest;
         const index = timelineIndexAtElapsed(
           keyframeTimeline.timestampsSeconds,
           startIndex,
@@ -856,10 +960,11 @@ __RECONSTRUCTION_SCRIPT__
           speed
         );
         if (index !== displayedIndex) {
-          showKeyframe(index);
+          await showKeyframe(index);
+          if (request !== keyframePlaybackRequest) return;
           displayedIndex = index;
         }
-        if (index >= keyframeTimeline.names.length - 1) {
+        if (index >= keyframeTimeline.frames.length - 1) {
           pauseKeyframePlayback();
           keyframePlaybackStatus.textContent = "finished";
           return;
@@ -872,6 +977,12 @@ __RECONSTRUCTION_SCRIPT__
       pauseKeyframePlayback();
       showKeyframe(Number(event.target.value));
     };
+    for (const [id, step] of [["keyframe-previous", -1], ["keyframe-next", 1]]) {
+      document.getElementById(id).onclick = () => {
+        pauseKeyframePlayback();
+        showKeyframe(Number(keyframeSlider.value) + step);
+      };
+    }
     keyframePlay.onclick = () => {
       if (keyframePlaybackRequest === null) startKeyframePlayback();
       else pauseKeyframePlayback();
@@ -882,8 +993,12 @@ __RECONSTRUCTION_SCRIPT__
         startKeyframePlayback();
       }
     };
+    document.getElementById("frame-observations-toggle").onchange = () => {
+      updateSelectedFrameObservations(Number(document.getElementById("keyframe-previews").dataset.frameIndex));
+      invalidateSceneRender();
+    };
     const trackedKeypointsToggle = document.getElementById("tracked-keypoints-toggle");
-    trackedKeypointsToggle.onchange = () => drawTrackedKeypoints(Number(keyframeSlider.value));
+    trackedKeypointsToggle.onchange = () => drawTrackedKeypoints();
     const estimatedFrustaToggle = document.getElementById("estimated-frusta-toggle");
     estimatedFrustaToggle.onchange = event => estimatedFrusta.visible = event.target.checked;
     document.getElementById("paths-toggle").onchange = () => showKeyframe(Number(keyframeSlider.value));
@@ -1013,7 +1128,7 @@ __RECONSTRUCTION_SCRIPT__
       for (const object of [estimatedFrusta, loopClosures, estimatedPath]) {
         object.material.resolution.set(window.innerWidth, window.innerHeight);
       }
-      drawTrackedKeypoints(Number(keyframeSlider.value));
+      drawTrackedKeypoints();
       if (activeLoopClosurePair !== null) redrawLoopClosurePair(activeLoopClosurePair);
       invalidateSceneRender();
     }

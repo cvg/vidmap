@@ -473,14 +473,14 @@ class BundleAdjuster:
 
         depth_batches = []
         depth_scales = []
-        images_without_residuals = []
+        observed_frames = set()
         small_angle_ids = self.small_triangulation_angle_ids(depth_options.risky_triangulation_angle_deg)
         for image_id in optimized_image_ids:
             image = self.reconstruction.images[image_id]
             point2D_indices = np.array(image.get_observation_point2D_idxs())
             if point2D_indices.size == 0:
-                images_without_residuals.append(image_id)
                 continue
+            observed_frames.add(image.frame_id)
             solve_image = self.solve_state.image_data(image_id)
             valid = np.asarray(solve_image.depth_validity, dtype=bool)[point2D_indices]
             depths = np.asarray(solve_image.depth_values)[point2D_indices]
@@ -576,8 +576,10 @@ class BundleAdjuster:
             return False
         self.log_depth_scales.update(result.log_depth_scales)
         if not policy.fix_all_poses:
-            for image_id in images_without_residuals:
-                self.reconstruction.deregister_frame(self.reconstruction.image(image_id).frame_id)
+            frame_order = dict.fromkeys(self.reconstruction.images[i].frame_id for i in optimized_image_ids)
+            for frame_id in frame_order:
+                if frame_id not in observed_frames:
+                    self.reconstruction.deregister_frame(frame_id)
         logger.debug(
             "BA solved: residuals=%d, initial_cost=%.8g, final_cost=%.8g",
             result.diagnostics.num_residual_blocks,

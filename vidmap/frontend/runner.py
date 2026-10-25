@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,12 +12,15 @@ from vidmap import depth_artifacts
 from vidmap.benchmark.results import FrontendResultStore
 from vidmap.frontend.identity import FrontendIdentity
 from vidmap.frontend.pipeline import Frontend
+from vidmap.frontend.preparation.cameras import prepare_capture, resolve_camera_preparation
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.utils.device import resolve_device
 from vidmap.utils.logging import log_context
 
 if TYPE_CHECKING:
     import torch
+
+    from vidmap.datasets.capture import PreparedCapture
 
 logger = logging.getLogger(__name__)
 
@@ -49,37 +52,74 @@ class FrontendRunResult:
 
 def run_local_frontend(
     conf,
-    input_path: str | Path,
+    input_path: str | Path | PreparedCapture,
     *,
     workspace: str | Path,
     imnames=None,
-    intrinsics_path: str | Path | None = None,
     force_frontend: bool = False,
     cache_depth_maps: bool = False,
     mapper_inputs_path: str | Path | None = None,
     device: str | torch.device | None = None,
 ) -> FrontendTargetResult:
-    """Process one concrete image directory or MP4 into a finalized boundary."""
+    """Process local media or a prepared capture into a finalized boundary."""
+    from vidmap.datasets.capture import PreparedCapture, prepare_scene_capture
     from vidmap.datasets.local import LocalImageParser
-    from vidmap.reconstruction import prepare_reconstruction_images, write_local_input_provenance
 
-    device = resolve_device(device)
     workspace = Path(workspace).expanduser()
-    image_dir = prepare_reconstruction_images(input_path, workspace)
-    scene_parser = LocalImageParser(
-        image_dir=image_dir,
-        imnames=imnames,
-        intrinsics_path=intrinsics_path,
-        estimate_intrinsics=conf.pipeline.camera_priors.initialization == "predicted",
-    )
+    input_snapshot = None
+    preparation_plan = None
+    if isinstance(input_path, PreparedCapture):
+        if imnames is not None:
+            raise ValueError("Capture inputs already supply calibration and complete frames")
+        scene_parser = input_path
+    elif conf.pipeline.rig is not None:
+        if imnames is not None:
+            raise ValueError("Rig configuration supplies calibration and complete frames")
+        rig = conf.pipeline.rig
+        from vidmap.datasets.prepare.rig_capture import load_capture, prepare_rig_capture
+
+        source_capture = load_capture(input_path, rig)
+        preparation_plan = resolve_camera_preparation(source_capture, conf.pipeline)
+        input_snapshot = prepare_rig_capture(
+            source_capture,
+            workspace / "prepared_capture",
+            camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
+        )
+        scene_parser = input_snapshot.capture
+    else:
+        from vidmap.reconstruction import prepare_reconstruction_images
+
+        if conf.pipeline.camera_priors.initialization != "predicted":
+            raise ValueError("Calibrated local input requires a rig configuration, including for one camera")
+        image_dir = prepare_reconstruction_images(input_path, workspace)
+        scene_parser = LocalImageParser(image_dir=image_dir, imnames=imnames)
+    from vidmap.reconstruction import write_local_input_provenance
+
+    scene_parser = prepare_scene_capture(scene_parser)
+    if preparation_plan is None:
+        preparation_plan = resolve_camera_preparation(scene_parser, conf.pipeline)
+        if preparation_plan.undistort_camera_ids:
+            from vidmap.datasets.prepare.rig_capture import prepare_rig_capture
+
+            input_snapshot = prepare_rig_capture(
+                scene_parser,
+                workspace / "prepared_capture",
+                camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
+            )
+            scene_parser = input_snapshot.capture
+    if input_snapshot is None and (scene_parser.kind is not None or scene_parser.frame_timestamps_ns is not None):
+        input_snapshot = scene_parser.snapshot()
+    device = resolve_device(device)
+    image_dir = scene_parser.rgb_dir
     reference_image_ids = tuple(scene_parser.rec.images)
     identity = FrontendIdentity.from_config(
         conf,
         dataset="local",
-        scene="local",
+        scene="local" if scene_parser.kind is None else scene_parser.scene,
         mode="all",
         testset_id="input",
         reference_image_ids=reference_image_ids,
+        source_fingerprint=None if input_snapshot is None else input_snapshot.fingerprint(),
     )
     temporary_dir = workspace / "tmp_cache_dir"
     mapper_inputs_dir = (
@@ -92,11 +132,16 @@ def run_local_frontend(
             expected_identity=identity.as_dict(),
         )
         mapper_inputs.validate()
-        write_local_input_provenance(mapper_inputs.directory, image_dir, overwrite=True)
+        write_local_input_provenance(
+            mapper_inputs.directory,
+            image_dir,
+            overwrite=True,
+        )
         if cache_depth_maps:
             import h5py
 
             from vidmap.frontend.depth import cache_full_depth_maps_posthoc
+            from vidmap.frontend.image_dataset import FrameSequence
 
             selected = set()
             with h5py.File(mapper_inputs.depth_maps_path, "r") as hfile:
@@ -107,12 +152,13 @@ def run_local_frontend(
 
                 hfile.visititems(collect_depth_group)
             selected = frozenset(selected)
-            image_names = tuple(name for name in scene_parser.imnames if name in selected)
+            frames = FrameSequence.from_scene(scene_parser, rig_options=conf.pipeline.rig)
+            image_names = tuple(name for name in frames.names if name in selected)
             if len(image_names) != len(selected):
                 missing = sorted(selected - set(image_names))
                 raise ValueError(f"Mapper-input depth names are absent from local media: {missing}")
             cache_full_depth_maps_posthoc(
-                scene_parser=scene_parser,
+                scene_parser=prepare_capture(scene_parser, preparation_plan),
                 image_names=image_names,
                 sampled_depth_path=mapper_inputs.depth_maps_path,
                 output_path=full_depth_maps_path,
@@ -129,6 +175,9 @@ def run_local_frontend(
         return FrontendTargetResult(identity, mapper_inputs, reused=True)
     if mapper_inputs_path is not None:
         raise FileNotFoundError(f"Finalized mapper inputs not found: {mapper_inputs_dir}")
+    if input_snapshot is None:
+        input_snapshot = scene_parser.snapshot()
+        identity = replace(identity, source_fingerprint=input_snapshot.fingerprint())
     frontend = Frontend(
         conf=conf.pipeline,
         replay_cache=conf.run.replay_cache,
@@ -137,7 +186,8 @@ def run_local_frontend(
         pre_geom_repro_dir=conf.run.pre_geom_repro_dir,
         cache_dir=temporary_dir / "cache",
         sfm_outputs_dir=temporary_dir / "work",
-        scene_parser=scene_parser,
+        input_snapshot=input_snapshot,
+        preparation_plan=preparation_plan,
         reference_image_names=scene_parser.imnames,
         force_recompute=force_frontend,
         cache_full_depth_maps=cache_depth_maps,
@@ -148,7 +198,11 @@ def run_local_frontend(
     )
     mapper_inputs = frontend.run(frontend_identity=identity.as_dict())
     mapper_inputs.validate()
-    write_local_input_provenance(mapper_inputs.directory, image_dir, overwrite=True)
+    write_local_input_provenance(
+        mapper_inputs.directory,
+        image_dir,
+        overwrite=True,
+    )
     if temporary_dir.exists():
         shutil.rmtree(temporary_dir)
     return FrontendTargetResult(identity, mapper_inputs, reused=False)
@@ -163,6 +217,7 @@ class FrontendRunner:
 
     def run_with_results(self, *, force_frontend: bool = False) -> FrontendRunResult:
         """Run frontend and return every concrete finalized boundary."""
+        from vidmap.datasets.capture import prepare_scene_capture
         from vidmap.reconstruction import write_local_input_provenance
 
         failure_count = 0
@@ -172,14 +227,6 @@ class FrontendRunner:
             scene_parser,
             reference_image_names,
         ) in self.selection.prepared_targets():
-            identity = FrontendIdentity.from_config(
-                self.conf,
-                dataset=self.selection.dataset_spec.name,
-                scene=target.scene,
-                mode=target.testset_type,
-                testset_id=target.testset_desc,
-                reference_image_ids=target.ref_imids,
-            )
             results = FrontendResultStore(
                 self.conf,
                 self.selection.dataset_layout,
@@ -196,6 +243,21 @@ class FrontendRunner:
                 config=self.conf.name,
             ):
                 try:
+                    scene_parser = prepare_scene_capture(scene_parser)
+                    input_snapshot = (
+                        scene_parser.snapshot()
+                        if scene_parser.kind is not None or scene_parser.frame_timestamps_ns is not None
+                        else None
+                    )
+                    identity = FrontendIdentity.from_config(
+                        self.conf,
+                        dataset=self.selection.dataset_spec.name,
+                        scene=target.scene,
+                        mode=target.testset_type,
+                        testset_id=target.testset_desc,
+                        reference_image_ids=target.ref_imids,
+                        source_fingerprint=None if input_snapshot is None else input_snapshot.fingerprint(),
+                    )
                     existing = (
                         None
                         if force_frontend
@@ -203,7 +265,11 @@ class FrontendRunner:
                     )
                     if existing is not None:
                         existing.validate()
-                        write_local_input_provenance(existing.directory, scene_parser.rgb_dir, overwrite=True)
+                        write_local_input_provenance(
+                            existing.directory,
+                            scene_parser.rgb_dir,
+                            overwrite=True,
+                        )
                         result = FrontendTargetResult(identity, existing, reused=True)
                         completed.append(result)
                         logger.info(
@@ -212,6 +278,9 @@ class FrontendRunner:
                             result.path,
                         )
                         continue
+                    if input_snapshot is None:
+                        input_snapshot = scene_parser.snapshot()
+                        identity = replace(identity, source_fingerprint=input_snapshot.fingerprint())
                     results.cache_dir.mkdir(parents=True, exist_ok=True)
                     frontend = Frontend(
                         conf=self.conf.pipeline,
@@ -221,7 +290,7 @@ class FrontendRunner:
                         pre_geom_repro_dir=self.conf.run.pre_geom_repro_dir,
                         cache_dir=results.cache_dir,
                         sfm_outputs_dir=results.resolved_frontend_work_dir(),
-                        scene_parser=scene_parser,
+                        input_snapshot=input_snapshot,
                         reference_image_names=reference_image_names,
                         force_recompute=force_frontend,
                         frontend_tag=identity.tag,
@@ -233,7 +302,11 @@ class FrontendRunner:
                         frontend.run_pre_geom()
                     else:
                         mapper_inputs = frontend.run(frontend_identity=identity.as_dict())
-                        write_local_input_provenance(mapper_inputs.directory, scene_parser.rgb_dir, overwrite=True)
+                        write_local_input_provenance(
+                            mapper_inputs.directory,
+                            scene_parser.rgb_dir,
+                            overwrite=True,
+                        )
                         result = FrontendTargetResult(identity, mapper_inputs, reused=False)
                         completed.append(result)
                         logger.info(

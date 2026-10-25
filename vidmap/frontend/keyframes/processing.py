@@ -4,22 +4,29 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass as result_dataclass
+from dataclasses import field
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import h5py
 from tqdm import tqdm
 
 if TYPE_CHECKING:
     import torch
 
-from vidmap.datasets.base import DatasetParser
+from vidmap.datasets.capture import CaptureSnapshot
 from vidmap.frontend.cache import (
-    CacheMetadataMismatch,
     CompleteArtifactContract,
+    attach_incremental_cache_identity,
     certify_complete_artifact,
+    inspect_incremental_items,
+    mark_incremental_cache_complete,
     prepare_incremental_cache,
+    prune_incremental_items,
+    read_cache_metadata,
 )
-from vidmap.frontend.correspondences import validate_pair_name_plan
+from vidmap.frontend.correspondences import combine_and_deduplicate_pairs
 from vidmap.frontend.geocalib import (
     estimate_keyframe_bootstrap_intrinsics,
     validate_keyframe_bootstrap_frame_dimensions,
@@ -39,25 +46,40 @@ from vidmap.utils.logging import progress_bars_enabled
 logger = logging.getLogger(__name__)
 
 
-@result_dataclass(frozen=True)
+@result_dataclass
 class KeyframePlan:
     """Certified keyframe selection and its consecutive tracking plan."""
 
-    names: tuple[str, ...]
-    track_pairs: tuple[tuple[str, str], ...]
-    track_pairs_artifact: CompleteArtifactContract
+    frame_ids: tuple[int, ...]
+    frames: FrameSequence
+    admission_artifact: CompleteArtifactContract
+    streams: tuple[tuple[str, ...], ...] = field(init=False)
+    same_frame_flags: dict = field(init=False)
+    names: tuple[str, ...] = field(init=False)
+    track_pairs: tuple[tuple[str, str], ...] = field(init=False)
+    frame_camera_indices: dict = field(init=False)
 
     def __post_init__(self):
-        names = tuple(self.names)
-        track_pairs = tuple(tuple(pair) for pair in self.track_pairs)
-        if len(names) < 2 or len(set(names)) != len(names):
-            raise ValueError("Keyframe plan requires at least two unique images")
-        expected_pairs = tuple(zip(names, names[1:]))
-        if track_pairs != expected_pairs:
-            raise ValueError("Keyframe track pairs must be the exact adjacent image chain")
-        validate_pair_name_plan(track_pairs)
-        object.__setattr__(self, "names", names)
-        object.__setattr__(self, "track_pairs", track_pairs)
+        self.frame_ids = tuple(self.frame_ids)
+        self.streams = self.frames.select(self.frames.indices(self.frame_ids))
+        if len(self.frame_ids) < 2:
+            raise ValueError("Keyframe selection must contain at least two native frames")
+        self.names = tuple(chain.from_iterable(self.streams))
+        self.track_pairs = tuple(pair for stream in self.streams for pair in zip(stream, stream[1:]))
+        self.same_frame_flags = {
+            (frame[first], frame[second]): flag
+            for frame in zip(*self.streams, strict=True)
+            for first, second, flag in self.frames.same_frame_stream_pairs
+        }
+        self.frame_camera_indices = {
+            name: (index, camera_id)
+            for stream, camera_id in zip(self.streams, self.frames.stream_camera_ids, strict=True)
+            for index, name in enumerate(stream)
+        }
+
+    @property
+    def same_frame_pairs(self):
+        return tuple(combine_and_deduplicate_pairs(tuple(self.same_frame_flags)))
 
 
 @result_dataclass(frozen=True)
@@ -76,7 +98,7 @@ class KeyframeProcessor:
     def __init__(
         self,
         *,
-        scene_parser: DatasetParser,
+        input_snapshot: CaptureSnapshot,
         frames: FrameSequence,
         paths: FrontendPaths,
         force_recompute: bool,
@@ -88,7 +110,8 @@ class KeyframeProcessor:
         device: torch.device,
     ):
         self.device = device
-        self.scene_parser = scene_parser
+        self.scene_parser = input_snapshot.capture
+        self.input_snapshot = input_snapshot
         self.frames = frames
         self.paths = paths
         self.force_recompute = force_recompute
@@ -98,39 +121,32 @@ class KeyframeProcessor:
         self.keyframe_options = keyframe_options
         self.salient_options = salient_options
 
-    def load_cached(self, track_pairs_metadata) -> KeyframePlan | None:
-        """Load the admitted plan from its adjacent track-pair chain."""
+    def load_cached(self, admission_metadata) -> KeyframePlan | None:
+        """Load the frame selection and project it onto current camera streams."""
         if self.keyframe_options.intrinsics_source == "geocalib":
             validate_keyframe_bootstrap_frame_dimensions(
                 self.scene_parser.rgb_dir,
-                self.frames.names,
+                self.frames.streams[0],
             )
-        keyframe_names = keyframe_cache.load_cached_names(
+        frame_ids = keyframe_cache.load_cached_frame_ids(
+            frames=self.frames,
             scene_parser=self.scene_parser,
-            sequence=self.frames.names,
-            timestamps=self.frames.timestamps,
-            track_pairs_path=self.paths.track_pairs_path,
-            salient_features_path=self.paths.salient_features_path,
-            force_recompute=self.force_recompute,
             keyframe_options=self.keyframe_options,
-            salient_options=self.salient_options,
-            track_pairs_metadata=track_pairs_metadata,
+            admitted_frames_path=self.paths.admitted_frames_path,
+            force_recompute=self.force_recompute,
+            admission_metadata=admission_metadata,
         )
-        if keyframe_names is None:
+        if frame_ids is None:
             return None
-        plan = self._certified_plan(keyframe_names, track_pairs_metadata)
+        plan = self._certified_plan(frame_ids, admission_metadata)
         self._write_repro_plan(plan)
         return plan
 
-    def _certified_plan(self, keyframe_sequence, track_pairs_metadata) -> KeyframePlan:
-        keyframe_sequence = tuple(keyframe_sequence)
-        keyframe_pairs = tuple(zip(keyframe_sequence, keyframe_sequence[1:]))
-        if len(keyframe_sequence) < 2 or not keyframe_pairs:
-            raise CacheMetadataMismatch("Frontend requires at least two keyframes and one track pair")
+    def _certified_plan(self, frame_ids, admission_metadata) -> KeyframePlan:
         return KeyframePlan(
-            names=keyframe_sequence,
-            track_pairs=keyframe_pairs,
-            track_pairs_artifact=certify_complete_artifact(self.paths.track_pairs_path, track_pairs_metadata),
+            frame_ids=frame_ids,
+            frames=self.frames,
+            admission_artifact=certify_complete_artifact(self.paths.admitted_frames_path, admission_metadata),
         )
 
     def _write_repro_plan(self, plan: KeyframePlan) -> None:
@@ -149,7 +165,7 @@ class KeyframeProcessor:
 
     def select_candidates(self, salient_metadata) -> KeyframeCandidates:
         """Select low-resolution candidates without publishing final keyframes."""
-        sequence = list(self.frames.names)
+        sequence = list(self.frames.streams[0])
         keyframe_options = self.keyframe_options
         scene_parser = self.scene_parser
         bootstrap_intrinsics = None
@@ -164,8 +180,14 @@ class KeyframeProcessor:
         prepare_incremental_cache(
             self.paths.salient_features_path,
             salient_metadata,
-            overwrite=True,
+            overwrite=self.force_recompute,
         )
+
+        attach_incremental_cache_identity(self.paths.salient_features_path, salient_metadata)
+        with h5py.File(self.paths.salient_features_path, "a") as hfile:
+            for name in sequence:
+                if name in hfile:
+                    del hfile[name]
 
         loader, total_pairs, original_width, original_height = keyframe_matching.build_pair_loader(
             scene_parser,
@@ -211,6 +233,10 @@ class KeyframeProcessor:
                         progress.update(1)
 
             keyframe_ids = selector.finish()
+            with h5py.File(self.paths.salient_features_path, "a") as hfile:
+                for name in sequence:
+                    if name in hfile:
+                        hfile[name].attrs["input_fingerprint"] = self.input_snapshot.image_sha256[name]
             if keyframe_options.intrinsics_source == "geocalib":
                 calibrations = {index: bootstrap_intrinsics for index in keyframe_ids}
             else:
@@ -218,7 +244,7 @@ class KeyframeProcessor:
                 calibrations = {index: calibration_plan[index][1] for index in keyframe_ids}
             return KeyframeCandidates(
                 indices=tuple(keyframe_ids),
-                names=tuple(self.frames.names[index] for index in keyframe_ids),
+                names=tuple(sequence[index] for index in keyframe_ids),
                 forced_indices=frozenset(selector.gt_frame_indices),
                 calibrations=calibrations,
             )
@@ -227,20 +253,65 @@ class KeyframeProcessor:
             del aliked_model
             empty_device_cache()
 
-    def commit_keyframes(self, admitted_ids, forced_ids, track_pairs_metadata) -> KeyframePlan:
+    def commit_keyframes(self, admitted_ids, forced_ids, admission_metadata) -> KeyframePlan:
         """Publish the candidates retained by lookahead admission."""
         keyframe_cache.commit_keyframes(
-            sequence=self.frames.names,
-            timestamps=self.frames.timestamps,
+            frames=self.frames,
             keyframe_ids=admitted_ids,
             gt_frame_indices=forced_ids,
-            track_pairs_path=self.paths.track_pairs_path,
-            salient_features_path=self.paths.salient_features_path,
+            admitted_frames_path=self.paths.admitted_frames_path,
             keyframe_options=self.keyframe_options,
-            salient_options=self.salient_options,
-            track_pairs_metadata=track_pairs_metadata,
+            admission_metadata=admission_metadata,
         )
-        names = tuple(self.frames.names[index] for index in admitted_ids)
-        plan = self._certified_plan(names, track_pairs_metadata)
+        frame_ids = tuple(self.frames.frame_ids[index] for index in admitted_ids)
+        plan = self._certified_plan(frame_ids, admission_metadata)
         self._write_repro_plan(plan)
         return plan
+
+    def complete_salient_features(self, plan):
+        """Complete only missing or changed selected-image features."""
+        metadata = keyframe_cache.salient_feature_cache_metadata(salient_options=self.salient_options)
+        path = self.paths.salient_features_path
+        prepare_incremental_cache(path, metadata)
+        cached = read_cache_metadata(path)
+        complete = "complete" in cached and cached["complete"]
+        sources = {name: self.input_snapshot.image_sha256[name] for name in plan.names}
+        with h5py.File(path, "r") as hfile:
+            stale = [
+                name
+                for name in plan.names
+                if name in hfile
+                and (
+                    "input_fingerprint" not in hfile[name].attrs
+                    or hfile[name].attrs["input_fingerprint"] != sources[name]
+                )
+            ]
+        if not stale and complete and cached["expected_items"] == list(plan.names):
+            return
+        attach_incremental_cache_identity(path, metadata)
+        with h5py.File(path, "a") as hfile:
+            for name in stale:
+                del hfile[name]
+        prune_incremental_items(path, plan.names)
+        _, missing = inspect_incremental_items(path, plan.names, metadata, repair_malformed=True)
+        self._extract_other_views(missing)
+        with h5py.File(path, "a") as hfile:
+            for name in missing:
+                hfile[name].attrs["input_fingerprint"] = sources[name]
+        mark_incremental_cache_complete(path, metadata, plan.names)
+
+    def _extract_other_views(self, names):
+        """Extract side-camera salient features only after whole-frame admission."""
+        from vidmap.frontend.keyframes.selection import compute_aliked_features_for_frame
+
+        if not names:
+            return
+        model = keyframe_selector.create_aliked_model(self.salient_options, device=self.device)
+        try:
+            for name in names:
+                compute_aliked_features_for_frame(
+                    self.scene_parser, self.paths.salient_features_path, name, model, self.salient_options
+                )
+        finally:
+            del model
+            empty_device_cache(self.device)
