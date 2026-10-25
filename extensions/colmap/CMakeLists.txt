@@ -15,6 +15,8 @@ find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 3.1.0 CONFIG REQUIRED)
 
 set(VIDMAP_COLMAP_VERSION "4.3.0")
+# Pending dependency: unpublished COLMAP depth implementation.
+# Public builds are blocked until it is published and this pin is updated.
 set(
   VIDMAP_COLMAP_REVISION
   "6cde3c7f078aa53aa2ecb39d900c0f89121819a2"
