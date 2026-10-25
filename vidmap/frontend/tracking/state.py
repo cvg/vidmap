@@ -62,13 +62,14 @@ class SparseTrackState:
     - State: previous frame's keypoints, confidences, covariances, track lengths
     """
 
-    def __init__(self, conf, *, original_size, current_size, scheduled_hops, device: torch.device):
+    def __init__(self, conf, *, original_size, current_size, scheduled_hops, device: torch.device, camera=None):
         """Initialize numerical propagation state from explicit image geometry."""
         self.conf = conf
         self.device = device
         self.original_size = original_size
         self.current_size = current_size
         self.scale_ratio = np.divide(original_size, current_size, dtype=np.float32)
+        self.camera = camera
         self.prev_keypoints = None
         self.prev_conf = None
         self.prev_covar = None
@@ -214,6 +215,7 @@ class SparseTrackState:
             options=self.conf,
             scale_ratio=self.scale_ratio,
             current_size=self.current_size,
+            camera=self.camera,
         )
 
         source_keypoints, certainty_01, covariance_01, _ = self._select_source_keypoints(

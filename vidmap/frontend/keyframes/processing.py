@@ -108,6 +108,7 @@ class KeyframeProcessor:
         keyframe_options: DetectKeyframesOptions,
         salient_options: SalientFeatureOptions,
         device: torch.device,
+        bootstrap_camera=None,
     ):
         self.device = device
         self.scene_parser = input_snapshot.capture
@@ -120,6 +121,7 @@ class KeyframeProcessor:
         self.lowres_options = lowres_options
         self.keyframe_options = keyframe_options
         self.salient_options = salient_options
+        self.bootstrap_camera = bootstrap_camera
 
     def load_cached(self, admission_metadata) -> KeyframePlan | None:
         """Load the frame selection and project it onto current camera streams."""
@@ -170,10 +172,10 @@ class KeyframeProcessor:
         scene_parser = self.scene_parser
         bootstrap_intrinsics = None
         if keyframe_options.intrinsics_source == "geocalib":
-            bootstrap_intrinsics = estimate_keyframe_bootstrap_intrinsics(
-                scene_parser.rgb_dir,
-                sequence,
-                device=self.device,
+            bootstrap_intrinsics = (
+                self.bootstrap_camera
+                if self.bootstrap_camera is not None
+                else estimate_keyframe_bootstrap_intrinsics(scene_parser.rgb_dir, sequence, device=self.device)
             )
         tracker_model = self.tracker.get()
         logger.info("Starting streaming keyframe detection and salient-feature extraction")

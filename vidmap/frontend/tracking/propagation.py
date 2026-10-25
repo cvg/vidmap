@@ -388,6 +388,7 @@ class StreamingTrackPropagator:
                     current_size=direct.source_size,
                     scheduled_hops=self.conf.multiflow_hops,
                     device=self.device,
+                    camera=self.scene_parser.rec.camera(self.scene_parser.image(anchor).camera_id),
                 )
             state = self.state
             if any(field.source_size != state.current_size for field in fields):

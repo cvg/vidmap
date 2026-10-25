@@ -26,6 +26,7 @@ from vidmap.mapper.inputs import (
 from vidmap.utils.loop_closure_masks import write_loop_closure_masks
 
 if TYPE_CHECKING:
+    from vidmap.frontend.depth import DepthFrontendResult
     from vidmap.frontend.pipeline import TrackingFrontendResult
     from vidmap.frontend.preparation.geometric_verification import GeometricVerificationResult
 
@@ -40,6 +41,7 @@ def write_mapper_inputs(
     frame_sequence: dict,
     calibration: CalibrationEvidence | None = None,
     panorama: dict | None = None,
+    distortion_calibrated: bool = False,
 ) -> MapperInputs:
     """Replace the directory with one self-contained mapper-input generation."""
     directory = resolve_mapper_inputs_directory(directory)
@@ -85,6 +87,7 @@ def write_mapper_inputs(
         frame_sequence=frame_sequence,
         panorama=panorama,
         calibration=calibration,
+        distortion_calibrated=distortion_calibrated,
     )
     result = MapperInputs.from_directory(directory, expected_identity=frontend_identity)
     result.validate()
@@ -96,12 +99,14 @@ def write_verified_mapper_inputs(
     state: TrackingFrontendResult,
     verification: GeometricVerificationResult,
     *,
+    depth: DepthFrontendResult,
     frontend_identity: Mapping[str, object],
     panorama: dict | None = None,
+    distortion_calibrated: bool = False,
 ) -> MapperInputs:
     """Validate the current frontend generation, then write its mapper inputs."""
     paths = state.paths
-    depth_contract = state.artifacts.depth
+    depth_contract = depth.sampled
     if depth_contract is None:
         raise CacheMetadataMismatch("Depth mapper input has no frontend cache contract")
 
@@ -133,6 +138,7 @@ def write_verified_mapper_inputs(
         frame_sequence=verification.frame_sequence,
         calibration=None if calibration is None else calibration.evidence,
         panorama=panorama,
+        distortion_calibrated=distortion_calibrated,
     )
 
 

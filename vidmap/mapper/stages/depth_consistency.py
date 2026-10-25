@@ -47,6 +47,13 @@ def classify_depth_consistency(
         for image_id, image in solve_state.reconstruction.images.items()
     }
 
+    for data in image_data.values():
+        camera = cameras[data["camera_id"]]
+        if camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE"):
+            from vidmap.utils.camera_geometry import undistorted_pixels
+
+            data["features"] = undistorted_pixels(camera, data["features"])
+
     pair_data = {}
     for pair_id in consecutive_pair_ids:
         image_pair = solve_state.pair_data(pair_id)

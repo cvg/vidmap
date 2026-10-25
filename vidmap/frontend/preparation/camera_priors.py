@@ -11,6 +11,7 @@ import pycolmap
 
 from vidmap.calibration import CalibrationEvidence, CalibrationObservation
 from vidmap.frontend.cache.metadata import IncrementalArtifactContract
+from vidmap.utils.camera_geometry import DISTORTED_CAMERA_MODELS, fit_distorted_camera
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,7 @@ class CalibrationResult:
         evidence = CalibrationEvidence(
             options.estimator,
             options.inference,
-            "PINHOLE",
+            "SIMPLE_DIVISIONAL" if options.camera_model in DISTORTED_CAMERA_MODELS else "PINHOLE",
             "working_images",
             observations,
         )
@@ -114,7 +115,7 @@ def apply_camera_priors(*, results, shared, reconstruction):
     if not results:
         raise ValueError("Predicted initialization requires calibration results")
     cameras = {image.camera_id: reconstruction.cameras[image.camera_id] for image in reconstruction.images.values()}
-    if any(c.model.name not in {"PINHOLE", "SIMPLE_PINHOLE"} for c in cameras.values()):
+    if any(c.model.name not in {"PINHOLE", "SIMPLE_PINHOLE"} | DISTORTED_CAMERA_MODELS for c in cameras.values()):
         raise ValueError("Unsupported camera model for calibration initialization")
     if len({(c.model.name, c.width, c.height) for c in cameras.values()}) != 1:
         raise ValueError("Shared initialization requires identical camera models and dimensions")
@@ -126,7 +127,10 @@ def apply_camera_priors(*, results, shared, reconstruction):
             raise ValueError("Shared inference requires one camera result")
         K = np.asarray(results[0]["K"], dtype=np.float32)
         for camera in cameras.values():
-            _apply_calibration(camera, K[[0, 1], [0, 1]], K[:2, 2])
+            if "distortion" in results[0]:
+                fit_distorted_camera(camera, K, results[0]["distortion"][0])
+            else:
+                _apply_calibration(camera, K[[0, 1], [0, 1]], K[:2, 2])
     else:
         intrinsics = np.asarray([result["K"] for result in results], dtype=np.float32)
         median_focal = float(np.median((intrinsics[:, 0, 0] + intrinsics[:, 1, 1]).astype(np.float64) / 2.0))

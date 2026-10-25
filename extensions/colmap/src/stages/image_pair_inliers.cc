@@ -96,12 +96,28 @@ void ScoreEssentialPair(const InlierThresholdOptions& options,
 
   std::vector<int> inliers;
   inliers.reserve(pair->all_matches.rows());
+  const bool pinhole =
+      (camera1.model_id == colmap::CameraModelId::kPinhole ||
+       camera1.model_id == colmap::CameraModelId::kSimplePinhole) &&
+      (camera2.model_id == colmap::CameraModelId::kPinhole ||
+       camera2.model_id == colmap::CameraModelId::kSimplePinhole);
   for (Eigen::Index row = 0; row < pair->all_matches.rows(); ++row) {
     const Eigen::Vector3d point1 =
         data1.bearings.row(pair->all_matches(row, 0));
     const Eigen::Vector3d point2 =
         data2.bearings.row(pair->all_matches(row, 1));
-    if (BearingSampsonError(essential, point1, point2) >= threshold_sq) {
+    if (!pinhole) {
+      const auto ray1 = camera1.CamRayFromImgWithJac(
+          image1.Point2D(pair->all_matches(row, 0)).xy);
+      const auto ray2 = camera2.CamRayFromImgWithJac(
+          image2.Point2D(pair->all_matches(row, 1)).xy);
+      if (!ray1 || !ray2 ||
+          colmap::ComputeSquaredTangentSampsonError(*ray1, *ray2, essential) >=
+              options.max_epipolar_error_essential *
+                  options.max_epipolar_error_essential) {
+        continue;
+      }
+    } else if (BearingSampsonError(essential, point1, point2) >= threshold_sq) {
       continue;
     }
     if (!CheckCheirality(cam2_from_cam1, point1, point2, 1e-2, 100.0)) {

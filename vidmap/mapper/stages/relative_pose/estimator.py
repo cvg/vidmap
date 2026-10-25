@@ -20,8 +20,8 @@ from vidmap.mapper.replay.evidence.canonical import snapshot_images
 from vidmap.mapper.replay.evidence.stages import capture_relative_pose_state, relative_pose_summary
 from vidmap.utils.logging import progress_bars_enabled
 
-from .mdrp import MDRPResult, ValidMDRPResult, estimate_mdrp_pose_for_pair
 from .native_options import build_inlier_threshold_options
+from .pair_estimation import PairPoseResult, ValidPairPoseResult, estimate_relative_pose_for_pair
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +95,10 @@ class RelativePoseEstimator:
             }
         )
         bundle_options = poselib.BundleOptions()
+        from vidmap.utils.camera_geometry import poselib_camera
+
         camera_poselib_cache = {
-            camera_id: poselib.Camera(camera.model.name, camera.params.tolist(), camera.width, camera.height)
+            camera_id: poselib_camera(camera, undistorted=camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE"))
             for camera_id, camera in cameras.items()
         }
         image_feature_cache = {image_id: native.point2D_coords(image) for image_id, image in images.items()}
@@ -112,7 +114,7 @@ class RelativePoseEstimator:
 
         write_replay = self.replay.write_enabled("relative_pose")
         worker = functools.partial(
-            estimate_mdrp_pose_for_pair,
+            estimate_relative_pose_for_pair,
             images=images,
             ransac_options=ransac_options,
             bundle_options=bundle_options,
@@ -120,9 +122,14 @@ class RelativePoseEstimator:
             image_feature_cache=image_feature_cache,
             image_depth_cache=image_depth_cache,
             image_valid_cache=image_valid_cache,
+            native_cameras=(
+                cameras
+                if any(camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE") for camera in cameras.values())
+                else None
+            ),
         )
         pair_args_list = []
-        results: dict[int, MDRPResult] = {}
+        results: dict[int, PairPoseResult] = {}
         for image_pair_id in valid_pair_ids:
             image_pair = state.pair_data(image_pair_id)
             if image_pair_id in fixed_poses:
@@ -162,7 +169,7 @@ class RelativePoseEstimator:
         logger.debug("Weight and inliers were assigned to image pairs unlike in upstream GLOMAP.")
         logger.info("Estimating relative pose done")
 
-        valid_items: list[tuple[int, ValidMDRPResult]] = []
+        valid_items: list[tuple[int, ValidPairPoseResult]] = []
         for image_pair_id, result in results.items():
             if not result["is_valid"]:
                 state.pose_graph.set_invalid_edge(image_pair_id)

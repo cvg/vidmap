@@ -18,13 +18,11 @@ from vidmap.frontend.correspondences import ImagePair
 from vidmap.frontend.options.preparation import GeomVerifOptions
 from vidmap.frontend.preparation.mapper_inputs import prepare_frame_sequence
 from vidmap.mapper.inputs import require_finalized_sqlite, sqlite_sidecar_paths
-from vidmap.mapper.replay.evidence.stages import database_file_summary
 from vidmap.repro.frontend import write_sqlite_summary_artifact
 from vidmap.utils.logging import progress_bars_enabled
 
 if TYPE_CHECKING:
     from vidmap.frontend.pipeline import TrackingFrontendResult
-    from vidmap.mapper.replay.cache import ReplayCache
 
 
 logger = logging.getLogger(__name__)
@@ -99,14 +97,13 @@ def _verification_options(options, max_H_inlier_ratio):
 
 
 class GeometricVerifier:
-    """Own database construction, replay, and geometric verification."""
+    """Own database construction and geometric verification."""
 
     def __init__(
         self,
         *,
         options: GeomVerifOptions,
         database_path: Path,
-        replay: ReplayCache,
         repro_dir: Path | None,
         estimate_intrinsics: bool,
         pre_geom_db_stop: bool = False,
@@ -114,7 +111,6 @@ class GeometricVerifier:
     ):
         self.options = options
         self.database_path = Path(database_path)
-        self.replay = replay
         self.repro_dir = repro_dir
         self.estimate_intrinsics = estimate_intrinsics
         self.pre_geom_db_stop = pre_geom_db_stop
@@ -161,12 +157,6 @@ class GeometricVerifier:
                 self.repro_dir / "stage1_database_pre_geom_summary.json",
                 self.database_path,
                 label="database_pre_geom",
-            )
-        if not self.pre_geom_db_stop and self.replay.write_enabled("database"):
-            self.replay.write_json(
-                "database",
-                "summary.json",
-                database_file_summary(self.database_path),
             )
         return GeometricVerificationResult(self.database_path, frame_sequence)
 

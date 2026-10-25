@@ -34,6 +34,7 @@ from vidmap.utils.logging import progress_bars_enabled
 
 _RUNTIME_CONFIG_FIELDS = frozenset({"num_workers"})
 GEOCALIB_CHECKPOINT_SHA256 = "86d6aeacd8bbd974c59ce39f61854e00d36911c732ad89be471476fd708722ac"
+GEOCALIB_DISTORTED_CHECKPOINT_SHA256 = "13cc505928e3ff4eb26c00bff73861ab2b11b804a546323456cf5462e1f8f447"
 KEYFRAME_BOOTSTRAP_SAMPLE_COUNT = 30
 KEYFRAME_BOOTSTRAP_SAMPLING_POLICY = "uniform-sequence-index-v1"
 
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 @cache
-def geocalib_cache_identity() -> dict[str, str]:
+def geocalib_cache_identity(camera_model="PINHOLE") -> dict[str, str]:
     """Describe the installed model implementation for cache provenance."""
     import geocalib
 
@@ -54,16 +55,18 @@ def geocalib_cache_identity() -> dict[str, str]:
     return {
         "package_version": actual_version,
         "source_sha256": fingerprint(source_files),
-        "checkpoint_sha256": GEOCALIB_CHECKPOINT_SHA256,
+        "checkpoint_sha256": (
+            GEOCALIB_DISTORTED_CHECKPOINT_SHA256 if camera_model != "PINHOLE" else GEOCALIB_CHECKPOINT_SHA256
+        ),
     }
 
 
-def _load_geocalib_model(device: torch.device):
+def _load_geocalib_model(device: torch.device, camera_model="PINHOLE"):
     from geocalib import GeoCalib
 
     # GeoCalib downloads its release checkpoint on first construction.
-    model = GeoCalib()
-    _verify_geocalib_checkpoint()
+    model = GeoCalib(weights="distorted") if camera_model != "PINHOLE" else GeoCalib()
+    _verify_geocalib_checkpoint(camera_model)
     try:
         return model.to(device)
     except Exception:
@@ -204,7 +207,9 @@ def _calibration_result(
     return {"K": calibration[0].astype(np.float32), "image_size": image_size, "focal_std_px": std.astype(np.float32)}
 
 
-def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: torch.device) -> dict:
+def calibrate_shared_intrinsics(
+    model, image_paths: Sequence[Path], *, device: torch.device, camera_model="PINHOLE"
+) -> dict:
     """Load one same-sized raw-image stack and run one shared GeoCalib forward pass."""
     if not image_paths:
         raise ValueError("GeoCalib shared calibration requires at least one image")
@@ -229,11 +234,23 @@ def calibrate_shared_intrinsics(model, image_paths: Sequence[Path], *, device: t
         images.append(image.to(device))
 
     batch = torch.stack(images).to(device)
-    result = model.calibrate(batch, shared_intrinsics=True)
+    result = (
+        model.calibrate(batch, camera_model="simple_divisional", shared_intrinsics=True)
+        if camera_model != "PINHOLE"
+        else model.calibrate(batch, shared_intrinsics=True)
+    )
     if not isinstance(result, Mapping):
         raise RuntimeError(f"GeoCalib shared calibration returned {type(result).__name__}, expected a mapping")
     height, width = expected_shape[1:]
-    return _calibration_result(result, len(images), image_size=(width, height))
+    calibration = _calibration_result(result, len(images), image_size=(width, height))
+    if camera_model != "PINHOLE":
+        distortion = result["camera"].k1.detach().cpu().numpy().reshape(-1)
+        if not np.isfinite(distortion).all() or not np.allclose(distortion, distortion[0]):
+            raise ValueError("GeoCalib returned inconsistent shared distortion")
+        calibration["distortion"] = distortion[:1]
+        # GeoCalib uses integer pixel centers; COLMAP uses half-integer centers.
+        calibration["K"][:2, 2] += 0.5
+    return calibration
 
 
 def calibrate_image(model, image_path: Path, *, device: torch.device) -> dict:
@@ -264,11 +281,13 @@ def estimate_keyframe_bootstrap_intrinsics(
 
 
 @cache
-def _verify_geocalib_checkpoint() -> None:
-    checkpoint = Path(torch.hub.get_dir()) / "geocalib/pinhole.tar"
+def _verify_geocalib_checkpoint(camera_model="PINHOLE") -> None:
+    name = "distorted" if camera_model != "PINHOLE" else "pinhole"
+    checkpoint = Path(torch.hub.get_dir()) / f"geocalib/{name}.tar"
     actual = file_fingerprint(checkpoint)
-    if actual != GEOCALIB_CHECKPOINT_SHA256:
-        raise RuntimeError(f"GeoCalib checkpoint has sha256 {actual}, expected {GEOCALIB_CHECKPOINT_SHA256}")
+    expected = geocalib_cache_identity(camera_model)["checkpoint_sha256"]
+    if actual != expected:
+        raise RuntimeError(f"GeoCalib checkpoint has sha256 {actual}, expected {expected}")
 
 
 def write_image_geocalib_cache(image_result, geocalib_per_image_path):
@@ -307,6 +326,29 @@ class CameraPriorEstimator:
         self.keyframe_names = tuple(keyframe_names)
         self.options = options
         self.image_content_fingerprint = image_content_fingerprint
+
+    @torch.no_grad()
+    def estimate_distortion_bootstrap(self) -> IncrementalArtifactContract:
+        """Calibrate uniformly sampled original frames before distorted-image tracking."""
+        count = min(self.options.max_images, len(self.keyframe_names))
+        indices = np.linspace(0, len(self.keyframe_names) - 1, count, dtype=int)
+        selected = [self.keyframe_names[index] for index in indices]
+        metadata = cache_metadata(
+            stage="geocalib_batch",
+            config={
+                "model": geocalib_cache_identity(self.options.camera_model),
+                "camera_model": self.options.camera_model,
+            },
+            ordered_inputs={"images": selected, "image_content": self.image_content_fingerprint},
+            payload_format="shared-division-geocalibration",
+            nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
+        )
+        prepare_incremental_cache(self.batch_path, metadata, overwrite=self.force_recompute)
+        present, _ = inspect_incremental_items(self.batch_path, ["batch_calibration"], metadata, repair_malformed=True)
+        if not present:
+            self._calibrate_batch(selected)
+        mark_incremental_cache_complete(self.batch_path, metadata, ["batch_calibration"])
+        return certify_incremental_artifact(self.batch_path, metadata, ("batch_calibration",))
 
     @torch.no_grad()
     def _repair_per_image(self, image_names, metadata) -> None:
@@ -357,15 +399,20 @@ class CameraPriorEstimator:
         uncertainties.sort(key=lambda item: item[1])
         selected = [name for name, _ in uncertainties[: self.options.max_images]]
 
+        self._calibrate_batch(selected)
+
+    def _calibrate_batch(self, selected):
+        """Infer and store one shared calibration for the selected images."""
         model = None
         try:
-            model = _load_geocalib_model(device=self.device)
+            model = _load_geocalib_model(device=self.device, camera_model=self.options.camera_model)
             calibration = calibrate_shared_intrinsics(
                 model,
                 [self.rgb_dir / name for name in selected],
                 device=self.device,
+                camera_model=self.options.camera_model,
             )
-            with h5py.File(str(batch_path), "a", libver="latest") as hfile:
+            with h5py.File(str(self.batch_path), "a", libver="latest") as hfile:
                 if "batch_calibration" in hfile:
                     del hfile["batch_calibration"]
                 group = hfile.create_group("batch_calibration")

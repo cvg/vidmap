@@ -30,7 +30,7 @@ estimate camera poses, camera intrinsics, and a sparse 3D map.
 
 - 🔧 [Setup](#setup) — Install dependencies and prepare the environment.
 - 🚀 [Run VidMap](#execution) — Reconstruct a video or image sequence.
-- 📷 [Camera rigs and panoramas](#camera-rigs-and-panoramas) — Configure your cameras.
+- 📷 [Camera rigs, panoramas, and fisheye](#camera-rigs-panoramas-and-fisheye) — Configure your cameras.
 - 👀 [Visualization](#visualization) — Explore your reconstruction in the browser or Rerun.
 - 🛠️ [Pipeline Configurations](#configuration) — Customize the frontend and mapping settings.
 - ⚡ [Speed up VidMap](#speed-up-vidmap) — Find settings to make extraction and mapping faster.
@@ -107,20 +107,21 @@ under `$OUTPUT_DIR`.
 See [files and folders](docs/files.md) for image layouts, frame associations,
 configuration files and run artifacts.
 
-### Camera rigs and panoramas
+### Camera rigs, panoramas, and fisheye
 
 | Input | Uncalibrated mono | Calibrated mono | Uncalibrated rig | Calibrated rig |
 |---|:---:|:---:|:---:|:---:|
 | Pinhole | [✓](docs/cameras.md#monocular) | [✓](docs/cameras.md#calibrated-monocular) | ✗ | [✓](docs/cameras.md#camera-rigs) |
-| Distorted perspective | ✗ | [✓](docs/cameras.md#calibrated-monocular)¹ | ✗ | [✓](docs/cameras.md#camera-rigs)¹ |
-| Fisheye | ✗ | [✓](docs/cameras.md#calibrated-monocular)¹ | ✗ | [✓](docs/cameras.md#camera-rigs)¹ |
+| Distorted perspective | [✓](docs/cameras.md#distorted-monocular) | [✓](docs/cameras.md#calibrated-monocular)² | ✗ | [✓](docs/cameras.md#camera-rigs)² |
+| Fisheye | [✓](docs/cameras.md#camera-setup)¹ | [✓](docs/cameras.md#calibrated-monocular)² | ✗ | [✓](docs/cameras.md#camera-rigs)² |
 | Stitched 360° panorama | N/A | [✓](docs/cameras.md#panoramas) | N/A | ✗ |
 
 Distorted perspective models: `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `FULL_OPENCV`,
 `SIMPLE_DIVISION`, `DIVISION`. See [COLMAP camera models](https://colmap.github.io/cameras.html)
 for model definitions and parameter order.
 
-1. Undistorted to pinhole before mapping. Calibrated rigs may mix camera models.
+1. Native `OPENCV_FISHEYE`, forward-facing rays only.
+2. Undistorted to pinhole before mapping. Calibrated rigs may mix camera models.
 
 ## Visualization
 

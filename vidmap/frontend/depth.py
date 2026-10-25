@@ -28,6 +28,12 @@ from vidmap.frontend.cache import (
     semantic_config,
 )
 from vidmap.frontend.depth_loading import create_da3_window_loader
+from vidmap.frontend.depth_projection import (
+    depth_projection_identity,
+    load_depth_projections,
+    restore_projected_depth,
+    write_depth_projection,
+)
 from vidmap.frontend.h5_write_queue import H5WriteQueue
 from vidmap.frontend.keyframes.processing import KeyframePlan
 from vidmap.frontend.models.depth.da3_video import (
@@ -96,8 +102,12 @@ def _prepare_full_depth_cache(
     options: DepthEstimationOptions,
     overwrite: bool,
     stream_sequences,
+    projection=None,
 ):
     """Prepare one resumable confidence-free full-depth cache."""
+    inputs = _depth_ordered_inputs(image_names, image_content_fingerprint, stream_sequences)
+    if projection is not None:
+        inputs["depth_projection"] = projection
     metadata = cache_metadata(
         stage="full_depth",
         config={
@@ -105,11 +115,12 @@ def _prepare_full_depth_cache(
             "backend": da3_cache_identity(options.backend),
             "native_resolution": True,
         },
-        ordered_inputs=_depth_ordered_inputs(image_names, image_content_fingerprint, stream_sequences),
+        ordered_inputs=inputs,
         payload_format="per-image-full-depth-v2",
         nonsemantic_config_fields=_RUNTIME_CONFIG_FIELDS,
     )
     prepare_incremental_cache(path, metadata, overwrite=overwrite)
+    write_depth_projection(path, projection)
     prune_incremental_items(path, image_names)
     _, missing = inspect_incremental_items(
         path,
@@ -239,6 +250,7 @@ def _run_da3_depth(
     num_workers,
     stream_sequences,
     calibration_enabled=False,
+    depth_projections=None,
     batch_size=1,
     device: torch.device,
 ):
@@ -254,6 +266,14 @@ def _run_da3_depth(
         backend.ref_view_strategy,
         backend.process_res,
     )
+    depth_projections = {} if depth_projections is None else depth_projections
+    image_projections = {}
+    if depth_projections:
+        for name in image_names:
+            camera_id = scene_parser.image(name).camera_id
+            if camera_id in depth_projections:
+                image_projections[name] = depth_projections[camera_id]
+    depth_remaps = {}
     loader = create_da3_window_loader(
         scene_parser.rgb_dir,
         image_names,
@@ -263,6 +283,7 @@ def _run_da3_depth(
         num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
         stream_sequences=stream_sequences,
+        projections=image_projections,
     )
     windows = iter(loader)
     model = None
@@ -292,6 +313,14 @@ def _run_da3_depth(
                 depth_map = prediction["depth"]
                 valid_map = prediction["valid"]
                 conf_map = prediction["conf"]
+                if name in image_projections:
+                    projection = image_projections[name]
+                    key = (id(projection), depth_map.shape)
+                    if key not in depth_remaps:
+                        depth_remaps[key] = projection.depth_remap(depth_map.shape)
+                    depth_map, valid_map, conf_map = restore_projected_depth(
+                        depth_remaps[key], depth_map, valid_map, conf_map
+                    )
                 write_sampled = name in sampled_names
                 write_full = name in full_names
                 original_size = np.array([original_width, original_height])
@@ -358,6 +387,7 @@ class DepthEstimator:
         options: DepthEstimationOptions,
         image_content_fingerprint: str,
         calibration_enabled: bool = False,
+        depth_projections=None,
         device: torch.device,
     ):
         self.device = device
@@ -368,6 +398,7 @@ class DepthEstimator:
         self.options = options
         self.image_content_fingerprint = image_content_fingerprint
         self.calibration_enabled = calibration_enabled
+        self.depth_projections = {} if depth_projections is None else depth_projections
 
     def estimate(self, *, cache_full_depth_maps: bool = False) -> DepthFrontendResult:
         from vidmap.utils.profiling import log_memory, record_timing, sync_time
@@ -377,13 +408,17 @@ class DepthEstimator:
         started = sync_time()
         sparse_features_metadata = read_cache_metadata(self.paths.sparse_features_path)
         stream_sequences = self.keyframes.streams
+        ordered_inputs = _depth_ordered_inputs(image_names, self.image_content_fingerprint, stream_sequences)
+        projection = depth_projection_identity(self.depth_projections)
+        if projection is not None:
+            ordered_inputs["depth_projection"] = projection
         metadata = cache_metadata(
             stage="depth",
             config={
                 "options": _depth_options_cache_config(self.options),
                 "backend": da3_cache_identity(self.options.backend),
             },
-            ordered_inputs=_depth_ordered_inputs(image_names, self.image_content_fingerprint, stream_sequences),
+            ordered_inputs=ordered_inputs,
             upstream={"sparse_features": artifact_fingerprint(sparse_features_metadata)},
             payload_format=(
                 "per-image-keypoint-depth-calibration" if self.calibration_enabled else "per-image-keypoint-depth"
@@ -401,6 +436,7 @@ class DepthEstimator:
             metadata,
             overwrite=self.force_recompute,
         )
+        write_depth_projection(depth_path, projection)
         prune_incremental_items(depth_path, image_names)
         _, sampled_pending_names = inspect_incremental_items(
             depth_path,
@@ -420,6 +456,7 @@ class DepthEstimator:
                 options=self.options,
                 overwrite=self.force_recompute,
                 stream_sequences=stream_sequences,
+                projection=projection,
             )
         sampled_names = frozenset(sampled_pending_names)
         full_names = frozenset(full_pending_names)
@@ -439,6 +476,7 @@ class DepthEstimator:
                 num_workers=self.options.num_workers,
                 stream_sequences=stream_sequences,
                 calibration_enabled=self.calibration_enabled,
+                depth_projections=self.depth_projections,
                 batch_size=self.options.batch_size,
                 device=self.device,
             )
@@ -475,6 +513,7 @@ def cache_full_depth_maps_posthoc(
     image_names = tuple(image_names)
     if not image_names:
         raise ValueError("Post-hoc full-depth frontend requires at least one finalized keyframe")
+    depth_projections = load_depth_projections(sampled_depth_path)
     output_path = Path(output_path)
     stream_sequences = camera_streams(scene_parser, image_names)
     metadata, missing = _prepare_full_depth_cache(
@@ -484,6 +523,7 @@ def cache_full_depth_maps_posthoc(
         options=options,
         overwrite=force_recompute,
         stream_sequences=stream_sequences,
+        projection=depth_projection_identity(depth_projections),
     )
     if missing:
         logger.info("Post-hoc full-depth frontend: processing %d keyframes", len(missing))
@@ -499,6 +539,7 @@ def cache_full_depth_maps_posthoc(
             frozenset(missing),
             num_workers=options.num_workers,
             stream_sequences=stream_sequences,
+            depth_projections=depth_projections,
             batch_size=options.batch_size,
             device=device,
         )

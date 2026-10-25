@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,6 @@ if TYPE_CHECKING:
     import torch
 
 from vidmap.frontend.cache import fingerprint
-from vidmap.frontend.depth import DepthEstimator
 from vidmap.frontend.geocalib import CameraPriorEstimator
 from vidmap.frontend.image_dataset import FrameSequence
 from vidmap.frontend.keyframes import cache as keyframe_cache
@@ -19,7 +19,7 @@ from vidmap.frontend.keyframes.processing import KeyframeProcessor
 from vidmap.frontend.loop_closure.extended_matches import ExtendedMatchBuilder
 from vidmap.frontend.models.romav2 import create_lazy_romav2_tracker, romav2_cache_identity
 from vidmap.frontend.paths import build_frontend_paths
-from vidmap.frontend.preparation.camera_priors import CalibrationResult
+from vidmap.frontend.preparation.camera_priors import CalibrationResult, apply_calibration
 from vidmap.frontend.preparation.cameras import initialize_selected_camera_geometry
 from vidmap.frontend.tracking.sparse_tracks import SparseTrackBuilder
 from vidmap.frontend.tracking.transitive import TransitiveCorrespondenceBuilder
@@ -43,7 +43,6 @@ class TrackingPipeline:
         force_recompute,
         deterministic,
         repro_dir,
-        cache_full_depth_maps=False,
         device: torch.device,
     ):
         self.device = device
@@ -55,12 +54,11 @@ class TrackingPipeline:
         self.preparation_plan = preparation_plan
         self.prepared_capture = prepared_capture
         self.force_recompute = force_recompute
-        self.cache_full_depth_maps = bool(cache_full_depth_maps)
         self.deterministic = deterministic
         self.repro_dir = repro_dir
 
     def run(self):
-        """Run model stages, then depth and optional camera calibration."""
+        """Run tracking, including the calibration bootstrap needed for keyframing."""
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="da3-verify") as preparation:
             return self._run(preparation)
 
@@ -94,6 +92,29 @@ class TrackingPipeline:
         frames = FrameSequence.from_scene(source, rig_options=options.rig)
         geocalib = None
         calibration = None
+        bootstrap_camera = None
+        if self.preparation_plan.bootstrap_required:
+            from vidmap.datasets.capture import copy_unposed_reconstruction
+
+            geocalib = self._camera_prior_estimator(
+                paths, frames.names, self.input_snapshot.image_content_fingerprint(frames.names)
+            ).estimate_distortion_bootstrap()
+            rec = copy_unposed_reconstruction(working_capture.rec)
+            calibration = CalibrationResult.from_artifact(
+                path=paths.geocalib_batch_path,
+                reconstruction=rec,
+                image_names=frames.names,
+                options=prior_options,
+                artifact=geocalib,
+            )
+            apply_calibration(calibration, rec)
+            working_capture = replace(working_capture, rec=rec)
+            bootstrap_camera = rec.camera(working_capture.image(frames.streams[0][0]).camera_id)
+
+        # Keep source per-image geometry for ordinary tracking. Distorted-image tracking
+        # uses the bootstrapped working calibration; source evidence stays unchanged.
+        tracking_capture = working_capture if self.preparation_plan.bootstrap_required else source
+
         verification = None
         with create_lazy_romav2_tracker(tracker_options, device=self.device) as tracker:
             keyframe_processor = KeyframeProcessor(
@@ -107,6 +128,7 @@ class TrackingPipeline:
                 keyframe_options=options.keyframes.selection,
                 salient_options=options.keyframes.features,
                 device=self.device,
+                bootstrap_camera=bootstrap_camera,
             )
             admission_metadata = keyframe_cache.admitted_frames_cache_metadata(
                 input_snapshot=self.input_snapshot,
@@ -118,10 +140,11 @@ class TrackingPipeline:
                 keyframe_options=options.keyframes.selection,
                 salient_options=options.keyframes.features,
                 track_options=options.tracks.propagation,
+                bootstrap_camera=bootstrap_camera,
             )
             keyframes = keyframe_processor.load_cached(admission_metadata)
             sparse_track_builder = SparseTrackBuilder(
-                scene_parser=source,
+                scene_parser=tracking_capture,
                 paths=paths,
                 force_recompute=self.force_recompute,
                 repro_dir=self.repro_dir,
@@ -157,7 +180,7 @@ class TrackingPipeline:
                 )
 
             transitive_builder = TransitiveCorrespondenceBuilder(
-                scene_parser=source,
+                scene_parser=tracking_capture,
                 paths=paths,
                 repro_dir=self.repro_dir,
                 keyframes=keyframes,
@@ -168,7 +191,7 @@ class TrackingPipeline:
             image_content = self.input_snapshot.image_content_fingerprint(keyframes.names)
             extended_match_builder = ExtendedMatchBuilder(
                 keyframes=keyframes,
-                scene_parser=source,
+                scene_parser=tracking_capture,
                 paths=paths,
                 force_recompute=self.force_recompute,
                 repro_dir=self.repro_dir,
@@ -186,43 +209,9 @@ class TrackingPipeline:
 
         if verification is not None:
             verification.result()
-        depth_estimator = DepthEstimator(
-            scene_parser=source,
-            paths=paths,
-            force_recompute=self.force_recompute,
-            keyframes=keyframes,
-            options=options.depth,
-            calibration_enabled=prior_options.estimator == "da3",
-            image_content_fingerprint=image_content,
-            device=self.device,
+        initialize_selected_camera_geometry(
+            working_capture.rec, tracking_capture.rec, keyframes.names, self.preparation_plan
         )
-        depth = (
-            depth_estimator.estimate(cache_full_depth_maps=True)
-            if self.cache_full_depth_maps
-            else depth_estimator.estimate()
-        )
-        if use_geocalib:
-            geocalib = self._camera_prior_estimator(paths, keyframes.names, image_content).estimate()
-
-        initialize_selected_camera_geometry(working_capture.rec, source.rec, keyframes.names, self.preparation_plan)
-        if prior_options.estimator != "none":
-            if prior_options.estimator == "da3":
-                calibration_path, calibration_artifact = paths.depth_maps_path, depth.sampled
-            else:
-                calibration_path = (
-                    paths.geocalib_batch_path
-                    if prior_options.inference == "selected_batch"
-                    else paths.geocalib_per_image_path
-                )
-                calibration_artifact = geocalib
-            calibration = CalibrationResult.from_artifact(
-                path=calibration_path,
-                reconstruction=working_capture.rec,
-                image_names=keyframes.names,
-                options=prior_options,
-                artifact=calibration_artifact,
-            )
-
         logger.info("Features located in %s", paths.sparse_features_path)
         result = TrackingFrontendResult(
             paths=paths,
@@ -231,17 +220,15 @@ class TrackingPipeline:
                 sparse_features=tracks.sparse_features,
                 sparse_matches=tracks.sparse_matches,
                 extended_matches=extended.artifact,
-                depth=depth.sampled,
-                full_depth=depth.full,
             ),
-            keyframe_sequence=keyframes.names,
+            keyframes=keyframes,
             retrieval_pairs=extended.retrieval_pairs,
             tcorr=extended.tcorr,
             lc_masks=extended.lc_masks,
             capture=working_capture,
             calibration=calibration,
         )
-        validate_tracking_result(result, geocalib_inference=prior_options.inference if use_geocalib else None)
+        validate_tracking_result(result)
         return result
 
     def _camera_prior_estimator(self, paths, keyframe_names, image_content):

@@ -8,12 +8,14 @@ from vidmap.configuration.defaults import CANONICAL_POINT_BUDGET
 from vidmap.mapper.focal_prior import load_focal_prior
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.mapper.inputs.snapshot import calibration_artifact_name
+from vidmap.utils.camera_geometry import DISTORTED_CAMERA_MODELS
 from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
 from .checkpoints import remove_disabled_intermediate_reconstructions
 from .inputs.database import remove_database_sidecars
 from .inputs.loader import MappingInputLoader
 from .options import MapperOptions
+from .options.view_graph import VGCOptions
 from .playback_trace import PlaybackTraceOptions, PlaybackTraceRecorder
 from .replay.cache import ReplayCache
 from .stages.bundle_adjustment.adjuster import BundleAdjuster
@@ -90,6 +92,7 @@ class Mapper:
 
             def admit_calibration(state):
                 nonlocal prior
+                self._validate_calibration_policy(state.reconstruction)
                 if need_factors:
                     prior = self._prepare_calibration(state, evidence)
 
@@ -138,12 +141,26 @@ class Mapper:
             raise ValueError("Focal regularization requires original predictor factors")
         return need_factors
 
+    def _validate_calibration_policy(self, reconstruction):
+        """Only supplied calibration may bypass view-graph calibration."""
+        calibration = self.conf.calibration
+        if self.mapper_inputs.distortion_calibrated() and self.conf.vgc != VGCOptions():
+            raise ValueError(
+                "Distorted VGC settings belong to frontend preparation.distortion_calibration; "
+                "leave mapper.vgc at its defaults"
+            )
+        supplied = all(camera.has_prior_focal_length for camera in reconstruction.cameras.values())
+        if not supplied and not calibration.vgc_enabled:
+            raise ValueError("Estimated calibration requires VGC; vgc_enabled=false requires supplied calibration")
+        if supplied and not calibration.optimize_intrinsics and calibration.vgc_enabled:
+            raise ValueError("Locked supplied intrinsics require vgc_enabled=false")
+
     def _prepare_calibration(self, solve_state, evidence):
         """Construct original-target factors from the validated mapper inputs."""
         calibration = self.conf.calibration
         predictor = evidence.estimator
         cameras = solve_state.reconstruction.cameras
-        models = {"PINHOLE", "SIMPLE_PINHOLE"}
+        models = DISTORTED_CAMERA_MODELS if evidence.model == "SIMPLE_DIVISIONAL" else {"PINHOLE", "SIMPLE_PINHOLE"}
         camera_ids = {observation.camera_id for observation in evidence.observations}
         if any(cameras[camera_id].model.name not in models for camera_id in camera_ids):
             raise ValueError("Calibration prediction model disagrees with database cameras")
@@ -157,28 +174,30 @@ class Mapper:
 
         calibration = self.conf.calibration
 
-        # Remove view-graph observations that must not influence calibration or
-        # any of the downstream global solves.
-        view_graph_filter = ViewGraphFilter(
-            solve_state=solve_state,
-            options=self.conf.vgc.filter,
-            calibration_enabled=calibration.vgc_enabled,
-            initial_exclusion_ids=mapping_stage_inputs.vgc_exclusion_ids,
-        )
-        vgc_exclusion_ids = view_graph_filter.filter()
-
-        # Calibrate the surviving view graph before relative rotations and
-        # bearing vectors are estimated from it.
         vgc_start_time = sync_time()
-        view_graph_calibrator = ViewGraphCalibrator(
-            solve_state=solve_state,
-            options=self.conf.vgc.calibration,
-            enabled=calibration.vgc_enabled,
-            consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
-            exclusion_ids=vgc_exclusion_ids,
-            focal_prior=prior if calibration.vgc_focal_prior else None,
-        )
-        view_graph_calibrator.calibrate()
+        if not self.mapper_inputs.distortion_calibrated():
+            # Remove view-graph observations that must not influence calibration or
+            # any of the downstream global solves.
+            view_graph_filter = ViewGraphFilter(
+                solve_state=solve_state,
+                options=self.conf.vgc.filter,
+                calibration_enabled=calibration.vgc_enabled,
+                initial_exclusion_ids=mapping_stage_inputs.vgc_exclusion_ids,
+            )
+            vgc_exclusion_ids = view_graph_filter.filter()
+            vgc_start_time = sync_time()
+
+            # Calibrate the surviving view graph before relative rotations and
+            # bearing vectors are estimated from it.
+            view_graph_calibrator = ViewGraphCalibrator(
+                solve_state=solve_state,
+                options=self.conf.vgc.calibration,
+                enabled=calibration.vgc_enabled,
+                consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
+                exclusion_ids=vgc_exclusion_ids,
+                focal_prior=prior if calibration.vgc_focal_prior else None,
+            )
+            view_graph_calibrator.calibrate()
 
         # Bearings are shared by relative-pose estimation and the later global
         # positioning stage, so construct them once on the solve state.

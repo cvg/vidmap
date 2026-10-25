@@ -10,11 +10,27 @@ python -m vidmap.run --input_data /data/images --output /results/run \
 | Input | `FRONTEND_CONFIG` | `MAPPING_CONFIG` |
 |---|---|---|
 | Uncalibrated monocular | `uncalib/base` | `uncalib/base` |
+| Uncalibrated distorted perspective | Saved config name | `uncalib/geocalib` |
+| Uncalibrated monocular fisheye | `uncalib/fisheye` | `uncalib/geocalib` |
 | Calibrated examples below | Saved config name | `calib/base` |
 
 ## Monocular
 
 The default configuration uses uncalibrated monocular input.
+
+### Distorted monocular
+
+Save `vidmap/configs/frontend/my_distorted.yaml`, choosing a model from the [supported inputs](../README.md#camera-rigs-panoramas-and-fisheye):
+
+```yaml
+defaults: [uncalib/geocalib]
+camera_priors:
+  camera_model: OPENCV
+```
+
+Use `uncalib/geocalib` to initialize focal length and distortion before keyframing.
+View-graph calibration then refines these estimates before they define the crop
+used for depth prediction.
 
 ### Calibrated monocular
 
