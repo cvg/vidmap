@@ -50,7 +50,8 @@ def calibrate_distorted_camera(camera, pairs):
     rec.add_camera_with_trivial_rig(calibration)
     initialized = []
     source_pixels = []
-    ransac = pycolmap.RANSACOptions(max_error=4.0, max_num_trials=20000)
+    # Calibration defines the depth-cache identity; repeat the same hypothesis sampling.
+    ransac = pycolmap.RANSACOptions(max_error=4.0, max_num_trials=20000, random_seed=0)
     for source, target in pairs:
         if len(source) < 15:
             continue
