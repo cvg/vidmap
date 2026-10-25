@@ -215,6 +215,22 @@ void ImagePairsInlierCount(const InlierThresholdOptions& options,
     if (!graph.IsValid(pair_id)) {
       continue;
     }
+    const auto [first, second] = colmap::PairIdToImagePair(pair_id);
+    if (reconstruction.Image(first).FrameId() ==
+        reconstruction.Image(second).FrameId()) {
+      // Fixed stereo geometry takes precedence over a fitted F/H
+      // classification. Retain that classification and the original row/LC
+      // metadata unchanged.
+      const auto& pose = graph.Edges().at(pair_id).cam2_from_cam1;
+      if (!pose.translation().allFinite() ||
+          pose.translation().norm() <= kEpsilon) {
+        throw std::invalid_argument(
+            "same-frame scoring requires finite nonzero calibrated translation");
+      }
+      ScoreEssentialPair(
+          options, reconstruction, graph, sidecars, pair_id, &pair);
+      continue;
+    }
     switch (pair.geometry.config) {
       case colmap::TwoViewGeometry::CALIBRATED:
         ScoreEssentialPair(

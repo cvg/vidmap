@@ -13,6 +13,7 @@ import pycolmap
 from vidmap_native import global_positioning as gp_costs
 
 from vidmap.mapper.checkpoints import reconstruction_checkpoint_directory
+from vidmap.mapper.inputs.timeline import MappingTimeline
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.state import SolveState
 from vidmap.mapper.options.positioning import GPOptions
@@ -68,60 +69,77 @@ def _build_temporal_acceleration_prior_specs(
     solve_state: SolveState,
     reconstruction,
     consecutive_pair_ids,
-    sequence_id_to_index,
+    timeline: MappingTimeline,
     coordinate: str = "timestamp",
 ) -> list:
     """Build smoothness priors across valid consecutive tracking edges."""
-    ordered_image_ids = [image_id for image_id, _ in sorted(sequence_id_to_index.items(), key=lambda item: item[1])]
-    if coordinate == "timestamp":
-        timeline = _image_timestamps_seconds([reconstruction.image(image_id).name for image_id in ordered_image_ids])
-        coordinates = dict(zip(ordered_image_ids, timeline, strict=True))
-    elif coordinate == "keyframe_index":
-        coordinates = {image_id: index for index, image_id in enumerate(ordered_image_ids)}
-    else:
+    if coordinate not in ("timestamp", "keyframe_index"):
         raise ValueError(f"Unsupported temporal-acceleration coordinate: {coordinate!r}")
-    registered_image_ids = {image_id for image_id in ordered_image_ids if reconstruction.image(image_id).has_pose}
+    ordered_frame_ids = timeline.frame_ids
+    frame_indices = {fid: index for index, fid in enumerate(ordered_frame_ids)}
+    if coordinate == "keyframe_index":
+        coordinates = dict(frame_indices)
+    elif timeline.timestamps_ns is not None:
+        origin = timeline.timestamps_ns[0]
+        coordinates = {
+            frame: Decimal(time - origin) / Decimal(1_000_000_000)
+            for frame, time in zip(ordered_frame_ids, timeline.timestamps_ns, strict=True)
+        }
+    else:
+        if gp_costs.validate_fixed_rigs(reconstruction):
+            raise ValueError("Rig temporal acceleration requires recorded timestamps for timestamp coordinates")
+        names = [
+            reconstruction.image(next(iter(reconstruction.frame(fid).image_ids)).id).name for fid in ordered_frame_ids
+        ]
+        coordinates = dict(zip(ordered_frame_ids, _image_timestamps_seconds(names), strict=True))
+    registered_frame_ids = {frame_id for frame_id in ordered_frame_ids if reconstruction.frame(frame_id).has_pose()}
     valid_edges = set()
     for pair_id in consecutive_pair_ids:
         image_id1, image_id2 = pycolmap.pair_id_to_image_pair(pair_id)
         if not solve_state.pose_graph.has_edge(image_id1, image_id2) or not solve_state.pose_graph.is_valid(pair_id):
             continue
-        index1 = sequence_id_to_index[image_id1]
-        index2 = sequence_id_to_index[image_id2]
+        frame_id1 = reconstruction.image(image_id1).frame_id
+        frame_id2 = reconstruction.image(image_id2).frame_id
+        index1 = frame_indices[frame_id1]
+        index2 = frame_indices[frame_id2]
         if abs(index1 - index2) == 1:
-            valid_edges.add(frozenset((image_id1, image_id2)))
+            valid_edges.add(frozenset((frame_id1, frame_id2)))
 
     observation_counts = gp_costs.track_observation_counts(reconstruction, solve_state.sidecars)
-    for image_id in ordered_image_ids:
-        if image_id not in observation_counts:
-            observation_counts[image_id] = 0
+    frame_counts = {
+        fid: sum(
+            observation_counts[data.id]
+            for data in reconstruction.frame(fid).image_ids
+            if data.id in observation_counts
+        )
+        for fid in ordered_frame_ids
+    }
     priors = []
-    for prev_image_id, image_id, next_image_id in zip(
-        ordered_image_ids,
-        ordered_image_ids[1:],
-        ordered_image_ids[2:],
+    for prev_frame_id, frame_id, next_frame_id in zip(
+        ordered_frame_ids,
+        ordered_frame_ids[1:],
+        ordered_frame_ids[2:],
     ):
-        triplet = (prev_image_id, image_id, next_image_id)
-        if any(candidate not in registered_image_ids for candidate in triplet):
+        triplet = (prev_frame_id, frame_id, next_frame_id)
+        if any(candidate not in registered_frame_ids for candidate in triplet):
             continue
-        if frozenset((prev_image_id, image_id)) not in valid_edges:
+        if frozenset((prev_frame_id, frame_id)) not in valid_edges:
             continue
-        if frozenset((image_id, next_image_id)) not in valid_edges:
+        if frozenset((frame_id, next_frame_id)) not in valid_edges:
             continue
-        mean_observation_count = sum(observation_counts[candidate] for candidate in triplet) / 3.0
+        mean_observation_count = sum(frame_counts[candidate] for candidate in triplet) / 3.0
         if mean_observation_count <= 0.0:
             continue
-        dt_prev = float(coordinates[image_id] - coordinates[prev_image_id])
-        dt_next = float(coordinates[next_image_id] - coordinates[image_id])
+        dt_prev = float(coordinates[frame_id] - coordinates[prev_frame_id])
+        dt_next = float(coordinates[next_frame_id] - coordinates[frame_id])
         if not np.isfinite(dt_prev) or not np.isfinite(dt_next) or dt_prev <= 0.0 or dt_next <= 0.0:
             raise ValueError(
                 f"temporal acceleration produced invalid {coordinate} gaps for "
-                f"{solve_state.image(prev_image_id).name!r}, {reconstruction.image(image_id).name!r}, "
-                f"{solve_state.image(next_image_id).name!r}"
+                f"frames {prev_frame_id}, {frame_id}, {next_frame_id}"
             )
         priors.append(
             TemporalAccelerationPrior(
-                prev_image_id, image_id, next_image_id, dt_prev, dt_next, float(np.sqrt(mean_observation_count))
+                prev_frame_id, frame_id, next_frame_id, dt_prev, dt_next, float(np.sqrt(mean_observation_count))
             )
         )
     return priors
@@ -164,7 +182,7 @@ class GlobalPositioner:
 
     solve_state: SolveState
     consecutive_pair_ids: list[int]
-    sequence_id_to_index: dict[int, int]
+    timeline: MappingTimeline
     inlier_thresholds: InlierThresholdOptions
     boundary_depth_outliers_marked: bool
     options: GPOptions
@@ -323,7 +341,7 @@ class GlobalPositioner:
                 solve_state=self.solve_state,
                 reconstruction=working,
                 consecutive_pair_ids=self.consecutive_pair_ids,
-                sequence_id_to_index=self.sequence_id_to_index,
+                timeline=self.timeline,
                 coordinate=temporal.coordinate,
             )
             logger.info(
@@ -334,10 +352,7 @@ class GlobalPositioner:
 
         max_depth = self.options.track_filter.depth_prior_outlier_max_depth
         depth_masks = _depth_prior_outlier_masks(self.solve_state, max_depth)
-        image_timeline = [
-            int(image_id) for image_id, _ in sorted(self.sequence_id_to_index.items(), key=lambda item: item[1])
-        ]
-        prepared = prepare_observations(working, self.solve_state.sidecars, self.options, image_timeline)
+        prepared = prepare_observations(working, self.solve_state.sidecars, self.options, self.timeline.frame_ids)
         # GP1: initialize and solve, with optional warmup.
         logger.info("Running first global positioning ...")
         result = self.run_pass("gp1", working, prepared, replay_images, depth_masks, temporal_prior_specs)

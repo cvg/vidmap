@@ -1,6 +1,7 @@
 #include "vidmap_native/mapping_sidecars.h"
 
 #include "bindings.h"
+#include "stages/rig_geometry.h"
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
@@ -84,14 +85,17 @@ void BindMappingSidecars(py::module_& m) {
       [](const colmap::Reconstruction& reconstruction,
          const std::vector<colmap::image_t>& image_ids,
          const py::array_t<colmap::point3D_t>& point_ids,
-         const py::dict& centers) {
+         const py::dict& frame_centers) {
         MatrixX3d camera_values(image_ids.size(), 3),
             point_values(point_ids.size(), 3);
         for (size_t i = 0; i < image_ids.size(); ++i) {
-          const Eigen::Vector3d center =
-              centers.empty()
-                  ? reconstruction.Image(image_ids[i]).ProjectionCenter()
-                  : centers[py::int_(image_ids[i])].cast<Eigen::Vector3d>();
+          const auto& image = reconstruction.Image(image_ids[i]);
+          Eigen::Vector3d center =
+              frame_centers.empty() ? image.ProjectionCenter()
+                                    : frame_centers[py::int_(image.FrameId())]
+                                          .cast<Eigen::Vector3d>();
+          if (!frame_centers.empty() && !image.IsRefInFrame())
+            center -= RigTranslationInWorld(image);
           camera_values.row(i) = center.transpose();
         }
         for (py::ssize_t i = 0; i < point_ids.size(); ++i)
@@ -102,7 +106,7 @@ void BindMappingSidecars(py::module_& m) {
       py::arg("reconstruction"),
       py::arg("image_ids"),
       py::arg("point_ids"),
-      py::arg("centers") = py::dict());
+      py::arg("frame_centers") = py::dict());
   m.def(
       "publish_geometry",
       [](const colmap::Reconstruction& source,

@@ -1,10 +1,12 @@
+# Strict integer checks intentionally reject bool.
+# ruff: noqa: E721
 import collections.abc as collections
 import glob
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from functools import cached_property
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Mapping, Optional
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -14,46 +16,60 @@ from pydantic import ConfigDict
 from torch.nn import functional as F
 
 from vidmap.configuration.validators import dataclass as pydantic_dataclass
-from vidmap.datasets.frame_names import timestamp_from_image_name
+from vidmap.frontend.options.rig import RigOptions
+from vidmap.frontend.rig import camera_streams, resolve_rig_options
 from vidmap.utils.io import read_image
 from vidmap.utils.parsers import parse_image_lists
 
 
 @dataclass(frozen=True)
 class FrameSequence:
-    """Ordered video images with timestamps resolved once per frontend run."""
+    """Camera-local execution streams, with the admission camera first."""
 
-    names: tuple[str, ...]
-    timestamps: Mapping[str, Any]
+    streams: tuple[tuple[str, ...], ...]
+    same_frame_stream_pairs: tuple[tuple[int, int, bool], ...] = ()
+    frame_ids: tuple[int, ...] = dc_field(kw_only=True)
+    stream_camera_ids: tuple[int, ...] = dc_field(kw_only=True)
 
-    def __post_init__(self):
-        names = tuple(self.names)
-        missing = [name for name in names if name not in self.timestamps]
-        if missing:
-            raise ValueError(f"Missing timestamps for {len(missing)} frontend frames")
-        object.__setattr__(self, "names", names)
-        object.__setattr__(
-            self,
-            "timestamps",
-            MappingProxyType({name: self.timestamps[name] for name in names}),
-        )
+    @cached_property
+    def names(self) -> tuple[str, ...]:
+        return tuple(name for stream in self.streams for name in stream)
+
+    def select(self, indices):
+        """Apply admission-camera indices to every synchronized stream."""
+        indices = tuple(indices)
+        return tuple(tuple(stream[i] for i in indices) for stream in self.streams)
+
+    def indices(self, frame_ids):
+        """Resolve an ordered native frame selection against this timeline."""
+        frame_ids = tuple(frame_ids)
+        if any(type(frame_id) is not int for frame_id in frame_ids):
+            raise ValueError("Selected native frame IDs must be integers")
+        positions = {frame_id: i for i, frame_id in enumerate(self.frame_ids)}
+        if any(frame_id not in positions for frame_id in frame_ids):
+            raise ValueError("Selected frame is absent from the capture timeline")
+        indices = tuple(positions[frame_id] for frame_id in frame_ids)
+        if any(b <= a for a, b in zip(indices, indices[1:])):
+            raise ValueError("Selected frames must be unique and follow the capture timeline")
+        return indices
 
     @classmethod
-    def from_scene(cls, scene_parser):
-        names, timestamps = build_sequence_and_timestamps(scene_parser)
-        return cls(tuple(names), timestamps)
-
-
-def build_sequence_and_timestamps(scene_parser):
-    """Build the ordered image sequence and its timestamps."""
-    reconstruction = scene_parser.vio_rec if hasattr(scene_parser, "vio_rec") else scene_parser.rec
-    ids = sorted(reconstruction.images)
-    reconstruction_ids = list(scene_parser.rec.images)
-    minimum_id = min(reconstruction_ids)
-    maximum_id = max(reconstruction_ids)
-    sequence = [reconstruction.images[image_id].name for image_id in ids if minimum_id <= image_id <= maximum_id]
-    sequence = sorted(sequence, key=timestamp_from_image_name)
-    return sequence, {name: timestamp_from_image_name(name) for name in sequence}
+    def from_scene(cls, scene_parser, *, rig_options: RigOptions | None = None):
+        options = RigOptions() if rig_options is None else rig_options
+        reference, policy = resolve_rig_options(scene_parser, options)
+        streams = camera_streams(scene_parser, reference_camera_id=reference)
+        same_frame_stream_pairs = ()
+        if policy:
+            positions = {scene_parser.image(stream[0]).camera_id: index for index, stream in enumerate(streams)}
+            same_frame_stream_pairs = tuple(
+                (positions[first], positions[second], sequential) for first, second, sequential in policy
+            )
+        return cls(
+            streams,
+            same_frame_stream_pairs,
+            frame_ids=tuple(scene_parser.image(name).frame_id for name in streams[0]),
+            stream_camera_ids=tuple(scene_parser.image(stream[0]).camera_id for stream in streams),
+        )
 
 
 def get_image_size(scene_parser, image_name):

@@ -22,7 +22,17 @@ class CameraPriorEstimationOptions:
             raise ValueError("Selected-batch inference requires GeoCalib")
         if self.estimator == "none" and self.initialization != "supplied":
             raise ValueError("Predicted initialization requires an estimator")
+        if self.max_images < 1:
+            raise ValueError("Camera calibration requires at least one sample")
         return self
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class CameraProcessingOptions:
+    """Complete camera-local settings; share prior groups through config composition."""
+
+    camera_priors: CameraPriorEstimationOptions
+    image_mode: Literal["auto", "native", "undistort"] = "auto"
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))

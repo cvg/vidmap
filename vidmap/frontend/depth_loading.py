@@ -79,28 +79,37 @@ class _Da3ImageDataset(ImageDataset):
 class WindowDataset(Dataset):
     """Load one explicit image window for each pending center image."""
 
-    def __init__(self, image_dataset: ImageDataset, pending_names, window_size: int):
+    def __init__(
+        self,
+        image_dataset: ImageDataset,
+        pending_names,
+        window_size: int,
+        stream_sequences,
+    ):
         self.image_dataset = image_dataset
         self.pending_names = tuple(pending_names)
         self.window_size = window_size
         self.image_to_index = {name: index for index, name in enumerate(self.image_dataset.names)}
+        self.stream_positions = {
+            name: (stream, index) for stream in stream_sequences for index, name in enumerate(stream)
+        }
 
     def __len__(self) -> int:
         return len(self.pending_names)
 
     def __getitem__(self, item: int):
         name = self.pending_names[item]
-        index = self.image_to_index[name]
+        stream, index = self.stream_positions[name]
         half_window = self.window_size // 2
         start = max(0, index - half_window)
-        end = min(len(self.image_dataset), index + half_window + 1)
+        end = min(len(stream), index + half_window + 1)
         if end - start < self.window_size:
             if start == 0:
-                end = min(len(self.image_dataset), self.window_size)
+                end = min(len(stream), self.window_size)
             else:
-                start = max(0, len(self.image_dataset) - self.window_size)
+                start = max(0, len(stream) - self.window_size)
 
-        items = [self.image_dataset[image_index] for image_index in range(start, end)]
+        items = [self.image_dataset[self.image_to_index[stream[image_index]]] for image_index in range(start, end)]
         center_index = index - start
         return {
             "name": name,
@@ -125,10 +134,11 @@ def create_da3_window_loader(
     process_res: int,
     num_workers: int,
     pin_memory: bool = True,
+    stream_sequences,
 ) -> DataLoader:
     """Create the ordered worker pool that prepares DA3 input windows."""
     image_dataset = _Da3ImageDataset(rgb_dir, image_names, process_res)
-    dataset = WindowDataset(image_dataset, pending_names, window_size)
+    dataset = WindowDataset(image_dataset, pending_names, window_size, stream_sequences)
     return DataLoader(
         dataset,
         batch_size=1,

@@ -1,6 +1,7 @@
 """Schemas shared by frontend image matching stages."""
 
-from typing import Optional, Tuple
+from dataclasses import field as dc_field
+from typing import Annotated, Optional, Tuple
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -67,6 +68,9 @@ class ExtendedMatchOptions:
     lc_pair_nms: bool = True
     lc_pair_nms_radius: int = 2
     lc_match_thresh: float = 0.05
+    max_pairs_per_frame_pair: Annotated[int, Field(ge=1, strict=True)] | None = dc_field(
+        default=None, metadata={"omit_default": True}
+    )
 
     def effective_tcorr_min_matches(self, point_budget: int) -> int:
         return self.tcorr_min_matches * point_budget // CANONICAL_POINT_BUDGET

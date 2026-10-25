@@ -10,24 +10,23 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-import h5py
-
+from vidmap.calibration import CalibrationEvidence
 from vidmap.configuration.names import config_name_to_output_slug
 from vidmap.depth_artifacts import FULL_DEPTH_MAPS_NAME
+from vidmap.mapper.inputs.timeline import validate_frame_sequence
 
 DATABASE_NAME = "database_complete.db"
-TRACK_PAIRS_NAME = "track_pairs.h5"
 DEPTH_MAPS_NAME = "depth_maps.h5"
 LC_MASKS_NAME = "lc_masks.json"
 GEOCALIB_PER_IMAGE_NAME = "geocalib_per_image.h5"
 GEOCALIB_BATCH_NAME = "geocalib_batch.h5"
 VGC_FILTERED_PAIRS_NAME = "vgc_filtered_pairs.json"
 MANIFEST_NAME = "manifest.json"
-MANIFEST_SCHEMA_VERSION = 10
-_FRONTEND_IDENTITY_SCHEMA_VERSION = 4
+MANIFEST_SCHEMA_VERSION = 14
+_FRONTEND_IDENTITY_SCHEMA_VERSION = 6
 SQLITE_SIDECAR_SUFFIXES = ("-journal", "-shm", "-wal")
 
-REQUIRED_PAYLOAD_NAMES = frozenset({DATABASE_NAME, TRACK_PAIRS_NAME, DEPTH_MAPS_NAME, LC_MASKS_NAME})
+REQUIRED_PAYLOAD_NAMES = frozenset({DATABASE_NAME, DEPTH_MAPS_NAME, LC_MASKS_NAME})
 REQUIRED_NAMES = REQUIRED_PAYLOAD_NAMES | {MANIFEST_NAME}
 OPTIONAL_NAMES = frozenset({GEOCALIB_PER_IMAGE_NAME, GEOCALIB_BATCH_NAME, VGC_FILTERED_PAIRS_NAME})
 CANONICAL_NAMES = REQUIRED_NAMES | OPTIONAL_NAMES
@@ -43,10 +42,9 @@ FRONTEND_IDENTITY_KEYS = frozenset(
         "mode",
         "testset_id",
         "reference_image_ids",
-        "boundary_options",
+        "source_fingerprint",
     }
 )
-BOUNDARY_OPTION_KEYS = frozenset({"estimator", "inference", "initialization"})
 
 
 def calibration_artifact_name(estimator: str, inference: str) -> str | None:
@@ -104,17 +102,17 @@ def mapper_inputs_manifest(
     directory: Path,
     *,
     frontend_identity: Mapping[str, object],
+    frame_sequence: dict,
+    calibration: CalibrationEvidence | None = None,
 ) -> dict:
     """Build deterministic provenance for canonical mapper-input payloads."""
-    directory = Path(directory)
-    artifacts = {}
-    for name in sorted(CANONICAL_NAMES - {MANIFEST_NAME}):
-        path = directory / name
-        if not path.is_file():
-            continue
-        proof = FileProvenance.from_path(path)
-        artifacts[path.name] = {"size": proof.size, "sha256": proof.sha256}
-    return _tagged_manifest(artifacts, frontend_identity)
+    directory = resolve_mapper_inputs_directory(directory)
+    names = {name for name in CANONICAL_NAMES - {MANIFEST_NAME} if (directory / name).is_file()}
+    artifacts = {
+        name: dict(proof)
+        for name, proof in _verified_artifacts(directory, _artifact_signature(directory, names)).items()
+    }
+    return _tagged_manifest(artifacts, frontend_identity, frame_sequence, calibration)
 
 
 def _artifact_signature(
@@ -144,13 +142,19 @@ def _verified_artifacts(
 def _tagged_manifest(
     artifacts: Mapping[str, object],
     frontend_identity: Mapping[str, object],
+    frame_sequence: dict,
+    calibration: CalibrationEvidence | None = None,
 ) -> dict[str, object]:
     """Build the current tagged mapper-input manifest."""
-    return {
+    validate_frame_sequence(frame_sequence)
+    manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "frontend_identity": dict(frontend_identity),
         "artifacts": dict(artifacts),
+        "frame_sequence": frame_sequence,
+        "calibration": None if calibration is None else calibration.as_dict(),
     }
+    return manifest
 
 
 def _tagged_identity(manifest: Mapping[str, object], *, manifest_path: Path) -> dict[str, object]:
@@ -158,6 +162,10 @@ def _tagged_identity(manifest: Mapping[str, object], *, manifest_path: Path) -> 
     schema_version = manifest.get("schema_version")
     if schema_version != MANIFEST_SCHEMA_VERSION:
         raise ValueError(f"Mapper inputs require manifest schema {MANIFEST_SCHEMA_VERSION}: {manifest_path}")
+    fields = {"schema_version", "frontend_identity", "artifacts", "frame_sequence", "calibration"}
+    if set(manifest) != fields:
+        raise ValueError(f"Invalid mapper-input manifest fields: {manifest_path}")
+    validate_frame_sequence(manifest["frame_sequence"])
     identity = manifest.get("frontend_identity")
     _validate_frontend_identity(identity, manifest_path=manifest_path)
     return identity
@@ -167,8 +175,15 @@ def write_mapper_inputs_manifest(
     directory: Path,
     *,
     frontend_identity: Mapping[str, object],
+    frame_sequence: dict,
+    calibration: CalibrationEvidence | None = None,
 ) -> None:
-    payload = mapper_inputs_manifest(directory, frontend_identity=frontend_identity)
+    payload = mapper_inputs_manifest(
+        directory,
+        frontend_identity=frontend_identity,
+        frame_sequence=frame_sequence,
+        calibration=calibration,
+    )
     (Path(directory) / MANIFEST_NAME).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
@@ -221,25 +236,15 @@ def _validate_frontend_identity(identity: object, *, manifest_path: Path) -> Non
         or config_name_to_output_slug(config_name) != tag
     ):
         raise ValueError(f"Mapper-input frontend tag does not match config_name: {manifest_path}")
-    fingerprint = identity["config_fingerprint"]
-    if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
-        raise ValueError(f"Invalid mapper-input frontend config_fingerprint: {manifest_path}")
+    for key in ("config_fingerprint", "source_fingerprint"):
+        fingerprint = identity[key]
+        if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+            raise ValueError(f"Invalid mapper-input frontend {key}: {manifest_path}")
     reference_image_ids = identity["reference_image_ids"]
     if not isinstance(reference_image_ids, list) or any(
         not isinstance(image_id, int) or isinstance(image_id, bool) for image_id in reference_image_ids
     ):
         raise ValueError(f"Invalid mapper-input frontend reference_image_ids: {manifest_path}")
-    options = identity["boundary_options"]
-    if (
-        not isinstance(options, dict)
-        or set(options) != BOUNDARY_OPTION_KEYS
-        or options["estimator"] not in {"da3", "geocalib", "none"}
-        or options["inference"] not in {"per_view", "selected_batch"}
-        or options["initialization"] not in {"predicted", "supplied"}
-        or (options["inference"] == "selected_batch" and options["estimator"] != "geocalib")
-        or (options["estimator"] == "none" and options["initialization"] != "supplied")
-    ):
-        raise ValueError(f"Invalid mapper-input frontend boundary_options: {manifest_path}")
 
 
 def resolve_mapper_inputs_directory(directory: Path) -> Path:
@@ -287,6 +292,7 @@ class MapperInputs:
             if not path.is_file():
                 raise ValueError(f"Mapper input must be a regular file: {path}")
 
+        require_finalized_sqlite(self.database_path)
         if VGC_FILTERED_PAIRS_NAME in names:
             self.read_vgc_filtered_pairs()
 
@@ -307,8 +313,10 @@ class MapperInputs:
         if schema_version != MANIFEST_SCHEMA_VERSION:
             raise ValueError(f"Unsupported mapper-input manifest schema in {manifest_path}: {schema_version!r}")
         frontend_identity = _tagged_identity(manifest, manifest_path=manifest_path)
-        calibration = frontend_identity["boundary_options"]
-        selected_artifact = calibration_artifact_name(calibration["estimator"], calibration["inference"])
+        evidence = None if manifest["calibration"] is None else CalibrationEvidence.from_dict(manifest["calibration"])
+        selected_artifact = (
+            None if evidence is None else calibration_artifact_name(evidence.estimator, evidence.inference)
+        )
         expected_geocalib = {selected_artifact} & {GEOCALIB_PER_IMAGE_NAME, GEOCALIB_BATCH_NAME}
         if names & {GEOCALIB_PER_IMAGE_NAME, GEOCALIB_BATCH_NAME} != expected_geocalib:
             raise ValueError("GeoCalib artifacts disagree with the extraction's predictor settings")
@@ -326,6 +334,8 @@ class MapperInputs:
                 _artifact_signature(self.directory, canonical_names - {MANIFEST_NAME}),
             ),
             frontend_identity,
+            manifest["frame_sequence"],
+            evidence,
         )
         if manifest != expected_manifest:
             raise ValueError(f"Mapper-input manifest does not match written payloads: {manifest_path}")
@@ -339,21 +349,18 @@ class MapperInputs:
             raise ValueError(f"Invalid mapper-input manifest: {manifest_path}") from error
         return _tagged_identity(manifest, manifest_path=manifest_path)
 
-    def read_track_pairs(self) -> list[tuple[str, str]]:
-        with h5py.File(self.track_pairs_path, "r") as hfile:
-            if set(hfile) != {"data"}:
-                raise ValueError(f"Mapper track-pair file has an invalid dataset set: {self.track_pairs_path}")
-            data = hfile["data"][:]
-        if data.ndim != 2 or data.shape[1] != 2:
-            raise ValueError(f"Mapper track pairs must have shape (N, 2): {self.track_pairs_path}")
-        pairs = []
-        for first, second in data:
-            if isinstance(first, bytes):
-                first = first.decode("utf-8")
-            if isinstance(second, bytes):
-                second = second.decode("utf-8")
-            pairs.append((str(first), str(second)))
-        return pairs
+    def calibration(self) -> CalibrationEvidence | None:
+        """Read original prediction associations without inferring camera membership."""
+        manifest = json.loads((self.directory / MANIFEST_NAME).read_text())
+        _tagged_identity(manifest, manifest_path=self.directory / MANIFEST_NAME)
+        value = manifest["calibration"]
+        return None if value is None else CalibrationEvidence.from_dict(value)
+
+    def frame_sequence(self) -> dict:
+        """Read the frontend's explicit order over finalized native frames."""
+        manifest = json.loads((self.directory / MANIFEST_NAME).read_text())
+        _tagged_identity(manifest, manifest_path=self.directory / MANIFEST_NAME)
+        return manifest["frame_sequence"]
 
     @property
     def full_depth_maps_path(self) -> Path | None:
@@ -384,10 +391,6 @@ class MapperInputs:
     @property
     def database_path(self) -> Path:
         return self.directory / DATABASE_NAME
-
-    @property
-    def track_pairs_path(self) -> Path:
-        return self.directory / TRACK_PAIRS_NAME
 
     @property
     def depth_maps_path(self) -> Path:

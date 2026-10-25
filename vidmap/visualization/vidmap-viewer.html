@@ -66,12 +66,20 @@
     #keyframe-preview-panel summary {
       width: max-content; cursor: pointer; font-weight: 600; user-select: none;
     }
-    #keyframe-preview {
+    #keyframe-previews { position: relative; display: flex; gap: 8px; align-items: flex-start; }
+    #keyframe-preview-panel.rig-frame[open] { width: min(88vw, 1500px); }
+    .keyframe-camera { flex: 1; min-width: 0; margin: 0; }
+    .keyframe-camera figcaption { overflow-wrap: anywhere; font-size: 11px; }
+    #keyframe-previews[data-loading="true"]::after {
+      content: "Loading synchronized images…"; position: absolute; top: 0; right: 0;
+      padding: 2px 4px; border-radius: 3px; background: rgba(255,255,255,.9);
+    }
+    .keyframe-preview {
       display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain;
       border-radius: 3px; background: #111;
     }
-    #keyframe-preview-stage { position: relative; width: 100%; margin-top: 4px; line-height: 0; }
-    #tracked-keypoints-overlay {
+    .keyframe-preview-stage { position: relative; width: 100%; margin-top: 4px; line-height: 0; }
+    .tracked-keypoints-overlay {
       position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
     }
     #loop-closure-pair-panel {
@@ -117,11 +125,13 @@
   <div id="background-layer"></div>
   <details id="keyframe-preview-panel" open>
     <summary>Keyframe</summary>
-    <div id="keyframe-preview-stage">
-      <img id="keyframe-preview" alt="Selected keyframe">
-      <canvas id="tracked-keypoints-overlay"></canvas>
-    </div>
+    <div id="keyframe-previews"></div>
   </details>
+  <template id="keyframe-card">
+    <figure class="keyframe-camera"><figcaption></figcaption><div class="keyframe-preview-stage">
+      <img class="keyframe-preview"><canvas class="tracked-keypoints-overlay"></canvas>
+    </div></figure>
+  </template>
   <aside id="loop-closure-pair-panel" hidden>
     <button id="loop-closure-pair-close" type="button" aria-label="Close shared-track pair">×</button>
     <div id="loop-closure-pair-title">Loop closure</div>
@@ -192,7 +202,10 @@
       <input id="keyframe-slider" type="range" min="0" max="0" step="1" value="0" disabled>
       <span id="keyframe-label"></span>
     </div>
+    <label><input id="frame-observations-toggle" type="checkbox" checked> selected frame points</label>
     <div class="control-row keyframe-playback-row">
+      <button id="keyframe-previous" type="button" disabled>prev</button>
+      <button id="keyframe-next" type="button" disabled>next</button>
       <button id="keyframe-play" type="button" disabled>play</button>
       <label class="setting">speed
         <select id="keyframe-speed">
@@ -232,6 +245,8 @@
       <label class="toggle"><input id="paths-toggle" type="checkbox" checked> trajectories</label>
       <label class="setting">line <input id="paths-width" type="number" min="0.5" max="20" step="0.5" value="6"></label>
       <label class="setting">estimated <input id="estimated-path-color" type="color" value="#0064ff"></label>
+    </div>
+    <div class="control-row">
     </div>
     <div class="control-row">
       <label class="toggle"><input id="loop-closures-toggle" type="checkbox" checked> loop closures</label>
@@ -287,7 +302,7 @@
       return;
     }
 
-    const VIDMAP_BROWSER_WORKER_SOURCE = "(function (root) {\n  \"use strict\";\n\n  const CAMERA_PARAMETER_COUNTS = [3, 4, 4, 5, 8, 8, 12, 5, 4, 5, 12, 16, 4, 5, 3, 4, 6];\n  const SINGLE_FOCAL_MODELS = new Set([0, 2, 3, 8, 9, 12, 14]);\n  const CRC32_TABLE = (() => {\n    const table = new Uint32Array(256);\n    for (let index = 0; index < 256; ++index) {\n      let value = index;\n      for (let bit = 0; bit < 8; ++bit) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);\n      table[index] = value >>> 0;\n    }\n    return table;\n  })();\n\n  function checkedCount(value, label) {\n    const count = Number(value);\n    if (!Number.isSafeInteger(count) || count < 0) throw new Error(`${label} is outside JavaScript's safe range`);\n    return count;\n  }\n\n  function requireBytes(view, offset, count, label) {\n    if (offset < 0 || count < 0 || offset + count > view.byteLength) {\n      throw new Error(`Truncated ${label} at byte ${offset}`);\n    }\n  }\n\n  function crc32(buffer) {\n    const bytes = new Uint8Array(buffer);\n    let value = 0xffffffff;\n    for (let index = 0; index < bytes.length; ++index) {\n      value = CRC32_TABLE[(value ^ bytes[index]) & 0xff] ^ (value >>> 8);\n    }\n    return (value ^ 0xffffffff) >>> 0;\n  }\n\n  function fingerprints(buffers) {\n    const result = {};\n    for (const name of [\"cameras.bin\", \"images.bin\", \"points3D.bin\"]) {\n      const buffer = buffers[name];\n      result[name] = {size: buffer.byteLength, crc32: crc32(buffer)};\n    }\n    return result;\n  }\n\n  function parseCameras(buffer) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"cameras.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"camera count\");\n    const cameras = new Map();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 24, \"camera record\");\n      const cameraId = view.getUint32(offset, true);\n      const modelId = view.getInt32(offset + 4, true);\n      if (modelId === 17) throw new Error(\"EQUIRECTANGULAR cameras are not supported by the 3D viewer\");\n      const parameterCount = CAMERA_PARAMETER_COUNTS[modelId];\n      if (parameterCount === undefined) throw new Error(`Unsupported COLMAP camera model id ${modelId}`);\n      const width = checkedCount(view.getBigUint64(offset + 8, true), \"camera width\");\n      const height = checkedCount(view.getBigUint64(offset + 16, true), \"camera height\");\n      offset += 24;\n      requireBytes(view, offset, parameterCount * 8, \"camera parameters\");\n      const fx = view.getFloat64(offset, true);\n      const fy = SINGLE_FOCAL_MODELS.has(modelId) ? fx : view.getFloat64(offset + 8, true);\n      const principalOffset = SINGLE_FOCAL_MODELS.has(modelId) ? 8 : 16;\n      const cx = view.getFloat64(offset + principalOffset, true);\n      const cy = view.getFloat64(offset + principalOffset + 8, true);\n      cameras.set(cameraId, {fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height});\n      offset += parameterCount * 8;\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing cameras.bin bytes: ${view.byteLength - offset}`);\n    return cameras;\n  }\n\n  function quaternionRotation(w, x, y, z) {\n    const norm = Math.hypot(w, x, y, z);\n    if (!(norm > 0)) throw new Error(\"Invalid zero-norm image quaternion\");\n    w /= norm;\n    x /= norm;\n    y /= norm;\n    z /= norm;\n    return new Float64Array([\n      1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),\n      2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),\n      2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)\n    ]);\n  }\n\n  function parseImages(buffer) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"images.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"image count\");\n    const images = new Map();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 64, \"image pose\");\n      const imageId = view.getUint32(offset, true);\n      const rotation = quaternionRotation(\n        view.getFloat64(offset + 4, true),\n        view.getFloat64(offset + 12, true),\n        view.getFloat64(offset + 20, true),\n        view.getFloat64(offset + 28, true)\n      );\n      const translation = new Float64Array([\n        view.getFloat64(offset + 36, true),\n        view.getFloat64(offset + 44, true),\n        view.getFloat64(offset + 52, true)\n      ]);\n      const cameraId = view.getUint32(offset + 60, true);\n      offset += 64;\n      const nameStart = offset;\n      while (true) {\n        requireBytes(view, offset, 1, \"image name\");\n        if (view.getUint8(offset++) === 0) break;\n      }\n      const name = new TextDecoder().decode(new Uint8Array(buffer, nameStart, offset - nameStart - 1));\n      requireBytes(view, offset, 8, \"image point count\");\n      const pointCount = checkedCount(view.getBigUint64(offset, true), \"image point count\");\n      offset += 8;\n      const pointBytes = pointCount * 24;\n      requireBytes(view, offset, pointBytes, \"image points2D\");\n      offset += pointBytes;\n      images.set(imageId, {\n        cameraId: cameraId,\n        rotation: rotation,\n        translation: translation,\n        name: name,\n        pointDataOffset: offset - pointBytes,\n        pointCount: pointCount\n      });\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing images.bin bytes: ${view.byteLength - offset}`);\n    return images;\n  }\n\n  function numericTimestampToken(name) {\n    const basename = name.replaceAll(\"\\\\\", \"/\").split(\"/\").pop();\n    const stem = basename.includes(\".\") ? basename.slice(0, basename.lastIndexOf(\".\")) : basename;\n    const match = stem.match(/^(\\d+(?:\\.\\d+)?)(?:[-_]|$)/);\n    return match === null ? null : match[1];\n  }\n\n  function inferredTimestampScale(tokens, values) {\n    if (tokens.some(token => token.includes(\".\"))) return 1;\n    const conventionalScales = new Map([[10, 1], [13, 1e3], [16, 1e6], [19, 1e9]]);\n    if (values.length === 1) return conventionalScales.get(tokens[0].length) || null;\n    const deltas = values.slice(1).map((value, index) => value - values[index]).sort((a, b) => a - b);\n    const median = deltas[Math.floor(deltas.length / 2)];\n    const sameWidth = tokens.every(token => token.length === tokens[0].length);\n    const conventional = sameWidth ? conventionalScales.get(tokens[0].length) : undefined;\n    if (conventional !== undefined) {\n      const interval = median / conventional;\n      if (interval >= 0.001 && interval <= 10) return conventional;\n    }\n    const candidates = [1, 1e3, 1e6, 1e9].filter(scale => {\n      const interval = median / scale;\n      return interval >= 0.001 && interval <= 10;\n    });\n    return candidates.length === 1 ? candidates[0] : null;\n  }\n\n  function imageTimeline(images) {\n    const entries = Array.from(images.entries()).map(([imageId, image]) => ({\n      imageId: imageId,\n      name: image.name,\n      token: numericTimestampToken(image.name)\n    }));\n    const hasNumericNames = entries.every(entry => entry.token !== null);\n    if (hasNumericNames) {\n      entries.sort((left, right) => {\n        const difference = Number(left.token) - Number(right.token);\n        return difference !== 0 ? difference : left.name.localeCompare(right.name);\n      });\n    } else {\n      entries.sort((left, right) => left.imageId - right.imageId);\n    }\n    let timestampsSeconds = null;\n    if (hasNumericNames && entries.length > 0) {\n      const tokens = entries.map(entry => entry.token);\n      const values = tokens.map(Number);\n      const unique = values.every(\n        (value, index) => Number.isFinite(value) && (index === 0 || value > values[index - 1])\n      );\n      const scale = unique ? inferredTimestampScale(tokens, values) : null;\n      if (scale !== null) timestampsSeconds = values.map(value => (value - values[0]) / scale);\n    }\n    if (timestampsSeconds === null) entries.sort((left, right) => left.imageId - right.imageId);\n    return {\n      imageIds: entries.map(entry => entry.imageId),\n      names: entries.map(entry => entry.name),\n      timestampsSeconds: timestampsSeconds\n    };\n  }\n\n  function cameraCenter(image) {\n    const r = image.rotation;\n    const t = image.translation;\n    return [\n      -(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]),\n      -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]),\n      -(r[2] * t[0] + r[5] * t[1] + r[8] * t[2])\n    ];\n  }\n\n  function cameraGeometry(camerasBuffer, imagesBuffer, images, imageIds) {\n    const cameras = parseCameras(camerasBuffer);\n    const centers = new Float32Array(imageIds.length * 3);\n    const frusta = new Float32Array(imageIds.length * 16 * 3);\n    const observationOffsets = new Uint32Array(imageIds.length + 1);\n    let observationCount = 0;\n    for (let index = 0; index < imageIds.length; ++index) {\n      const image = images.get(imageIds[index]);\n      if (image === undefined) throw new Error(`images.bin is missing registered image ${imageIds[index]}`);\n      observationCount += image.pointCount;\n      observationOffsets[index + 1] = observationCount;\n      const camera = cameras.get(image.cameraId);\n      if (camera === undefined) throw new Error(`cameras.bin is missing camera ${image.cameraId}`);\n      const center = cameraCenter(image);\n      centers.set(center, index * 3);\n      const imageExtent = Math.max(0.3 * camera.width / 1024, 0.3 * camera.height / 1024);\n      const worldExtent = 2 * Math.max(camera.width, camera.height) / (camera.fx + camera.fy);\n      const scale = 0.5 * imageExtent / worldExtent;\n      const pixelCorners = [[0, 0], [camera.width, 0], [camera.width, camera.height], [0, camera.height]];\n      const corners = pixelCorners.map(([u, v]) => {\n        const ray = [(u - camera.cx) / camera.fx, (v - camera.cy) / camera.fy, 1];\n        const r = image.rotation;\n        const world = [\n          center[0] + 0.5 * scale * (r[0] * ray[0] + r[3] * ray[1] + r[6] * ray[2]),\n          center[1] + 0.5 * scale * (r[1] * ray[0] + r[4] * ray[1] + r[7] * ray[2]),\n          center[2] + 0.5 * scale * (r[2] * ray[0] + r[5] * ray[1] + r[8] * ray[2])\n        ];\n        return Float32Array.from(world);\n      });\n      let vertex = index * 16;\n      for (const corner of corners) {\n        frusta.set(centers.subarray(index * 3, index * 3 + 3), vertex++ * 3);\n        frusta.set(corner, vertex++ * 3);\n      }\n      for (let corner = 0; corner < 4; ++corner) {\n        frusta.set(corners[corner], vertex++ * 3);\n        frusta.set(corners[(corner + 1) % 4], vertex++ * 3);\n      }\n    }\n    const observationPositions = new Float32Array(observationCount * 2);\n    const observationPointIds = new BigUint64Array(observationCount);\n    const imageView = new DataView(imagesBuffer);\n    let observationOffset = 0;\n    for (const imageId of imageIds) {\n      const image = images.get(imageId);\n      for (let point = 0; point < image.pointCount; ++point) {\n        const source = image.pointDataOffset + point * 24;\n        const destination = observationOffset + point;\n        observationPositions[destination * 2] = imageView.getFloat64(source, true);\n        observationPositions[destination * 2 + 1] = imageView.getFloat64(source + 8, true);\n        observationPointIds[destination] = imageView.getBigUint64(source + 16, true);\n      }\n      observationOffset += image.pointCount;\n    }\n    return {\n      centers: centers,\n      frusta: frusta,\n      observationPositions: observationPositions,\n      observationPointIds: observationPointIds,\n      observationOffsets: observationOffsets\n    };\n  }\n\n  function parsePointsForDisplay(buffer, keyframeImageIds) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"points3D.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"3D point count\");\n    if (count > 0xffffffff) throw new Error(\"Browser viewer supports at most 2^32-1 points\");\n    const pointIds = new BigUint64Array(count);\n    const firstSeen = new Int32Array(count);\n    const trackLengths = new Uint32Array(count);\n    firstSeen.fill(-1);\n    const imageOrder = new Map();\n    keyframeImageIds.forEach((imageId, index) => imageOrder.set(Number(imageId), index));\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 51, \"3D point record\");\n      pointIds[index] = view.getBigUint64(offset, true);\n      const trackLength = checkedCount(view.getBigUint64(offset + 43, true), \"point track length\");\n      trackLengths[index] = trackLength;\n      offset += 51;\n      requireBytes(view, offset, trackLength * 8, \"point track\");\n      let earliest = keyframeImageIds.length;\n      for (let observation = 0; observation < trackLength; ++observation) {\n        const rank = imageOrder.get(view.getUint32(offset + observation * 8, true));\n        if (rank === undefined) continue;\n        if (rank < earliest) earliest = rank;\n      }\n      if (earliest < keyframeImageIds.length) firstSeen[index] = earliest;\n      offset += trackLength * 8;\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing points3D.bin bytes: ${view.byteLength - offset}`);\n\n    const orderStorage = new Uint32Array(count);\n    let orderCount = 0;\n    for (let index = 0; index < count; ++index) {\n      if (firstSeen[index] >= 0) orderStorage[orderCount++] = index;\n    }\n    const order = orderStorage.subarray(0, orderCount);\n    order.sort((left, right) => {\n      const byFrame = firstSeen[left] - firstSeen[right];\n      if (byFrame !== 0) return byFrame;\n      if (pointIds[left] < pointIds[right]) return -1;\n      if (pointIds[left] > pointIds[right]) return 1;\n      return left - right;\n    });\n\n    const orderedPositions = new Float32Array(order.length * 3);\n    const orderedColors = new Uint8Array(order.length * 3);\n    const orderedPointIds = new BigUint64Array(order.length);\n    const sourceIndices = new Uint32Array(order.length);\n    const orderedFirstSeen = new Int32Array(order.length);\n    const orderedTrackLengths = new Uint32Array(order.length);\n    const pointOffsets = new Uint32Array(keyframeImageIds.length + 1);\n    const destinationBySource = new Uint32Array(count);\n    destinationBySource.fill(0xffffffff);\n    for (let destination = 0; destination < order.length; ++destination) {\n      const source = order[destination];\n      destinationBySource[source] = destination;\n      orderedPointIds[destination] = pointIds[source];\n      sourceIndices[destination] = source;\n      orderedFirstSeen[destination] = firstSeen[source];\n      orderedTrackLengths[destination] = trackLengths[source];\n      pointOffsets[firstSeen[source] + 1] += 1;\n    }\n    for (let index = 1; index < pointOffsets.length; ++index) pointOffsets[index] += pointOffsets[index - 1];\n    offset = 8;\n    for (let source = 0; source < count; ++source) {\n      const destination = destinationBySource[source];\n      const trackLength = trackLengths[source];\n      if (destination !== 0xffffffff) {\n        orderedPositions[destination * 3] = view.getFloat64(offset + 8, true);\n        orderedPositions[destination * 3 + 1] = view.getFloat64(offset + 16, true);\n        orderedPositions[destination * 3 + 2] = view.getFloat64(offset + 24, true);\n        orderedColors[destination * 3] = view.getUint8(offset + 32);\n        orderedColors[destination * 3 + 1] = view.getUint8(offset + 33);\n        orderedColors[destination * 3 + 2] = view.getUint8(offset + 34);\n      }\n      offset += 51 + trackLength * 8;\n    }\n    return {\n      positions: orderedPositions,\n      colors: orderedColors,\n      pointIds: orderedPointIds,\n      sourceIndices: sourceIndices,\n      firstSeen: orderedFirstSeen,\n      trackLengths: orderedTrackLengths,\n      pointOffsets: pointOffsets,\n      sourcePointCount: count\n    };\n  }\n\n  function inverseTrace(h00, h01, h02, h11, h12, h22) {\n    const offDiagonalSquare = h01 * h01 + h02 * h02 + h12 * h12;\n    let smallest;\n    let largest;\n    if (offDiagonalSquare === 0) {\n      smallest = Math.min(h00, h11, h22);\n      largest = Math.max(h00, h11, h22);\n    } else {\n      const mean = (h00 + h11 + h22) / 3;\n      const scale = Math.sqrt(\n        ((h00 - mean) ** 2 + (h11 - mean) ** 2 + (h22 - mean) ** 2 + 2 * offDiagonalSquare) / 6\n      );\n      const b00 = (h00 - mean) / scale;\n      const b01 = h01 / scale;\n      const b02 = h02 / scale;\n      const b11 = (h11 - mean) / scale;\n      const b12 = h12 / scale;\n      const b22 = (h22 - mean) / scale;\n      const halfDeterminant = (\n        b00 * (b11 * b22 - b12 * b12) -\n        b01 * (b01 * b22 - b02 * b12) +\n        b02 * (b01 * b12 - b02 * b11)\n      ) / 2;\n      const angle = Math.acos(Math.max(-1, Math.min(1, halfDeterminant))) / 3;\n      largest = mean + 2 * scale * Math.cos(angle);\n      smallest = mean + 2 * scale * Math.cos(angle + 2 * Math.PI / 3);\n    }\n    if (!(smallest > largest * Number.EPSILON * 3)) return Infinity;\n    const c00 = h11 * h22 - h12 * h12;\n    const c11 = h00 * h22 - h02 * h02;\n    const c22 = h00 * h11 - h01 * h01;\n    const determinant = h00 * c00 - h01 * (h01 * h22 - h02 * h12) + h02 * (h01 * h12 - h02 * h11);\n    return (c00 + c11 + c22) / determinant;\n  }\n\n  function computeCovariances(camerasBuffer, imagesBuffer, pointsBuffer, progress) {\n    const cameras = parseCameras(camerasBuffer);\n    const images = parseImages(imagesBuffer);\n    const view = new DataView(pointsBuffer);\n    requireBytes(view, 0, 8, \"points3D.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"3D point count\");\n    const scores = new Float64Array(count);\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 51, \"3D point record\");\n      const px = view.getFloat64(offset + 8, true);\n      const py = view.getFloat64(offset + 16, true);\n      const pz = view.getFloat64(offset + 24, true);\n      const trackLength = checkedCount(view.getBigUint64(offset + 43, true), \"point track length\");\n      offset += 51;\n      requireBytes(view, offset, trackLength * 8, \"point track\");\n      if (trackLength < 2) {\n        scores[index] = NaN;\n        offset += trackLength * 8;\n        continue;\n      }\n      let h00 = 0;\n      let h01 = 0;\n      let h02 = 0;\n      let h11 = 0;\n      let h12 = 0;\n      let h22 = 0;\n      for (let observation = 0; observation < trackLength; ++observation) {\n        const image = images.get(view.getUint32(offset + observation * 8, true));\n        if (image === undefined) continue;\n        const camera = cameras.get(image.cameraId);\n        if (camera === undefined) throw new Error(`Image references missing camera ${image.cameraId}`);\n        const r = image.rotation;\n        const t = image.translation;\n        const x = r[0] * px + r[1] * py + r[2] * pz + t[0];\n        const y = r[3] * px + r[4] * py + r[5] * pz + t[1];\n        const z = r[6] * px + r[7] * py + r[8] * pz + t[2];\n        if (!(z > 0)) continue;\n        const ax = camera.fx / z;\n        const az = -camera.fx * x / (z * z);\n        const by = camera.fy / z;\n        const bz = -camera.fy * y / (z * z);\n        const gx0 = ax * r[0] + az * r[6];\n        const gx1 = ax * r[1] + az * r[7];\n        const gx2 = ax * r[2] + az * r[8];\n        const gy0 = by * r[3] + bz * r[6];\n        const gy1 = by * r[4] + bz * r[7];\n        const gy2 = by * r[5] + bz * r[8];\n        h00 += gx0 * gx0 + gy0 * gy0;\n        h01 += gx0 * gx1 + gy0 * gy1;\n        h02 += gx0 * gx2 + gy0 * gy2;\n        h11 += gx1 * gx1 + gy1 * gy1;\n        h12 += gx1 * gx2 + gy1 * gy2;\n        h22 += gx2 * gx2 + gy2 * gy2;\n      }\n      scores[index] = inverseTrace(h00, h01, h02, h11, h12, h22);\n      offset += trackLength * 8;\n      if (progress !== undefined && (index % 10000 === 0 || index + 1 === count)) progress(index + 1, count);\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing points3D.bin bytes: ${view.byteLength - offset}`);\n    return scores;\n  }\n\n  function covarianceRanks(scores, sourceIndices, pointIds) {\n    if (sourceIndices.length !== pointIds.length) throw new Error(\"Point order arrays have inconsistent lengths\");\n    const eligible = new Uint32Array(sourceIndices.length);\n    let eligibleCount = 0;\n    for (let index = 0; index < sourceIndices.length; ++index) {\n      if (!Number.isNaN(scores[sourceIndices[index]])) eligible[eligibleCount++] = index;\n    }\n    const ordered = eligible.subarray(0, eligibleCount);\n    ordered.sort((left, right) => {\n      const leftScore = scores[sourceIndices[left]];\n      const rightScore = scores[sourceIndices[right]];\n      if (leftScore < rightScore) return -1;\n      if (leftScore > rightScore) return 1;\n      if (pointIds[left] < pointIds[right]) return -1;\n      if (pointIds[left] > pointIds[right]) return 1;\n      return left - right;\n    });\n    const ranks = new Int32Array(sourceIndices.length);\n    ranks.fill(-1);\n    for (let rank = 0; rank < eligibleCount; ++rank) ranks[ordered[rank]] = rank;\n    return {ranks: ranks, eligibleCount: eligibleCount};\n  }\n\n  const api = {\n    crc32: crc32,\n    fingerprints: fingerprints,\n    parseCameras: parseCameras,\n    parseImages: parseImages,\n    imageTimeline: imageTimeline,\n    cameraGeometry: cameraGeometry,\n    parsePointsForDisplay: parsePointsForDisplay,\n    computeCovariances: computeCovariances,\n    covarianceRanks: covarianceRanks\n  };\n  if (typeof module !== \"undefined\" && module.exports) module.exports = api;\n\n  if (root !== undefined && typeof root.postMessage === \"function\" && typeof document === \"undefined\") {\n    root.onmessage = event => {\n      const message = event.data;\n      try {\n        if (message.command === \"load\") {\n          const buffers = message.buffers;\n          const images = parseImages(buffers[\"images.bin\"]);\n          const timeline = imageTimeline(images);\n          const keyframeImageIds = timeline.imageIds;\n          const points = parsePointsForDisplay(\n            buffers[\"points3D.bin\"],\n            keyframeImageIds\n          );\n          const cameras = cameraGeometry(\n            buffers[\"cameras.bin\"],\n            buffers[\"images.bin\"],\n            images,\n            keyframeImageIds\n          );\n          const sourceFingerprints = fingerprints(buffers);\n          root.postMessage(\n            {type: \"loaded\", points: points, cameras: cameras, fingerprints: sourceFingerprints, timeline: timeline},\n            [\n              points.positions.buffer,\n              points.colors.buffer,\n              points.pointIds.buffer,\n              points.sourceIndices.buffer,\n              points.firstSeen.buffer,\n              points.trackLengths.buffer,\n              points.pointOffsets.buffer,\n              cameras.centers.buffer,\n              cameras.frusta.buffer,\n              cameras.observationPositions.buffer,\n              cameras.observationPointIds.buffer,\n              cameras.observationOffsets.buffer\n            ]\n          );\n        } else if (message.command === \"covariance\") {\n          const buffers = message.buffers;\n          const scores = computeCovariances(\n            buffers[\"cameras.bin\"],\n            buffers[\"images.bin\"],\n            buffers[\"points3D.bin\"],\n            (done, total) => root.postMessage({type: \"progress\", done: done, total: total})\n          );\n          root.postMessage({type: \"covariance\", scores: scores}, [scores.buffer]);\n        } else if (message.command === \"rank\") {\n          const ranked = covarianceRanks(message.scores, message.sourceIndices, message.pointIds);\n          root.postMessage(\n            {type: \"ranked\", ...ranked, scores: message.scores},\n            [ranked.ranks.buffer, message.scores.buffer]\n          );\n        } else {\n          throw new Error(`Unknown worker command: ${message.command}`);\n        }\n      } catch (error) {\n        root.postMessage({type: \"error\", message: error instanceof Error ? error.message : String(error)});\n      }\n    };\n  }\n})(typeof self === \"undefined\" ? undefined : self);\n";
+    const VIDMAP_BROWSER_WORKER_SOURCE = "(function (root) {\n  \"use strict\";\n\n  const CAMERA_PARAMETER_COUNTS = [3, 4, 4, 5, 8, 8, 12, 5, 4, 5, 12, 16, 4, 5, 3, 4, 6];\n  const SINGLE_FOCAL_MODELS = new Set([0, 2, 3, 8, 9, 12, 14]);\n  const CRC32_TABLE = (() => {\n    const table = new Uint32Array(256);\n    for (let index = 0; index < 256; ++index) {\n      let value = index;\n      for (let bit = 0; bit < 8; ++bit) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);\n      table[index] = value >>> 0;\n    }\n    return table;\n  })();\n\n  function checkedCount(value, label) {\n    const count = Number(value);\n    if (!Number.isSafeInteger(count) || count < 0) throw new Error(`${label} is outside JavaScript's safe range`);\n    return count;\n  }\n\n  function requireBytes(view, offset, count, label) {\n    if (offset < 0 || count < 0 || offset + count > view.byteLength) {\n      throw new Error(`Truncated ${label} at byte ${offset}`);\n    }\n  }\n\n  function crc32(buffer) {\n    const bytes = new Uint8Array(buffer);\n    let value = 0xffffffff;\n    for (let index = 0; index < bytes.length; ++index) {\n      value = CRC32_TABLE[(value ^ bytes[index]) & 0xff] ^ (value >>> 8);\n    }\n    return (value ^ 0xffffffff) >>> 0;\n  }\n\n  function fingerprints(buffers) {\n    const result = {};\n    for (const name of [\"cameras.bin\", \"images.bin\", \"points3D.bin\"]) {\n      const buffer = buffers[name];\n      result[name] = {size: buffer.byteLength, crc32: crc32(buffer)};\n    }\n    return result;\n  }\n\n  function parseCameras(buffer) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"cameras.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"camera count\");\n    const cameras = new Map();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 24, \"camera record\");\n      const cameraId = view.getUint32(offset, true);\n      const modelId = view.getInt32(offset + 4, true);\n      if (modelId === 17) throw new Error(\"EQUIRECTANGULAR cameras are not supported by the 3D viewer\");\n      const parameterCount = CAMERA_PARAMETER_COUNTS[modelId];\n      if (parameterCount === undefined) throw new Error(`Unsupported COLMAP camera model id ${modelId}`);\n      const width = checkedCount(view.getBigUint64(offset + 8, true), \"camera width\");\n      const height = checkedCount(view.getBigUint64(offset + 16, true), \"camera height\");\n      offset += 24;\n      requireBytes(view, offset, parameterCount * 8, \"camera parameters\");\n      cameras.set(cameraId, cameraParameters(modelId, width, height,\n        new DataView(buffer, offset, parameterCount * 8)));\n      offset += parameterCount * 8;\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing cameras.bin bytes: ${view.byteLength - offset}`);\n    return cameras;\n  }\n\n  function cameraParameters(modelId, width, height, view) {\n    const count = CAMERA_PARAMETER_COUNTS[modelId];\n    if (count === undefined || view.byteLength !== count * 8) {\n      throw new Error(\"Invalid native camera parameters\");\n    }\n    const fx = view.getFloat64(0, true);\n    const fy = SINGLE_FOCAL_MODELS.has(modelId) ? fx : view.getFloat64(8, true);\n    const principalOffset = SINGLE_FOCAL_MODELS.has(modelId) ? 8 : 16;\n    const cx = view.getFloat64(principalOffset, true);\n    const cy = view.getFloat64(principalOffset + 8, true);\n    return {modelId: modelId, fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height};\n  }\n\n  function quaternionRotation(w, x, y, z) {\n    const norm = Math.hypot(w, x, y, z);\n    if (!(norm > 0)) throw new Error(\"Invalid zero-norm image quaternion\");\n    w /= norm;\n    x /= norm;\n    y /= norm;\n    z /= norm;\n    return new Float64Array([\n      1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),\n      2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),\n      2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)\n    ]);\n  }\n\n  function parseImages(buffer) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"images.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"image count\");\n    const images = new Map();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 64, \"image pose\");\n      const imageId = view.getUint32(offset, true);\n      const rotation = quaternionRotation(\n        view.getFloat64(offset + 4, true),\n        view.getFloat64(offset + 12, true),\n        view.getFloat64(offset + 20, true),\n        view.getFloat64(offset + 28, true)\n      );\n      const translation = new Float64Array([\n        view.getFloat64(offset + 36, true),\n        view.getFloat64(offset + 44, true),\n        view.getFloat64(offset + 52, true)\n      ]);\n      const cameraId = view.getUint32(offset + 60, true);\n      offset += 64;\n      const nameStart = offset;\n      while (true) {\n        requireBytes(view, offset, 1, \"image name\");\n        if (view.getUint8(offset++) === 0) break;\n      }\n      const name = new TextDecoder().decode(new Uint8Array(buffer, nameStart, offset - nameStart - 1));\n      requireBytes(view, offset, 8, \"image point count\");\n      const pointCount = checkedCount(view.getBigUint64(offset, true), \"image point count\");\n      offset += 8;\n      const pointBytes = pointCount * 24;\n      requireBytes(view, offset, pointBytes, \"image points2D\");\n      offset += pointBytes;\n      images.set(imageId, {\n        cameraId: cameraId,\n        rotation: rotation,\n        translation: translation,\n        name: name,\n        pointDataOffset: offset - pointBytes,\n        pointCount: pointCount\n      });\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing images.bin bytes: ${view.byteLength - offset}`);\n    return images;\n  }\n\n  function numericTimestampToken(name) {\n    const basename = name.replaceAll(\"\\\\\", \"/\").split(\"/\").pop();\n    const stem = basename.includes(\".\") ? basename.slice(0, basename.lastIndexOf(\".\")) : basename;\n    const match = stem.match(/^(\\d+(?:\\.\\d+)?)(?:[-_]|$)/);\n    return match === null ? null : match[1];\n  }\n\n  function inferredTimestampScale(tokens, values) {\n    if (tokens.some(token => token.includes(\".\"))) return 1;\n    const conventionalScales = new Map([[10, 1], [13, 1e3], [16, 1e6], [19, 1e9]]);\n    if (values.length === 1) return conventionalScales.get(tokens[0].length) || null;\n    const deltas = values.slice(1).map((value, index) => value - values[index]).sort((a, b) => a - b);\n    const median = deltas[Math.floor(deltas.length / 2)];\n    const sameWidth = tokens.every(token => token.length === tokens[0].length);\n    const conventional = sameWidth ? conventionalScales.get(tokens[0].length) : undefined;\n    if (conventional !== undefined) {\n      const interval = median / conventional;\n      if (interval >= 0.001 && interval <= 10) return conventional;\n    }\n    const candidates = [1, 1e3, 1e6, 1e9].filter(scale => {\n      const interval = median / scale;\n      return interval >= 0.001 && interval <= 10;\n    });\n    return candidates.length === 1 ? candidates[0] : null;\n  }\n\n  function filenameTimestamps(names) {\n    const tokens = names.map(numericTimestampToken);\n    if (tokens.length === 0 || tokens.some(token => token === null)) return null;\n    const values = tokens.map(Number);\n    const unique = values.every(\n      (value, index) => Number.isFinite(value) && (index === 0 || value > values[index - 1])\n    );\n    const scale = unique ? inferredTimestampScale(tokens, values) : null;\n    return scale === null ? null : values.map(value => (value - values[0]) / scale);\n  }\n\n  function imageTimeline(images) {\n    const entries = Array.from(images.entries()).map(([imageId, image]) => ({\n      imageId: imageId,\n      name: image.name,\n      token: numericTimestampToken(image.name)\n    }));\n    const hasNumericNames = entries.every(entry => entry.token !== null);\n    if (hasNumericNames) {\n      entries.sort((left, right) => {\n        const difference = Number(left.token) - Number(right.token);\n        return difference !== 0 ? difference : left.name.localeCompare(right.name);\n      });\n    } else {\n      entries.sort((left, right) => left.imageId - right.imageId);\n    }\n    const timestampsSeconds = filenameTimestamps(entries.map(entry => entry.name));\n    if (timestampsSeconds === null) entries.sort((left, right) => left.imageId - right.imageId);\n    return {\n      imageIds: entries.map(entry => entry.imageId),\n      names: entries.map(entry => entry.name),\n      timestampsSeconds: timestampsSeconds\n    };\n  }\n\n  function parseFrames(buffer, images) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"frames.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"frame count\");\n    const frames = new Map();\n    const assigned = new Set();\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 68, \"frame record\");\n      const frameId = view.getUint32(offset, true);\n      const rigId = view.getUint32(offset + 4, true);\n      const dataCount = view.getUint32(offset + 64, true);\n      offset += 68;\n      requireBytes(view, offset, dataCount * 16, \"frame data IDs\");\n      if (frames.has(frameId)) throw new Error(\"Duplicate COLMAP frame ID\");\n      const members = new Map();\n      for (let item = 0; item < dataCount; ++item, offset += 16) {\n        const type = view.getInt32(offset, true);\n        const cameraId = view.getUint32(offset + 4, true);\n        const imageId = checkedCount(view.getBigUint64(offset + 8, true), \"frame image ID\");\n        if (type !== 0) continue;\n        if (members.has(cameraId) || assigned.has(imageId) ||\n            (images.has(imageId) && images.get(imageId).cameraId !== cameraId)) {\n          throw new Error(\"COLMAP frame membership contradicts images.bin\");\n        }\n        members.set(cameraId, imageId);\n        if (images.has(imageId)) assigned.add(imageId);\n      }\n      frames.set(frameId, {frameId, rigId, members});\n    }\n    if (offset !== view.byteLength || assigned.size !== images.size) {\n      throw new Error(\"COLMAP frames must cover all registered images exactly once\");\n    }\n    return frames;\n  }\n\n  function frameTimeline(images, framesBuffer = null, sequence = null) {\n    const actual = framesBuffer === null ? null : parseFrames(framesBuffer, images);\n    const camerasByRig = new Map();\n    for (const frame of actual?.values() ?? []) {\n      if (!camerasByRig.has(frame.rigId)) camerasByRig.set(frame.rigId, new Set());\n      for (const cameraId of frame.members.keys()) camerasByRig.get(frame.rigId).add(cameraId);\n    }\n    if (sequence === null && Array.from(camerasByRig.values()).every(cameras => cameras.size <= 1)) {\n      const ordinary = imageTimeline(images);\n      return {...ordinary,\n        frames: ordinary.imageIds.map((id, i) => ({frameId: null, rigId: null,\n          cameraIds: [images.get(id).cameraId], imageIndices: [i]})),\n        frameImageOffsets: ordinary.imageIds.map((_, i) => i).concat([ordinary.imageIds.length])};\n    }\n    if (actual === null) throw new Error(\"Capture grouping requires actual COLMAP frames.bin\");\n    const timesByFrame = new Map();\n    let ordered;\n    if (sequence !== null) {\n      const ids = sequence.frame_ids, times = sequence.timestamps_ns;\n      if (Object.keys(sequence).sort().join(',') !== 'frame_ids,timestamps_ns' ||\n          !Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length ||\n          ids.some(id => !Number.isSafeInteger(id) || id < 0 || id >= 4294967295) ||\n          (times !== null && (!Array.isArray(times) || times.length !== ids.length ||\n            times.some((time, i) => typeof time !== 'bigint' || (i > 0 && time <= times[i-1]))))) {\n        throw new Error(\"Invalid mapper frame sequence\");\n      }\n      const selected = new Set(ids);\n      if (Array.from(actual.keys()).some(id => !selected.has(id))) {\n        throw new Error(\"Mapper frame sequence does not cover COLMAP frames\");\n      }\n      if (times !== null) ids.forEach((id, i) => timesByFrame.set(id, times[i]));\n      ordered = ids.filter(id => actual.has(id)).map(id => actual.get(id));\n    } else {\n      ordered = Array.from(actual.values()).sort((a,b) => a.frameId-b.frameId);\n    }\n    for (const [rigId, cameras] of camerasByRig) {\n      camerasByRig.set(rigId, Array.from(cameras).sort((a,b) => a-b));\n    }\n    const imageIds = [], names = [], frames = [], frameImageOffsets = [0], times = [];\n    for (const record of ordered) {\n      if (!Array.from(record.members.values()).some(id => images.has(id))) continue;\n      const cameraIds = camerasByRig.get(record.rigId);\n      const imageIndices = cameraIds.map(cameraId => {\n        const id = record.members.get(cameraId);\n        if (!images.has(id)) return null;\n        const index = imageIds.length;\n        imageIds.push(id);\n        names.push(images.get(id).name);\n        return index;\n      });\n      frames.push({frameId:record.frameId,rigId:record.rigId,cameraIds,imageIndices});\n      frameImageOffsets.push(imageIds.length);\n      if (timesByFrame.size) times.push(timesByFrame.get(record.frameId));\n    }\n    if (frames.length === 0) throw new Error(\"No registered capture frames\");\n    // Native grouping/order stays authoritative. Ordinary single-image captures\n    // may omit explicit timing even when filenames already encode it.\n    const inferred = frames.every(frame => frame.cameraIds.length === 1)\n      ? filenameTimestamps(names) : null;\n    return {imageIds,names,frames,frameImageOffsets,\n      timestampsSeconds:times.length === 0 ? inferred : times.map(value => Number(value-times[0])/1e9)};\n  }\n\n  function cameraCenter(image) {\n    const r = image.rotation;\n    const t = image.translation;\n    return [\n      -(r[0] * t[0] + r[3] * t[1] + r[6] * t[2]),\n      -(r[1] * t[0] + r[4] * t[1] + r[7] * t[2]),\n      -(r[2] * t[0] + r[5] * t[1] + r[8] * t[2])\n    ];\n  }\n\n  function cameraGeometry(camerasBuffer, imagesBuffer, images, imageIds) {\n    const cameras = parseCameras(camerasBuffer);\n    const centers = new Float32Array(imageIds.length * 3);\n    const frusta = new Float32Array(imageIds.length * 16 * 3);\n    const observationOffsets = new Uint32Array(imageIds.length + 1);\n    let observationCount = 0;\n    for (let index = 0; index < imageIds.length; ++index) {\n      const image = images.get(imageIds[index]);\n      if (image === undefined) throw new Error(`images.bin is missing registered image ${imageIds[index]}`);\n      observationCount += image.pointCount;\n      observationOffsets[index + 1] = observationCount;\n      const camera = cameras.get(image.cameraId);\n      if (camera === undefined) throw new Error(`cameras.bin is missing camera ${image.cameraId}`);\n      const center = cameraCenter(image);\n      centers.set(center, index * 3);\n      const imageExtent = Math.max(0.3 * camera.width / 1024, 0.3 * camera.height / 1024);\n      const worldExtent = 2 * Math.max(camera.width, camera.height) / (camera.fx + camera.fy);\n      const scale = 0.5 * imageExtent / worldExtent;\n      const pixelCorners = [[0, 0], [camera.width, 0], [camera.width, camera.height], [0, camera.height]];\n      const corners = pixelCorners.map(([u, v]) => {\n        const ray = [(u - camera.cx) / camera.fx, (v - camera.cy) / camera.fy, 1];\n        const r = image.rotation;\n        const world = [\n          center[0] + 0.5 * scale * (r[0] * ray[0] + r[3] * ray[1] + r[6] * ray[2]),\n          center[1] + 0.5 * scale * (r[1] * ray[0] + r[4] * ray[1] + r[7] * ray[2]),\n          center[2] + 0.5 * scale * (r[2] * ray[0] + r[5] * ray[1] + r[8] * ray[2])\n        ];\n        return Float32Array.from(world);\n      });\n      let vertex = index * 16;\n      for (const corner of corners) {\n        frusta.set(centers.subarray(index * 3, index * 3 + 3), vertex++ * 3);\n        frusta.set(corner, vertex++ * 3);\n      }\n      for (let corner = 0; corner < 4; ++corner) {\n        frusta.set(corners[corner], vertex++ * 3);\n        frusta.set(corners[(corner + 1) % 4], vertex++ * 3);\n      }\n    }\n    const observationPositions = new Float32Array(observationCount * 2);\n    const observationPointIds = new BigUint64Array(observationCount);\n    const imageView = new DataView(imagesBuffer);\n    let observationOffset = 0;\n    for (const imageId of imageIds) {\n      const image = images.get(imageId);\n      for (let point = 0; point < image.pointCount; ++point) {\n        const source = image.pointDataOffset + point * 24;\n        const destination = observationOffset + point;\n        observationPositions[destination * 2] = imageView.getFloat64(source, true);\n        observationPositions[destination * 2 + 1] = imageView.getFloat64(source + 8, true);\n        observationPointIds[destination] = imageView.getBigUint64(source + 16, true);\n      }\n      observationOffset += image.pointCount;\n    }\n    return {\n      centers: centers,\n      frusta: frusta,\n      observationPositions: observationPositions,\n      observationPointIds: observationPointIds,\n      observationOffsets: observationOffsets\n    };\n  }\n\n  function parsePointsForDisplay(buffer, keyframeImageIds) {\n    const view = new DataView(buffer);\n    requireBytes(view, 0, 8, \"points3D.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"3D point count\");\n    if (count > 0xffffffff) throw new Error(\"Browser viewer supports at most 2^32-1 points\");\n    const pointIds = new BigUint64Array(count);\n    const firstSeen = new Int32Array(count);\n    const trackLengths = new Uint32Array(count);\n    firstSeen.fill(-1);\n    const imageOrder = new Map();\n    keyframeImageIds.forEach((imageId, index) => imageOrder.set(Number(imageId), index));\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 51, \"3D point record\");\n      pointIds[index] = view.getBigUint64(offset, true);\n      const trackLength = checkedCount(view.getBigUint64(offset + 43, true), \"point track length\");\n      trackLengths[index] = trackLength;\n      offset += 51;\n      requireBytes(view, offset, trackLength * 8, \"point track\");\n      let earliest = keyframeImageIds.length;\n      for (let observation = 0; observation < trackLength; ++observation) {\n        const rank = imageOrder.get(view.getUint32(offset + observation * 8, true));\n        if (rank === undefined) continue;\n        if (rank < earliest) earliest = rank;\n      }\n      if (earliest < keyframeImageIds.length) firstSeen[index] = earliest;\n      offset += trackLength * 8;\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing points3D.bin bytes: ${view.byteLength - offset}`);\n\n    const orderStorage = new Uint32Array(count);\n    let orderCount = 0;\n    for (let index = 0; index < count; ++index) {\n      if (firstSeen[index] >= 0) orderStorage[orderCount++] = index;\n    }\n    const order = orderStorage.subarray(0, orderCount);\n    order.sort((left, right) => {\n      const byFrame = firstSeen[left] - firstSeen[right];\n      if (byFrame !== 0) return byFrame;\n      if (pointIds[left] < pointIds[right]) return -1;\n      if (pointIds[left] > pointIds[right]) return 1;\n      return left - right;\n    });\n\n    const orderedPositions = new Float32Array(order.length * 3);\n    const orderedColors = new Uint8Array(order.length * 3);\n    const orderedPointIds = new BigUint64Array(order.length);\n    const sourceIndices = new Uint32Array(order.length);\n    const orderedFirstSeen = new Int32Array(order.length);\n    const orderedTrackLengths = new Uint32Array(order.length);\n    const pointOffsets = new Uint32Array(keyframeImageIds.length + 1);\n    const destinationBySource = new Uint32Array(count);\n    destinationBySource.fill(0xffffffff);\n    for (let destination = 0; destination < order.length; ++destination) {\n      const source = order[destination];\n      destinationBySource[source] = destination;\n      orderedPointIds[destination] = pointIds[source];\n      sourceIndices[destination] = source;\n      orderedFirstSeen[destination] = firstSeen[source];\n      orderedTrackLengths[destination] = trackLengths[source];\n      pointOffsets[firstSeen[source] + 1] += 1;\n    }\n    for (let index = 1; index < pointOffsets.length; ++index) pointOffsets[index] += pointOffsets[index - 1];\n    offset = 8;\n    for (let source = 0; source < count; ++source) {\n      const destination = destinationBySource[source];\n      const trackLength = trackLengths[source];\n      if (destination !== 0xffffffff) {\n        orderedPositions[destination * 3] = view.getFloat64(offset + 8, true);\n        orderedPositions[destination * 3 + 1] = view.getFloat64(offset + 16, true);\n        orderedPositions[destination * 3 + 2] = view.getFloat64(offset + 24, true);\n        orderedColors[destination * 3] = view.getUint8(offset + 32);\n        orderedColors[destination * 3 + 1] = view.getUint8(offset + 33);\n        orderedColors[destination * 3 + 2] = view.getUint8(offset + 34);\n      }\n      offset += 51 + trackLength * 8;\n    }\n    return {\n      positions: orderedPositions,\n      colors: orderedColors,\n      pointIds: orderedPointIds,\n      sourceIndices: sourceIndices,\n      firstSeen: orderedFirstSeen,\n      trackLengths: orderedTrackLengths,\n      pointOffsets: pointOffsets,\n      sourcePointCount: count\n    };\n  }\n\n  function inverseTrace(h00, h01, h02, h11, h12, h22) {\n    const offDiagonalSquare = h01 * h01 + h02 * h02 + h12 * h12;\n    let smallest;\n    let largest;\n    if (offDiagonalSquare === 0) {\n      smallest = Math.min(h00, h11, h22);\n      largest = Math.max(h00, h11, h22);\n    } else {\n      const mean = (h00 + h11 + h22) / 3;\n      const scale = Math.sqrt(\n        ((h00 - mean) ** 2 + (h11 - mean) ** 2 + (h22 - mean) ** 2 + 2 * offDiagonalSquare) / 6\n      );\n      const b00 = (h00 - mean) / scale;\n      const b01 = h01 / scale;\n      const b02 = h02 / scale;\n      const b11 = (h11 - mean) / scale;\n      const b12 = h12 / scale;\n      const b22 = (h22 - mean) / scale;\n      const halfDeterminant = (\n        b00 * (b11 * b22 - b12 * b12) -\n        b01 * (b01 * b22 - b02 * b12) +\n        b02 * (b01 * b12 - b02 * b11)\n      ) / 2;\n      const angle = Math.acos(Math.max(-1, Math.min(1, halfDeterminant))) / 3;\n      largest = mean + 2 * scale * Math.cos(angle);\n      smallest = mean + 2 * scale * Math.cos(angle + 2 * Math.PI / 3);\n    }\n    if (!(smallest > largest * Number.EPSILON * 3)) return Infinity;\n    const c00 = h11 * h22 - h12 * h12;\n    const c11 = h00 * h22 - h02 * h02;\n    const c22 = h00 * h11 - h01 * h01;\n    const determinant = h00 * c00 - h01 * (h01 * h22 - h02 * h12) + h02 * (h01 * h12 - h02 * h11);\n    return (c00 + c11 + c22) / determinant;\n  }\n\n  function computeCovariances(camerasBuffer, imagesBuffer, pointsBuffer, progress) {\n    const cameras = parseCameras(camerasBuffer);\n    const images = parseImages(imagesBuffer);\n    const view = new DataView(pointsBuffer);\n    requireBytes(view, 0, 8, \"points3D.bin header\");\n    const count = checkedCount(view.getBigUint64(0, true), \"3D point count\");\n    const scores = new Float64Array(count);\n    let offset = 8;\n    for (let index = 0; index < count; ++index) {\n      requireBytes(view, offset, 51, \"3D point record\");\n      const px = view.getFloat64(offset + 8, true);\n      const py = view.getFloat64(offset + 16, true);\n      const pz = view.getFloat64(offset + 24, true);\n      const trackLength = checkedCount(view.getBigUint64(offset + 43, true), \"point track length\");\n      offset += 51;\n      requireBytes(view, offset, trackLength * 8, \"point track\");\n      if (trackLength < 2) {\n        scores[index] = NaN;\n        offset += trackLength * 8;\n        continue;\n      }\n      let h00 = 0;\n      let h01 = 0;\n      let h02 = 0;\n      let h11 = 0;\n      let h12 = 0;\n      let h22 = 0;\n      for (let observation = 0; observation < trackLength; ++observation) {\n        const image = images.get(view.getUint32(offset + observation * 8, true));\n        if (image === undefined) continue;\n        const camera = cameras.get(image.cameraId);\n        if (camera === undefined) throw new Error(`Image references missing camera ${image.cameraId}`);\n        const r = image.rotation;\n        const t = image.translation;\n        const x = r[0] * px + r[1] * py + r[2] * pz + t[0];\n        const y = r[3] * px + r[4] * py + r[5] * pz + t[1];\n        const z = r[6] * px + r[7] * py + r[8] * pz + t[2];\n        if (!(z > 0)) continue;\n        const ax = camera.fx / z;\n        const az = -camera.fx * x / (z * z);\n        const by = camera.fy / z;\n        const bz = -camera.fy * y / (z * z);\n        const gx0 = ax * r[0] + az * r[6];\n        const gx1 = ax * r[1] + az * r[7];\n        const gx2 = ax * r[2] + az * r[8];\n        const gy0 = by * r[3] + bz * r[6];\n        const gy1 = by * r[4] + bz * r[7];\n        const gy2 = by * r[5] + bz * r[8];\n        h00 += gx0 * gx0 + gy0 * gy0;\n        h01 += gx0 * gx1 + gy0 * gy1;\n        h02 += gx0 * gx2 + gy0 * gy2;\n        h11 += gx1 * gx1 + gy1 * gy1;\n        h12 += gx1 * gx2 + gy1 * gy2;\n        h22 += gx2 * gx2 + gy2 * gy2;\n      }\n      scores[index] = inverseTrace(h00, h01, h02, h11, h12, h22);\n      offset += trackLength * 8;\n      if (progress !== undefined && (index % 10000 === 0 || index + 1 === count)) progress(index + 1, count);\n    }\n    if (offset !== view.byteLength) throw new Error(`Unexpected trailing points3D.bin bytes: ${view.byteLength - offset}`);\n    return scores;\n  }\n\n  function covarianceRanks(scores, sourceIndices, pointIds) {\n    if (sourceIndices.length !== pointIds.length) throw new Error(\"Point order arrays have inconsistent lengths\");\n    const eligible = new Uint32Array(sourceIndices.length);\n    let eligibleCount = 0;\n    for (let index = 0; index < sourceIndices.length; ++index) {\n      if (!Number.isNaN(scores[sourceIndices[index]])) eligible[eligibleCount++] = index;\n    }\n    const ordered = eligible.subarray(0, eligibleCount);\n    ordered.sort((left, right) => {\n      const leftScore = scores[sourceIndices[left]];\n      const rightScore = scores[sourceIndices[right]];\n      if (leftScore < rightScore) return -1;\n      if (leftScore > rightScore) return 1;\n      if (pointIds[left] < pointIds[right]) return -1;\n      if (pointIds[left] > pointIds[right]) return 1;\n      return left - right;\n    });\n    const ranks = new Int32Array(sourceIndices.length);\n    ranks.fill(-1);\n    for (let rank = 0; rank < eligibleCount; ++rank) ranks[ordered[rank]] = rank;\n    return {ranks: ranks, eligibleCount: eligibleCount};\n  }\n\n  const api = {\n    crc32: crc32,\n    fingerprints: fingerprints,\n    parseCameras: parseCameras,\n    parseImages: parseImages,\n    imageTimeline: imageTimeline,\n    frameTimeline: frameTimeline,\n    parseFrames: parseFrames,\n    cameraGeometry: cameraGeometry,\n    parsePointsForDisplay: parsePointsForDisplay,\n    computeCovariances: computeCovariances,\n    covarianceRanks: covarianceRanks\n  };\n  if (typeof module !== \"undefined\" && module.exports) module.exports = api;\n\n  if (root !== undefined && typeof root.postMessage === \"function\" && typeof document === \"undefined\") {\n    root.onmessage = event => {\n      const message = event.data;\n      try {\n        if (message.command === \"load\") {\n          const buffers = message.buffers;\n          const images = parseImages(buffers[\"images.bin\"]);\n          const timeline = frameTimeline(images, message.framesBuffer ?? null, message.frameSequence ?? null);\n          const keyframeImageIds = timeline.imageIds;\n          const points = parsePointsForDisplay(\n            buffers[\"points3D.bin\"],\n            keyframeImageIds\n          );\n          const cameras = cameraGeometry(\n            buffers[\"cameras.bin\"],\n            buffers[\"images.bin\"],\n            images,\n            keyframeImageIds\n          );\n          const sourceFingerprints = fingerprints(buffers);\n          root.postMessage(\n            {type: \"loaded\", points: points, cameras: cameras, fingerprints: sourceFingerprints, timeline: timeline},\n            [\n              points.positions.buffer,\n              points.colors.buffer,\n              points.pointIds.buffer,\n              points.sourceIndices.buffer,\n              points.firstSeen.buffer,\n              points.trackLengths.buffer,\n              points.pointOffsets.buffer,\n              cameras.centers.buffer,\n              cameras.frusta.buffer,\n              cameras.observationPositions.buffer,\n              cameras.observationPointIds.buffer,\n              cameras.observationOffsets.buffer\n            ]\n          );\n        } else if (message.command === \"covariance\") {\n          const buffers = message.buffers;\n          const scores = computeCovariances(\n            buffers[\"cameras.bin\"],\n            buffers[\"images.bin\"],\n            buffers[\"points3D.bin\"],\n            (done, total) => root.postMessage({type: \"progress\", done: done, total: total})\n          );\n          root.postMessage({type: \"covariance\", scores: scores}, [scores.buffer]);\n        } else if (message.command === \"rank\") {\n          const ranked = covarianceRanks(message.scores, message.sourceIndices, message.pointIds);\n          root.postMessage(\n            {type: \"ranked\", ...ranked, scores: message.scores},\n            [ranked.ranks.buffer, message.scores.buffer]\n          );\n        } else {\n          throw new Error(`Unknown worker command: ${message.command}`);\n        }\n      } catch (error) {\n        root.postMessage({type: \"error\", message: error instanceof Error ? error.message : String(error)});\n      }\n    };\n  }\n})(typeof self === \"undefined\" ? undefined : self);\n";
 const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/sql-wasm.wasm";
     const COVARIANCE_CACHE_MAGIC = "VIDCOV2\0";
     const COVARIANCE_CACHE_HEADER_BYTES = 64;
@@ -302,6 +317,32 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
 
     function errorMessage(error) {
       return error instanceof Error ? error.message : String(error);
+    }
+
+    function parseMapperManifest(text) {
+      const manifest = JSON.parse(text);
+      if (manifest.schema_version !== 14 || manifest.frame_sequence == null) {
+        throw new Error("Expected current mapper-input manifest with frame_sequence");
+      }
+      const times = manifest.frame_sequence.timestamps_ns;
+      if (times === null) return manifest;
+      if (!Array.isArray(times)) throw new Error("Invalid mapper frame timestamps");
+      // Match whole JSON strings first, so digits inside names/escaped strings stay untouched.
+      // A second parse preserves integer tokens beyond Number's exact range without changing
+      // the external manifest schema or requiring JSON.parse's newer source-context API.
+      const exact = JSON.parse(text.replace(/"(?:\\[\s\S]|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+        token => /^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token)) ? JSON.stringify(token) : token));
+      for (const [id, value] of times.entries()) {
+        if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+          throw new Error("Invalid mapper frame timestamp");
+        }
+        const integer = exact.frame_sequence.timestamps_ns[id];
+        if (typeof integer === "number" && !Number.isSafeInteger(integer)) {
+          throw new Error("Nanosecond timestamps must use exact integer JSON tokens");
+        }
+        times[id] = BigInt(integer);
+      }
+      return manifest;
     }
 
     function workerRequest(command, payload, transferables = [], onProgress = null) {
@@ -382,6 +423,8 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
         imagePreviews: options.imagePreviews ?? null,
         localInput: options.localInput ?? null,
         covarianceCache: options.covarianceCache ?? null,
+        framesFile: await optionalFile(getFile, "rec/frames.bin"),
+        captureManifest: await optionalFile(getFile, "mapper_inputs/manifest.json"),
         database: database,
         loopClosureMasks: loopClosureMasks
       };
@@ -448,7 +491,11 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       if ((databaseEntry === undefined) !== (masksEntry === undefined)) {
         throw new Error("Embedded run contains incomplete loop-closure data");
       }
-      return selectionFrom(path => decodedEmbeddedFile(payload.files[path], path), {
+      const getFile = async path => {
+        if (payload.files[path] === undefined) throw new DOMException("Missing embedded file", "NotFoundError");
+        return decodedEmbeddedFile(payload.files[path], path);
+      };
+      return selectionFrom(getFile, {
         imagePreviews: payload.imagePreviews,
         covarianceCache,
         database: databaseEntry === undefined ? null : await decodedEmbeddedFile(databaseEntry, DATABASE_PATH),
@@ -551,23 +598,27 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       }
     }
 
-    function databaseEdgeSharedCounts(databasePairs, observationPointIds, observationOffsets) {
+    function frameObservationPointIds(imageIndices, observationPointIds, observationOffsets) {
       const invalidPointId = 0xffffffffffffffffn;
-      function observedPointIds(keyframe) {
-        const ids = new Set();
+      const ids = new Set();
+      for (const imageIndex of imageIndices) {
+        if (imageIndex === null) continue;
         for (
-          let observation = observationOffsets[keyframe];
-          observation < observationOffsets[keyframe + 1];
+          let observation = observationOffsets[imageIndex];
+          observation < observationOffsets[imageIndex + 1];
           ++observation
         ) {
           const pointId = observationPointIds[observation];
           if (pointId !== invalidPointId) ids.add(pointId);
         }
-        return ids;
       }
+      return ids;
+    }
+
+    function databaseEdgeSharedCounts(databasePairs, observationPointIds, observationOffsets) {
       const result = new Uint32Array(databasePairs.length / 2);
       for (let index = 0; index < result.length; ++index) {
-        const leftIds = observedPointIds(databasePairs[index * 2]);
+        const leftIds = frameObservationPointIds([databasePairs[index * 2]], observationPointIds, observationOffsets);
         let shared = 0;
         const right = databasePairs[index * 2 + 1];
         for (let observation = observationOffsets[right]; observation < observationOffsets[right + 1]; ++observation) {
@@ -916,6 +967,8 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
           keyframeTimeline.imageIds[rightKeyframe]
         );
         showLoopClosurePair({
+          leftImageIndex: leftKeyframe,
+          rightImageIndex: rightKeyframe,
           leftName: leftName,
           rightName: rightName,
           leftKeypoints: matches.leftKeypoints,
@@ -944,13 +997,17 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
         minimumTrackLength.value = "1";
         minimumTrackLengthLabel.textContent = "1 observation";
         setStatus("reading COLMAP model…");
+        let database = null;
         try {
           const files = selection.files;
           const buffers = await sourceBuffers(files);
           const transferables = COLMAP_FILENAMES.map(name => buffers[name]);
+          const framesBuffer = selection.framesFile === null ? null : await selection.framesFile.arrayBuffer();
+          const manifest = selection.captureManifest === null ? null : parseMapperManifest(await selection.captureManifest.text());
+          if (framesBuffer !== null) transferables.push(framesBuffer);
           const loaded = await workerRequest(
             "load",
-            {buffers: buffers},
+            {buffers: buffers, framesBuffer, frameSequence: manifest?.frame_sequence ?? null},
             transferables
           );
           installKeyframeTimeline(loaded.timeline);
@@ -966,12 +1023,13 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
             observationPositions: loaded.cameras.observationPositions,
             observationPointIds: loaded.cameras.observationPointIds,
             observationOffsets: loaded.cameras.observationOffsets,
-            database: null,
+            database: database,
             loopClosurePairs: null,
             ranks: null,
             eligibleCount: 0
           };
           replacePointGeometry(state.positions, loaded.points.colors);
+          installPointIds(state.pointIds);
           installTrackLengths(loaded.points.trackLengths);
           let maximumTrackLength = 1;
           for (const length of loaded.points.trackLengths) maximumTrackLength = Math.max(maximumTrackLength, length);
@@ -987,7 +1045,8 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
             setStatus("model loaded; validating loop-closure masks…");
             const loopClosurePairs = parseLoopClosureMasks(await selection.loopClosureMasks.text());
             setStatus("loop-closure masks validated; reading verified database edges…");
-            state.database = await openDatabase(selection.database);
+            if (database === null) database = await openDatabase(selection.database);
+            state.database = database;
             state.loopClosurePairs = loopClosurePairs;
             const databasePairs = databaseEdgeKeyframes(
               state.database,
@@ -1012,15 +1071,15 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
             state.observationPointIds,
             state.observationOffsets
           );
-          showKeyframe(Number(keyframeSlider.value));
           if (
             selection.imagePreviews !== null &&
             Object.keys(selection.imagePreviews).length > 0
           ) {
-            installImageDirectory(selection.imagePreviews);
+            imageDirectory = selection.imagePreviews;
           } else if (selection.localInput !== null) {
-            installImageDirectory(parseLocalInput(await selection.localInput.text()));
+            imageDirectory = parseLocalInput(await selection.localInput.text());
           }
+          showKeyframe(Number(keyframeSlider.value));
           setStatus(`${state.positions.length / 3} points loaded; checking covariance cache…`);
           let cacheBuffer = null;
           if (selection.covarianceCache !== null) {
@@ -1047,7 +1106,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
             }
           }
         } catch (error) {
-          if (state !== null && state.database !== null) state.database.close();
+          if (database !== null) database.close();
           state = null;
           resetRunVisualState();
           reportError(errorMessage(error));
@@ -1170,11 +1229,14 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
 
     if (typeof module !== "undefined" && module.exports) {
       module.exports = {
+        parseMapperManifest: parseMapperManifest,
         matchingFingerprints: matchingFingerprints,
+        frameObservationPointIds: frameObservationPointIds,
         parseCovarianceCache: parseCovarianceCache,
         covarianceCacheBuffer: covarianceCacheBuffer,
         parseLocalInput: parseLocalInput,
         selectionFrom: selectionFrom,
+        databaseEdgeKeyframes: databaseEdgeKeyframes,
         databaseEdgeSharedCounts: databaseEdgeSharedCounts,
         sharedTrackObservations: sharedTrackObservations,
         loopClosureMatchObservations: loopClosureMatchObservations,
@@ -1316,7 +1378,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
     });
     let pointPositions = new Float32Array();
     let pointColors = new Uint8Array();
-    const keyframeTimeline = {names: [], pointOffsets: [0], imageIds: [], timestampsSeconds: null};
+    const keyframeTimeline = {names: [], pointOffsets: [0], imageIds: [], timestampsSeconds: null, frames: [], frameImageOffsets: [0]};
     let imageDirectory = null;
     let estimatedFrustaPositions = new Float32Array();
     let estimatedPathPositions = new Float32Array();
@@ -1492,16 +1554,23 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       return {width: width, height: height};
     }
 
-    function drawTrackedKeypoints(index) {
-      const canvas = document.getElementById("tracked-keypoints-overlay");
-      const preview = document.getElementById("keyframe-preview");
-      const width = preview.clientWidth;
-      const height = preview.clientHeight;
+    function overlayContext(image, canvas) {
       const pixelRatio = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(width * pixelRatio));
-      canvas.height = Math.max(1, Math.round(height * pixelRatio));
+      canvas.width = Math.max(1, Math.round(image.clientWidth * pixelRatio));
+      canvas.height = Math.max(1, Math.round(image.clientHeight * pixelRatio));
       const drawing = canvas.getContext("2d");
       drawing.clearRect(0, 0, canvas.width, canvas.height);
+      const size = imageDimensions(image);
+      const scale = Math.min(canvas.width / size.width, canvas.height / size.height);
+      const width = size.width * scale, height = size.height * scale;
+      const x = (canvas.width - width) / 2, y = (canvas.height - height) / 2;
+      drawing.beginPath(); drawing.rect(x, y, width, height); drawing.clip();
+      drawing.translate(x, y);
+      return {drawing, pixelRatio, scaleX: scale, scaleY: scale};
+    }
+
+    function drawTrackedImageKeypoints(index, preview, canvas) {
+      const {drawing, pixelRatio, scaleX, scaleY} = overlayContext(preview, canvas);
       const toggle = document.getElementById("tracked-keypoints-toggle");
       if (
         trackedKeypointPositions === null || trackedKeypointOffsets === null ||
@@ -1510,9 +1579,6 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       ) return;
       const begin = trackedKeypointOffsets[index];
       const end = trackedKeypointOffsets[index + 1];
-      const sourceDimensions = imageDimensions(preview);
-      const scaleX = canvas.width / sourceDimensions.width;
-      const scaleY = canvas.height / sourceDimensions.height;
       const radius = Math.max(1.7 * pixelRatio, 1);
       drawing.fillStyle = "rgba(0, 255, 170, 0.9)";
       drawing.strokeStyle = "rgba(0, 0, 0, 0.85)";
@@ -1528,6 +1594,111 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       }
     }
 
+    let previewGeneration = 0;
+    let framePreviewCards = [];
+    function drawTrackedKeypoints() {
+      for (const card of framePreviewCards) {
+        if (card.stage.hidden) continue;
+        if (card.imageIndex !== null) drawTrackedImageKeypoints(card.imageIndex, card.image, card.canvas);
+      }
+    }
+
+    async function showFramePreviews(frameIndex) {
+      const generation = ++previewGeneration;
+      const frame = keyframeTimeline.frames[frameIndex];
+      const container = document.getElementById("keyframe-previews");
+      if (frame === undefined) return;
+      container.dataset.loading = "true";
+      const directory = imageDirectory;
+      const cards = frame.cameraIds.map((cameraId, slot) => {
+        const figure = document.importNode(document.getElementById("keyframe-card").content.firstElementChild, true);
+        const caption = figure.querySelector("figcaption"), stage = figure.querySelector("div");
+        const image = figure.querySelector("img"), canvas = figure.querySelector("canvas");
+        figure.className = "keyframe-camera";
+        figure.dataset.cameraId = String(cameraId);
+        const imageIndex = frame.imageIndices[slot];
+        const name = imageIndex === null ? null : keyframeTimeline.names[imageIndex];
+        caption.textContent = `Camera ${cameraId} · ${name ?? "not registered in this frame"}`;
+        image.alt = `Selected frame camera ${cameraId}`;
+        image.dataset.imageIndex = imageIndex === null ? "" : String(imageIndex);
+        stage.hidden = name === null || directory === null;
+        if (name !== null && directory === null) caption.textContent += " · preview unavailable";
+        return {figure, image, canvas, imageIndex, stage, name};
+      });
+      // Decode every camera before revealing any image. A newer slider change
+      // invalidates the entire pending frame, never just one camera's request.
+      await Promise.all(cards.map(async card => {
+        if (card.stage.hidden) return;
+        try {
+          loadImage(card.image, directory, card.name);
+          await card.image.decode();
+        } catch (failure) {
+          card.stage.hidden = true;
+          card.figure.querySelector("figcaption").textContent += ` · preview failed: ${errorMessage(failure)}`;
+        }
+      }));
+      if (generation !== previewGeneration) return;
+      container.replaceChildren(...cards.map(card => card.figure));
+      container.dataset.frameIndex = String(frameIndex);
+      framePreviewCards = cards;
+      container.dataset.loading = "false";
+      drawTrackedKeypoints();
+      return true;
+    }
+
+    const selectedFrameGeometry = pointGeometry(new Float32Array());
+    const selectedFramePoints = new THREE.Points(selectedFrameGeometry, new THREE.PointsMaterial({
+      color: 0x00ffaa, size: 3.5, sizeAttenuation: false, depthTest: false, depthWrite: false
+    }));
+    selectedFramePoints.name = "selected-frame-observations";
+    selectedFramePoints.renderOrder = 105;
+    scene.add(selectedFramePoints);
+    let displayedPointIndex = new Map();
+    function installPointIds(ids) {
+      displayedPointIndex = new Map();
+      for (let index = 0; index < ids.length; ++index) displayedPointIndex.set(ids[index], index);
+    }
+    function updateSelectedFrameObservations(frameIndex) {
+      const frame = keyframeTimeline.frames[frameIndex];
+      const positions = [];
+      if (frame !== undefined && trackedKeypointPointIds !== null) {
+        const ids = frameObservationPointIds(frame.imageIndices, trackedKeypointPointIds, trackedKeypointOffsets);
+        for (const id of ids) {
+          const index = displayedPointIndex.get(id);
+          if (index !== undefined) positions.push(...pointPositions.subarray(index * 3, index * 3 + 3));
+        }
+      }
+      selectedFrameGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      selectedFrameGeometry.computeBoundingSphere();
+      selectedFramePoints.visible = document.getElementById("frame-observations-toggle").checked;
+      return positions.length / 3;
+    }
+
+    function updateFramePath(frameIndex) {
+      if (!keyframeTimeline.frames.some(frame => frame.cameraIds.length > 1)) {
+        updatePathPrefix(estimatedPath, estimatedPathPositions, keyframeTimeline.frameImageOffsets[frameIndex + 1]);
+        return;
+      }
+      const previous = new Map();
+      const positions = [];
+      for (const frame of keyframeTimeline.frames.slice(0, frameIndex + 1)) {
+        frame.cameraIds.forEach((cameraId, slot) => {
+          const key = `${frame.rigId}:${cameraId}`;
+          const index = frame.imageIndices[slot];
+          if (index === null) { previous.delete(key); return; }
+          const center = estimatedPathPositions.subarray(index * 3, index * 3 + 3);
+          if (previous.has(key)) positions.push(...previous.get(key), ...center);
+          previous.set(key, center);
+        });
+      }
+      const geometry = new THREE.LineSegmentsGeometry();
+      if (positions.length > 0) geometry.setPositions(positions);
+      estimatedPath.geometry.dispose();
+      estimatedPath.geometry = geometry;
+      estimatedPath.visible = positions.length > 0 && document.getElementById("paths-toggle").checked;
+      invalidateSceneRender();
+    }
+
     function installTrackedKeypoints(positions, pointIds, offsets) {
       if (offsets.length !== keyframeTimeline.names.length + 1) {
         throw new Error("Tracked-keypoint offsets must match the keyframe timeline");
@@ -1538,7 +1709,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       trackedKeypointPositions = positions;
       trackedKeypointPointIds = pointIds;
       trackedKeypointOffsets = offsets;
-      drawTrackedKeypoints(Number(document.getElementById("keyframe-slider").value));
+      drawTrackedKeypoints();
     }
 
     function installKeyframeTimeline(timeline) {
@@ -1552,11 +1723,16 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       keyframeTimeline.names = timeline.names;
       keyframeTimeline.imageIds = timeline.imageIds;
       keyframeTimeline.timestampsSeconds = timeline.timestampsSeconds;
+      keyframeTimeline.frames = timeline.frames;
+      keyframeTimeline.frameImageOffsets = timeline.frameImageOffsets;
+      document.getElementById("keyframe-preview-panel").classList.toggle("rig-frame", timeline.frames.some(f => f.cameraIds.length > 1));
       keyframeTimeline.pointOffsets = new Array(timeline.names.length + 1).fill(0);
       const slider = document.getElementById("keyframe-slider");
-      slider.max = String(timeline.names.length - 1);
+      slider.max = String(timeline.frames.length - 1);
       slider.value = slider.max;
       slider.disabled = false;
+      document.getElementById("keyframe-previous").disabled = timeline.frames.length < 2;
+      document.getElementById("keyframe-next").disabled = timeline.frames.length < 2;
       const play = document.getElementById("keyframe-play");
       const status = document.getElementById("keyframe-playback-status");
       play.disabled = timeline.timestampsSeconds === null;
@@ -1565,14 +1741,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
 
     function drawLoopClosureKeypoints(image, canvas, keypoints, matchClasses) {
       if (!image.complete || !(image.naturalWidth > 0) || !(image.naturalHeight > 0)) return;
-      const pixelRatio = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(image.clientWidth * pixelRatio));
-      canvas.height = Math.max(1, Math.round(image.clientHeight * pixelRatio));
-      const drawing = canvas.getContext("2d");
-      drawing.clearRect(0, 0, canvas.width, canvas.height);
-      const sourceDimensions = imageDimensions(image);
-      const scaleX = canvas.width / sourceDimensions.width;
-      const scaleY = canvas.height / sourceDimensions.height;
+      const {drawing, pixelRatio, scaleX, scaleY} = overlayContext(image, canvas);
       const radius = Math.max(2 * pixelRatio, 1);
       drawing.strokeStyle = "rgba(0, 0, 0, 0.9)";
       drawing.lineWidth = Math.max(pixelRatio, 1);
@@ -1605,7 +1774,9 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
     }
 
     function showLoopClosurePair(selection) {
-      if (imageDirectory === null) throw new Error("Load the reconstruction image source before opening a pair");
+      if (imageDirectory === null) {
+        throw new Error("Load the reconstruction image source before opening a pair");
+      }
       const panel = document.getElementById("loop-closure-pair-panel");
       activeLoopClosurePair = selection;
       const leftImage = document.getElementById("loop-closure-left-image");
@@ -1642,12 +1813,6 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       setLoopClosurePointHighlights(new Float32Array());
     }
 
-    function installImageDirectory(directory) {
-      imageDirectory = directory;
-      const slider = document.getElementById("keyframe-slider");
-      showKeyframe(Number(slider.value));
-    }
-
     function resetRunVisualState() {
       imageDirectory = null;
       closeLoopClosurePair();
@@ -1656,11 +1821,18 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       trackedKeypointOffsets = null;
       const empty = new Float32Array();
       replacePointGeometry(empty, null);
+      installPointIds([]);
+      updateSelectedFrameObservations(0);
       replaceEstimatedGeometry(empty, empty);
       replaceLoopClosureGeometry(new Uint32Array(), new Float32Array());
       error.style.display = "none";
       error.textContent = "";
       pauseKeyframePlayback();
+      ++previewGeneration;
+      framePreviewCards = [];
+      document.getElementById("keyframe-previews").replaceChildren();
+      keyframeTimeline.frames = [];
+      keyframeTimeline.frameImageOffsets = [0];
       keyframeTimeline.names = [];
       keyframeTimeline.imageIds = [];
       keyframeTimeline.timestampsSeconds = null;
@@ -1669,14 +1841,11 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       slider.max = "0";
       slider.value = "0";
       slider.disabled = true;
+      document.getElementById("keyframe-previous").disabled = true;
+      document.getElementById("keyframe-next").disabled = true;
       document.getElementById("keyframe-play").disabled = true;
       document.getElementById("keyframe-playback-status").textContent = "timestamps unavailable";
       document.getElementById("keyframe-label").textContent = "";
-      const preview = document.getElementById("keyframe-preview");
-      preview.removeAttribute("src");
-      preview.removeAttribute("data-source-width");
-      preview.removeAttribute("data-source-height");
-      drawTrackedKeypoints(0);
     }
 
     function setCovarianceRankLimit(limit) {
@@ -1767,7 +1936,8 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
     let visibleLoopClosureIndices = initialLoopClosures.edgeIndices;
     scene.add(loopClosures);
     function updateLoopClosureGeometry(maximumKeyframe) {
-      const visible = visibleLoopClosureData(maximumKeyframe);
+      const maximumImage = (keyframeTimeline.frameImageOffsets[maximumKeyframe + 1] ?? 0) - 1;
+      const visible = visibleLoopClosureData(maximumImage);
       visibleLoopClosurePositions = visible.positions;
       visibleLoopClosureIndices = visible.edgeIndices;
       const minimumInput = document.getElementById("loop-closures-min-shared");
@@ -1881,13 +2051,15 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       updateLoopClosureGeometry(Number(document.getElementById("keyframe-slider").value));
       fitScene();
     }
-    function showKeyframe(index) {
+    async function showKeyframe(index) {
       if (keyframeTimeline.names.length === 0) return;
-      const bounded = Math.max(0, Math.min(index, keyframeTimeline.names.length - 1));
+      const bounded = Math.max(0, Math.min(index, keyframeTimeline.frames.length - 1));
       document.getElementById("keyframe-slider").value = String(bounded);
-      const pointCount = keyframeTimeline.pointOffsets[bounded + 1];
+      if (!(await showFramePreviews(bounded))) return;
+      const imageCount = keyframeTimeline.frameImageOffsets[bounded + 1];
+      const pointCount = keyframeTimeline.pointOffsets[imageCount];
       if (covarianceIndexActive) {
-        keyframeLimit.value = bounded;
+        keyframeLimit.value = imageCount - 1;
         pointsGeometry.setDrawRange(0, covarianceDrawCount);
       } else {
         pointsGeometry.setDrawRange(0, pointCount);
@@ -1896,26 +2068,19 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
         ? ""
         : ` · ${keyframeTimeline.timestampsSeconds[bounded].toFixed(3)} s`;
       document.getElementById("keyframe-label").textContent =
-        `${bounded + 1}/${keyframeTimeline.names.length}${timestampText} · ${keyframeTimeline.names[bounded]} · ${pointCount.toLocaleString()} cumulative points`;
-      const preview = document.getElementById("keyframe-preview");
-      if (imageDirectory !== null) {
-        loadImage(preview, imageDirectory, keyframeTimeline.names[bounded]);
-      }
-      preview.dataset.keyframeIndex = String(bounded);
-      drawTrackedKeypoints(bounded);
-      updatePathPrefix(estimatedPath, estimatedPathPositions, bounded + 1);
+        `${bounded + 1}/${keyframeTimeline.frames.length}${timestampText} · frame ${keyframeTimeline.frames[bounded].frameId ?? keyframeTimeline.names[bounded]} · ${pointCount.toLocaleString()} cumulative points`;
+      updateSelectedFrameObservations(bounded);
+      updateFramePath(bounded);
       const estimatedSize = Number(document.getElementById("estimated-frusta-size").value);
       updateFrustaPrefix(
-        estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, bounded + 1, estimatedSize
+        estimatedFrusta, estimatedFrustaPositions, estimatedPathPositions, imageCount, estimatedSize
       );
       updateLoopClosureGeometry(bounded);
     }
-    const keyframePreview = document.getElementById("keyframe-preview");
-    keyframePreview.onload = () => drawTrackedKeypoints(Number(keyframePreview.dataset.keyframeIndex));
     const keyframePreviewPanel = document.getElementById("keyframe-preview-panel");
     keyframePreviewPanel.ontoggle = () => {
       if (keyframePreviewPanel.open) {
-        requestAnimationFrame(() => drawTrackedKeypoints(Number(keyframeSlider.value)));
+        requestAnimationFrame(() => drawTrackedKeypoints());
       }
     };
     const loopClosurePairClose = document.getElementById("loop-closure-pair-close");
@@ -1923,7 +2088,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
     if (typeof ResizeObserver !== "undefined") {
       const imagePanelResizeObserver = new ResizeObserver(() => {
         requestAnimationFrame(() => {
-          drawTrackedKeypoints(Number(keyframeSlider.value));
+          drawTrackedKeypoints();
           if (activeLoopClosurePair !== null) redrawLoopClosurePair(activeLoopClosurePair);
         });
       });
@@ -2007,7 +2172,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
     function startKeyframePlayback() {
       if (keyframeTimeline.timestampsSeconds === null) return;
       let startIndex = Number(keyframeSlider.value);
-      if (startIndex >= keyframeTimeline.names.length - 1) {
+      if (startIndex >= keyframeTimeline.frames.length - 1) {
         startIndex = 0;
         showKeyframe(startIndex);
       }
@@ -2016,7 +2181,8 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       let displayedIndex = startIndex;
       keyframePlay.textContent = "pause";
       keyframePlaybackStatus.textContent = `${speed}× real time`;
-      function advance(now) {
+      async function advance(now) {
+        const request = keyframePlaybackRequest;
         const index = timelineIndexAtElapsed(
           keyframeTimeline.timestampsSeconds,
           startIndex,
@@ -2024,10 +2190,11 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
           speed
         );
         if (index !== displayedIndex) {
-          showKeyframe(index);
+          await showKeyframe(index);
+          if (request !== keyframePlaybackRequest) return;
           displayedIndex = index;
         }
-        if (index >= keyframeTimeline.names.length - 1) {
+        if (index >= keyframeTimeline.frames.length - 1) {
           pauseKeyframePlayback();
           keyframePlaybackStatus.textContent = "finished";
           return;
@@ -2040,6 +2207,12 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       pauseKeyframePlayback();
       showKeyframe(Number(event.target.value));
     };
+    for (const [id, step] of [["keyframe-previous", -1], ["keyframe-next", 1]]) {
+      document.getElementById(id).onclick = () => {
+        pauseKeyframePlayback();
+        showKeyframe(Number(keyframeSlider.value) + step);
+      };
+    }
     keyframePlay.onclick = () => {
       if (keyframePlaybackRequest === null) startKeyframePlayback();
       else pauseKeyframePlayback();
@@ -2050,8 +2223,12 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
         startKeyframePlayback();
       }
     };
+    document.getElementById("frame-observations-toggle").onchange = () => {
+      updateSelectedFrameObservations(Number(document.getElementById("keyframe-previews").dataset.frameIndex));
+      invalidateSceneRender();
+    };
     const trackedKeypointsToggle = document.getElementById("tracked-keypoints-toggle");
-    trackedKeypointsToggle.onchange = () => drawTrackedKeypoints(Number(keyframeSlider.value));
+    trackedKeypointsToggle.onchange = () => drawTrackedKeypoints();
     const estimatedFrustaToggle = document.getElementById("estimated-frusta-toggle");
     estimatedFrustaToggle.onchange = event => estimatedFrusta.visible = event.target.checked;
     document.getElementById("paths-toggle").onchange = () => showKeyframe(Number(keyframeSlider.value));
@@ -2181,7 +2358,7 @@ const VIDMAP_SQLITE_WASM_URL = "https://cdn.jsdelivr.net/npm/sql.js@1.13.0/dist/
       for (const object of [estimatedFrusta, loopClosures, estimatedPath]) {
         object.material.resolution.set(window.innerWidth, window.innerHeight);
       }
-      drawTrackedKeypoints(Number(keyframeSlider.value));
+      drawTrackedKeypoints();
       if (activeLoopClosurePair !== null) redrawLoopClosurePair(activeLoopClosurePair);
       invalidateSceneRender();
     }

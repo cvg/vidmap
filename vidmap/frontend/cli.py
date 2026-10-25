@@ -19,7 +19,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Project directory for decoded frames, frontend artifacts, and mapper inputs.",
     )
     parser.add_argument("--imnames", nargs="*", type=str)
-    parser.add_argument("--intrinsics", type=str)
     parser.add_argument(
         "--mapper-inputs",
         help="Finalized mapper inputs to use when backfilling full depth maps into --output.",
@@ -78,7 +77,6 @@ def main(argv=None):
                 args.input,
                 workspace=args.output,
                 imnames=args.imnames,
-                intrinsics_path=args.intrinsics,
                 force_frontend=args.force_frontend,
                 cache_depth_maps=args.cache_depth_maps,
                 mapper_inputs_path=args.mapper_inputs,

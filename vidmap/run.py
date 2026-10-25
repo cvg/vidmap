@@ -24,7 +24,6 @@ def build_parser() -> ArgumentParser:
         help="Run directory for resolved configs, frontend artifacts, decoded frames, and reconstruction outputs.",
     )
     parser.add_argument("--imnames", nargs="*", type=str)
-    parser.add_argument("--intrinsics", type=str)
     parser.add_argument("--name", type=str)
     parser.add_argument("--force-frontend", action="store_true")
     parser.add_argument(
@@ -84,27 +83,22 @@ def main(argv=None):
         args.input_data,
         workspace=args.output,
         imnames=args.imnames,
-        intrinsics_path=args.intrinsics,
         force_frontend=args.force_frontend,
         cache_depth_maps=args.cache_depth_maps,
         device=run_options.device,
     )
     logger.info("Mapper inputs ready: tag=%s path=%s", frontend.tag, frontend.path)
 
-    from vidmap.reconstruction import reconstruct
+    from vidmap.reconstruction import run_mapping
 
     output_dir = Path(args.output).expanduser()
-    reconstruction = reconstruct(
+    reconstruction = run_mapping(
         mapping_conf,
-        frontend_conf,
-        args.input_data,
-        workspace=args.output,
-        mapper_inputs_dir=frontend.mapper_inputs,
-        run_options=run_options,
-        imnames=args.imnames,
-        intrinsics_path=args.intrinsics,
-        overwrite_outputs=args.overwrite,
+        frontend_conf=frontend_conf,
+        mapper_inputs=frontend.mapper_inputs,
         output_dir=output_dir,
+        run_options=run_options,
+        overwrite_outputs=args.overwrite,
     )
     reconstruction_dir = output_dir / "rec"
     reconstruction_dir.mkdir(parents=True, exist_ok=True)

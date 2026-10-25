@@ -143,33 +143,29 @@ def _compact_loop_closure_database(
             temporary.unlink(missing_ok=True)
 
 
-def _image_previews(run: Path, images_dir: Path | None) -> dict[str, dict[str, object]]:
-    reconstruction = run / "rec"
-    if images_dir is None:
-        from vidmap.reconstruction import local_run_image_dir
-
-        images_dir = local_run_image_dir(run)
-        if images_dir is None:
-            return {}
-    images_dir = images_dir.expanduser().resolve(strict=True)
-
-    import pycolmap
-
-    model = pycolmap.Reconstruction(reconstruction)
-    image_by_name = {str(image.name): image for image in model.images.values() if image.has_pose}
-    names = tuple(sorted(image_by_name))
+def _image_previews(model, images_dir: Path) -> dict[str, dict[str, object]]:
+    registered = [image for image in model.images.values() if image.has_pose]
+    sizes = {
+        image.name: (model.cameras[image.camera_id].width, model.cameras[image.camera_id].height)
+        for image in registered
+    }
+    names = tuple(sorted(sizes))
     previews = _embed_image_previews(images_dir, names)
     return {
         name: {
             "url": preview,
-            "width": int(model.cameras[image_by_name[name].camera_id].width),
-            "height": int(model.cameras[image_by_name[name].camera_id].height),
+            "width": int(sizes[name][0]),
+            "height": int(sizes[name][1]),
         }
         for name, preview in zip(names, previews, strict=True)
     }
 
 
-def _embedded_run_payload(run_dir: str | Path, *, images_dir: str | Path | None = None) -> dict[str, object]:
+def _embedded_run_payload(
+    run_dir: str | Path,
+    *,
+    images_dir: str | Path | None = None,
+) -> dict[str, object]:
     """Package one normalized run for the browser's ordinary load path."""
     run = Path(run_dir).expanduser().resolve(strict=True)
     reconstruction = run / "rec"
@@ -179,12 +175,29 @@ def _embedded_run_payload(run_dir: str | Path, *, images_dir: str | Path | None 
         for name in ("cameras.bin", "images.bin", "points3D.bin")
     }
     files = {name: _encoded_file(path) for name, path in source_files.items()}
+    for relative, source in (
+        ("rec/frames.bin", reconstruction / "frames.bin"),
+        ("mapper_inputs/manifest.json", mapper_inputs / "manifest.json"),
+    ):
+        if source.is_file():
+            files[relative] = _encoded_file(source)
+    from vidmap.reconstruction import local_input_image_dir
+
+    root = images_dir
+    if root is None:
+        root = local_input_image_dir(mapper_inputs)
     database = mapper_inputs / "database_complete.db"
     loop_closure_masks_path = mapper_inputs / LC_MASKS_NAME
     if database.is_file() != loop_closure_masks_path.is_file():
         raise FileNotFoundError(
             "Embedded loop-closure inspection requires both " f"{database} and {loop_closure_masks_path}"
         )
+    model = None
+    if root is not None:
+        import pycolmap
+
+        model = pycolmap.Reconstruction(reconstruction)
+    previews = {} if root is None else _image_previews(model, Path(root).expanduser().resolve(strict=True))
     if database.is_file():
         loop_closure_masks = read_loop_closure_masks(loop_closure_masks_path)
         files["mapper_inputs/database_complete.db"] = _encoded_bytes(
@@ -196,10 +209,7 @@ def _embedded_run_payload(run_dir: str | Path, *, images_dir: str | Path | None 
         files["rec/visualization_cache/point_covariance_rank_v2.bin"] = _encoded_file(covariance)
     return {
         "files": files,
-        "imagePreviews": _image_previews(
-            run,
-            None if images_dir is None else Path(images_dir),
-        ),
+        "imagePreviews": previews,
     }
 
 

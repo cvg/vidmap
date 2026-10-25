@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 import numpy as np
 
-from vidmap.datasets.base import DatasetParser
+from vidmap.datasets.capture import PreparedCapture
 from vidmap.frontend.cache import (
     CompleteArtifactContract,
     IncrementalArtifactContract,
@@ -33,6 +33,7 @@ from vidmap.frontend.correspondences import (
     validate_correspondence_alignment,
     validate_pair_name_plan,
 )
+from vidmap.frontend.keyframes.processing import KeyframePlan
 from vidmap.frontend.loop_closure.matching import merge_matches
 from vidmap.frontend.loop_closure.retrieval import (
     RETRIEVAL_PAIR_SELECTION_POLICY_VERSION,
@@ -70,7 +71,14 @@ class ExtendedMatchResult:
 
 
 def retrieval_pairs_cache_metadata(
-    extended_options, sequence, sequential_pairs, tcorr, retrieval_features_fingerprint, *, tcorr_min_matches
+    extended_options,
+    sequence,
+    sequential_pairs,
+    tcorr,
+    retrieval_features_fingerprint,
+    *,
+    tcorr_min_matches,
+    frame_camera_indices,
 ):
     conf = extended_options
     return cache_metadata(
@@ -83,11 +91,14 @@ def retrieval_pairs_cache_metadata(
             "tcorr_min_matches": tcorr_min_matches,
             "lc_pair_nms": conf.lc_pair_nms,
             "lc_pair_nms_radius": conf.lc_pair_nms_radius,
+            "rig_policy": "frame-neighborhood-camera-nms-v1",
+            "max_pairs_per_frame_pair": conf.max_pairs_per_frame_pair,
         },
         ordered_inputs={
             "sequence": sequence,
             "sequential_pairs": sequential_pairs,
             "tcorr": tcorr,
+            "frame_camera_indices": frame_camera_indices,
         },
         upstream={"retrieval_features": retrieval_features_fingerprint},
         payload_format="ordered-image-pairs",
@@ -101,12 +112,13 @@ class ExtendedMatchBuilder:
     def __init__(
         self,
         *,
-        scene_parser: DatasetParser,
+        scene_parser: PreparedCapture,
         paths: FrontendPaths,
         force_recompute: bool,
         repro_dir: Path | None,
         tracker: LazyRoMaV2Tracker,
         tracks: SparseTrackResult,
+        keyframes: KeyframePlan,
         transitive: TransitiveCorrespondenceResult,
         highres_options: RoMaImageOptions,
         lowres_match_resolution: int,
@@ -122,6 +134,7 @@ class ExtendedMatchBuilder:
         self.repro_dir = repro_dir
         self.tracker = tracker
         self.tracks = tracks
+        self.keyframes = keyframes
         self.transitive = transitive
         self.highres_options = highres_options
         self.lowres_match_resolution = lowres_match_resolution
@@ -132,9 +145,10 @@ class ExtendedMatchBuilder:
     def _build_retrieval_pairs(self):
         """Compute retrieval features and loop-closure matches."""
         paths = self.paths
-        sequence = self.transitive.sequence
+        sequence = self.keyframes.names
         sequential_pairs = self.tracks.sequential_pairs
-        tcorr = self.transitive.tcorr
+        timeline = self.keyframes.frame_camera_indices
+        tcorr = {pair: len(rows) for pair, rows in self.transitive.tcorr.items()}
         from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
         retrieval_pairs = []
@@ -162,6 +176,7 @@ class ExtendedMatchBuilder:
                 tcorr,
                 retrieval_features_fingerprint,
                 tcorr_min_matches=tcorr_min_matches,
+                frame_camera_indices=timeline,
             )
 
         if (
@@ -192,10 +207,11 @@ class ExtendedMatchBuilder:
                 tcorr,
                 retrieval_features_fingerprint,
                 tcorr_min_matches=tcorr_min_matches,
+                frame_camera_indices=timeline,
             )
             retrieval_pairs = generate_retrieval_pairs(
                 sequence=sequence,
-                tcorr=tcorr,
+                tcorr_counts=tcorr,
                 sequential_pairs=sequential_pairs,
                 retrieval_path=paths.retrieval_features_path,
                 tcorr_min_matches=tcorr_min_matches,
@@ -204,11 +220,14 @@ class ExtendedMatchBuilder:
                 lc_pair_nms=ext_conf.lc_pair_nms,
                 lc_pair_nms_radius=ext_conf.lc_pair_nms_radius,
                 device=self.device,
+                frame_camera_indices=timeline,
+                max_pairs_per_frame_pair=ext_conf.max_pairs_per_frame_pair,
             )
-            validate_pair_name_plan((*sequential_pairs, *retrieval_pairs))
             write_pair_artifact(paths.retrieval_pairs_path, retrieval_pairs, retrieval_pairs_metadata)
             logger.info("Cached %d retrieval pairs", len(retrieval_pairs))
         validate_pair_name_plan((*sequential_pairs, *retrieval_pairs))
+        if any(timeline[first][0] == timeline[second][0] for first, second in retrieval_pairs):
+            raise ValueError("Rig retrieval pairs must not connect images in the same frame")
         if self.repro_dir is not None:
             write_pair_order_artifact(
                 self.repro_dir / "stage1_retrieval_pair_order.json",
@@ -216,28 +235,12 @@ class ExtendedMatchBuilder:
                 label="retrieval_pairs",
             )
 
-        started = sync_time()
-        _present_count, missing_count = self.tracks.extended_matches.repair(
-            retrieval_pairs,
-            label="retrieval",
-            tracker=self.tracker,
-            scene_parser=self.scene_parser,
-            image_options=self.highres_options,
-            lowres_match_resolution=self.lowres_match_resolution,
-            match_threshold=ext_conf.lc_match_thresh,
-            device=self.device,
-        )
-        if missing_count:
-            record_timing("lc_streaming", sync_time() - started)
-            log_memory("lc_streaming")
-
         retrieval_pairs_artifact = certify_complete_artifact(paths.retrieval_pairs_path, retrieval_pairs_metadata)
         return retrieval_pairs, retrieval_pairs_artifact
 
-    def _finalize_extended_matches(self, retrieval_pairs):
+    def _finalize_extended_matches(self, extended_pairs):
         """Merge persisted extended matches and certify their complete pair plan."""
         tcorr = dict(self.transitive.tcorr)
-        extended_pairs = combine_and_deduplicate_pairs(self.tracks.sequential_pairs, retrieval_pairs)
         if self.repro_dir is not None:
             write_pair_order_artifact(
                 self.repro_dir / "stage1_extended_pairs.json",
@@ -256,6 +259,10 @@ class ExtendedMatchBuilder:
             merged_tcorr = tcorr
             lc_masks = {pair: np.zeros(len(matches), dtype=bool) for pair, matches in tcorr.items()}
 
+        explicit = {frozenset(pair): flag for pair, flag in self.keyframes.same_frame_flags.items()}
+        for pair, mask in lc_masks.items():
+            if frozenset(pair) in explicit:
+                mask.fill(not explicit[frozenset(pair)])
         if self.repro_dir is not None:
             write_tcorr_artifact(
                 self.repro_dir / "stage1_merged_tcorr_lc_masks.json",
@@ -268,12 +275,34 @@ class ExtendedMatchBuilder:
 
     def build(self) -> ExtendedMatchResult:
         retrieval_pairs, retrieval_pairs_artifact = self._build_retrieval_pairs()
-        tcorr, lc_masks = self._finalize_extended_matches(retrieval_pairs)
-        extended_pairs = combine_and_deduplicate_pairs(self.tracks.sequential_pairs, retrieval_pairs)
+        # First occurrence owns inference direction: temporal flow first, then
+        # explicit same-frame requests, then retrieval. Storage stays canonical.
+        requests = {}
+        for pair in (*self.tracks.sequential_pairs, *self.keyframes.same_frame_pairs, *retrieval_pairs):
+            requests.setdefault(frozenset(pair), pair)
+        extended_pairs = combine_and_deduplicate_pairs(requests.values())
+        from vidmap.utils.profiling import log_memory, record_timing, sync_time
+
+        started = sync_time()
+        _present_count, missing_count = self.tracks.extended_matches.repair(
+            tuple(requests.values()),
+            label="extended",
+            tracker=self.tracker,
+            scene_parser=self.scene_parser,
+            image_options=self.highres_options,
+            lowres_match_resolution=self.lowres_match_resolution,
+            match_threshold=self.extended_options.lc_match_thresh,
+            device=self.device,
+        )
+        if missing_count:
+            record_timing("lc_streaming", sync_time() - started)
+            log_memory("lc_streaming")
+        artifact = self.tracks.extended_matches.complete(extended_pairs)
+        tcorr, lc_masks = self._finalize_extended_matches(extended_pairs)
         return ExtendedMatchResult(
             retrieval_pairs=tuple(retrieval_pairs),
             retrieval_pairs_artifact=retrieval_pairs_artifact,
             tcorr=tcorr,
             lc_masks=lc_masks,
-            artifact=self.tracks.extended_matches.complete(extended_pairs),
+            artifact=artifact,
         )

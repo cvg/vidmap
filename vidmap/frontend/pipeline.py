@@ -5,15 +5,13 @@ from dataclasses import dataclass as result_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import h5py
-
-from vidmap.datasets.base import DatasetParser
+from vidmap.datasets.capture import CaptureSnapshot, PreparedCapture, copy_unposed_reconstruction
 from vidmap.frontend.cache import CacheMetadataMismatch, CompleteArtifactContract, IncrementalArtifactContract
 from vidmap.frontend.correspondences import ImagePair, immutable_array_mapping, validate_correspondence_alignment
 from vidmap.frontend.depth_output import publish_full_depth_output
-from vidmap.frontend.initial_reconstruction import build_initial_reconstruction
 from vidmap.frontend.paths import FrontendPaths
-from vidmap.frontend.preparation.camera_priors import apply_camera_priors
+from vidmap.frontend.preparation.camera_priors import CalibrationResult, apply_calibration
+from vidmap.frontend.preparation.cameras import CameraPreparationPlan, prepare_capture, resolve_camera_preparation
 from vidmap.frontend.preparation.geometric_verification import GeometricVerifier
 from vidmap.frontend.preparation.mapper_inputs import write_verified_mapper_inputs
 from vidmap.frontend.preparation.tcorr_filtering import CorrespondenceFilter
@@ -40,14 +38,12 @@ __all__ = [
 class FrontendArtifacts:
     """Cache identities and expected item plans exposed by tracking frontend."""
 
-    track_pairs: CompleteArtifactContract
     retrieval_pairs: CompleteArtifactContract
     sparse_features: IncrementalArtifactContract
     sparse_matches: IncrementalArtifactContract
     extended_matches: IncrementalArtifactContract
     depth: IncrementalArtifactContract
     full_depth: IncrementalArtifactContract | None = None
-    geocalib: IncrementalArtifactContract | None = None
 
 
 @result_dataclass(frozen=True)
@@ -57,17 +53,17 @@ class TrackingFrontendResult:
     paths: FrontendPaths
     artifacts: FrontendArtifacts
     keyframe_sequence: tuple[str, ...]
-    track_pairs: tuple[ImagePair, ...]
     retrieval_pairs: tuple[ImagePair, ...]
     tcorr: Mapping[ImagePair, Any]
     lc_masks: Mapping[ImagePair, Any]
+    capture: PreparedCapture
+    calibration: CalibrationResult | None = None
 
     def __post_init__(self):
         if not isinstance(self.tcorr, Mapping) or not isinstance(self.lc_masks, Mapping):
             raise TypeError("tcorr and lc_masks must be mappings")
         validate_correspondence_alignment(self.tcorr, self.lc_masks)
         object.__setattr__(self, "keyframe_sequence", tuple(self.keyframe_sequence))
-        object.__setattr__(self, "track_pairs", tuple(tuple(pair) for pair in self.track_pairs))
         object.__setattr__(self, "retrieval_pairs", tuple(tuple(pair) for pair in self.retrieval_pairs))
         object.__setattr__(self, "tcorr", immutable_array_mapping(self.tcorr))
         object.__setattr__(self, "lc_masks", immutable_array_mapping(self.lc_masks))
@@ -75,21 +71,18 @@ class TrackingFrontendResult:
 
 def validate_tracking_result(result: TrackingFrontendResult, *, geocalib_inference: str | None) -> None:
     """Reject inconsistent optional artifacts at the tracking boundary."""
-    if len(result.keyframe_sequence) < 2 or not result.track_pairs:
+    if len(result.keyframe_sequence) < 2 or not result.artifacts.sparse_matches.expected_items:
         raise CacheMetadataMismatch("Frontend requires at least two keyframes and one track pair")
     if result.artifacts.depth is None:
         raise CacheMetadataMismatch("Depth frontend is enabled but its certified artifact is unavailable")
-    values = (result.paths.geocalib_per_image_path, result.paths.geocalib_batch_path, result.artifacts.geocalib)
+    calibration = result.calibration
     if geocalib_inference is not None:
-        path = (
-            result.paths.geocalib_batch_path
-            if geocalib_inference == "selected_batch"
-            else result.paths.geocalib_per_image_path
-        )
-        if path is None or result.artifacts.geocalib is None:
+        if calibration is None or calibration.evidence.estimator != "geocalib" or calibration.artifact is None:
             raise CacheMetadataMismatch("GeoCalib is enabled but its certified artifact is unavailable")
-    elif any(value is not None for value in values):
-        raise CacheMetadataMismatch("GeoCalib is disabled but an artifact was exposed")
+        if calibration.evidence.inference != geocalib_inference:
+            raise CacheMetadataMismatch("GeoCalib inference disagrees with its calibration result")
+    elif calibration is not None and calibration.evidence.estimator == "geocalib":
+        raise CacheMetadataMismatch("GeoCalib is disabled but a calibration result was exposed")
 
 
 class Frontend:
@@ -103,8 +96,9 @@ class Frontend:
         sample_name: str,
         cache_dir: Path,
         sfm_outputs_dir: Path,
-        scene_parser: DatasetParser,
         reference_image_names: Sequence[str],
+        input_snapshot: CaptureSnapshot,
+        preparation_plan: CameraPreparationPlan | None = None,
         deterministic_frontend: bool = False,
         pre_geom_repro_dir: str | Path | None = None,
         force_recompute: bool = False,
@@ -123,7 +117,6 @@ class Frontend:
         self.device = resolve_device(device)
         self.options = conf
         self.preparation = conf.preparation
-        self.estimate_intrinsics = conf.camera_priors.initialization == "predicted"
         self.sample_name = str(sample_name)
         self.cache_dir = Path(cache_dir)
         self.outputs_dir = Path(sfm_outputs_dir)
@@ -134,7 +127,13 @@ class Frontend:
         self.mapper_inputs_dir = (
             self.outputs_dir / "mapper_inputs" if mapper_inputs_dir is None else Path(mapper_inputs_dir)
         )
-        self.scene_parser = scene_parser
+        self.scene_parser = input_snapshot.capture
+        self.preparation_plan = (
+            resolve_camera_preparation(self.scene_parser, conf) if preparation_plan is None else preparation_plan
+        )
+        self.prepared_capture = prepare_capture(self.scene_parser, self.preparation_plan)
+        self.estimate_intrinsics = self.preparation_plan.camera_priors.initialization == "predicted"
+        self.input_snapshot = input_snapshot
         self.reference_image_names = tuple(reference_image_names)
         self.deterministic = bool(deterministic_frontend)
         self.repro_dir = Path(pre_geom_repro_dir).expanduser() if pre_geom_repro_dir is not None else None
@@ -144,11 +143,10 @@ class Frontend:
 
     def run(self, *, frontend_identity: Mapping[str, object]) -> MapperInputs:
         """Run the complete frontend and mapper-input publication workflow."""
-        tracking, filtered, verification = self._execute_verified_boundary(pre_geom_db_stop=False)
+        tracking, verification = self._execute_verified_boundary(pre_geom_db_stop=False)
         mapper_inputs = write_verified_mapper_inputs(
             self.mapper_inputs_dir,
             tracking,
-            filtered,
             verification,
             frontend_identity=frontend_identity,
         )
@@ -162,7 +160,7 @@ class Frontend:
 
     def run_pre_geom(self) -> Path:
         """Run frontend through deterministic pre-GV database construction."""
-        _, _, verification = self._execute_verified_boundary(pre_geom_db_stop=True)
+        _, verification = self._execute_verified_boundary(pre_geom_db_stop=True)
         return verification.database_path
 
     def _execute_verified_boundary(self, *, pre_geom_db_stop: bool):
@@ -170,22 +168,12 @@ class Frontend:
         # Tracking owns all learned predictions and correspondence artifacts.
         tracking = self.run_tracking()
 
-        # Geometry preparation starts from the source cameras and applies any
-        # calibrated or learned priors before correspondence filtering and GV.
-        reconstruction = build_initial_reconstruction(
-            self.scene_parser, reference_image_names=list(self.reference_image_names)
-        )
-        if self.options.camera_priors.initialization == "predicted":
-            shared = self.options.camera_priors.inference == "selected_batch"
-            if self.options.camera_priors.estimator == "da3":
-                path = tracking.paths.depth_maps_path
-            else:
-                path = tracking.paths.geocalib_batch_path if shared else tracking.paths.geocalib_per_image_path
-            names = ("batch_calibration",) if shared else tracking.keyframe_sequence
-            with h5py.File(path, "r") as hfile:
-                apply_camera_priors(
-                    results=[hfile[name] for name in names], shared=shared, reconstruction=reconstruction
-                )
+        reconstruction = tracking.capture.rec
+        if self.estimate_intrinsics:
+            reconstruction = copy_unposed_reconstruction(reconstruction, tracking.keyframe_sequence)
+            if tracking.calibration is None:
+                raise ValueError("Predicted initialization requires calibration results")
+            apply_calibration(tracking.calibration, reconstruction)
 
         correspondence_filter = CorrespondenceFilter(
             options=self.preparation.lc,
@@ -201,11 +189,10 @@ class Frontend:
 
         # Persist the masks aligned with the filtered matches before geometric
         # verification publishes the finalized mapper database.
-        sparse_matches_path = tracking.paths.sparse_matches_path
-        lc_masks_path = sparse_matches_path.with_name(f"lc_masks-{sparse_matches_path.stem}.json")
-        write_loop_closure_masks(filtered.lc_masks, lc_masks_path)
+        write_loop_closure_masks(filtered.lc_masks, tracking.paths.lc_masks_path)
 
         geometric_verifier = GeometricVerifier(
+            capture=tracking.capture,
             options=self.preparation.geom_verif,
             database_path=self.outputs_dir / ("database_pre_geom.db" if pre_geom_db_stop else "database_complete.db"),
             replay=self.replay,
@@ -214,7 +201,7 @@ class Frontend:
             pre_geom_db_stop=pre_geom_db_stop,
         )
         verification = geometric_verifier.verify(tracking, reconstruction, filtered.tcorr)
-        return tracking, filtered, verification
+        return tracking, verification
 
     def run_tracking(self) -> TrackingFrontendResult:
         """Run tracking, depth, and optional GeoCalib stages."""
@@ -225,7 +212,9 @@ class Frontend:
             sample_name=self.sample_name,
             cache_dir=self.cache_dir,
             cache_namespace=self.frontend_tag if self.namespace_cache_by_config else None,
-            scene_parser=self.scene_parser,
+            input_snapshot=self.input_snapshot,
+            preparation_plan=self.preparation_plan,
+            prepared_capture=self.prepared_capture,
             force_recompute=self.force_recompute,
             cache_full_depth_maps=self.cache_full_depth_maps,
             deterministic=self.deterministic,

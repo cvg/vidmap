@@ -1,0 +1,10 @@
+defaults:
+  - base
+
+keyframes:
+  matching:
+    coarse_only: true
+tracks:
+  propagation:
+    max_kps: 1000
+rig: {}

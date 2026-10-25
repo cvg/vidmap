@@ -13,6 +13,32 @@
       return error instanceof Error ? error.message : String(error);
     }
 
+    function parseMapperManifest(text) {
+      const manifest = JSON.parse(text);
+      if (manifest.schema_version !== 14 || manifest.frame_sequence == null) {
+        throw new Error("Expected current mapper-input manifest with frame_sequence");
+      }
+      const times = manifest.frame_sequence.timestamps_ns;
+      if (times === null) return manifest;
+      if (!Array.isArray(times)) throw new Error("Invalid mapper frame timestamps");
+      // Match whole JSON strings first, so digits inside names/escaped strings stay untouched.
+      // A second parse preserves integer tokens beyond Number's exact range without changing
+      // the external manifest schema or requiring JSON.parse's newer source-context API.
+      const exact = JSON.parse(text.replace(/"(?:\\[\s\S]|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+        token => /^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token)) ? JSON.stringify(token) : token));
+      for (const [id, value] of times.entries()) {
+        if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+          throw new Error("Invalid mapper frame timestamp");
+        }
+        const integer = exact.frame_sequence.timestamps_ns[id];
+        if (typeof integer === "number" && !Number.isSafeInteger(integer)) {
+          throw new Error("Nanosecond timestamps must use exact integer JSON tokens");
+        }
+        times[id] = BigInt(integer);
+      }
+      return manifest;
+    }
+
     function workerRequest(command, payload, transferables = [], onProgress = null) {
       return new Promise((resolve, reject) => {
         const sourceUrl = URL.createObjectURL(
@@ -91,6 +117,8 @@
         imagePreviews: options.imagePreviews ?? null,
         localInput: options.localInput ?? null,
         covarianceCache: options.covarianceCache ?? null,
+        framesFile: await optionalFile(getFile, "rec/frames.bin"),
+        captureManifest: await optionalFile(getFile, "mapper_inputs/manifest.json"),
         database: database,
         loopClosureMasks: loopClosureMasks
       };
@@ -157,7 +185,11 @@
       if ((databaseEntry === undefined) !== (masksEntry === undefined)) {
         throw new Error("Embedded run contains incomplete loop-closure data");
       }
-      return selectionFrom(path => decodedEmbeddedFile(payload.files[path], path), {
+      const getFile = async path => {
+        if (payload.files[path] === undefined) throw new DOMException("Missing embedded file", "NotFoundError");
+        return decodedEmbeddedFile(payload.files[path], path);
+      };
+      return selectionFrom(getFile, {
         imagePreviews: payload.imagePreviews,
         covarianceCache,
         database: databaseEntry === undefined ? null : await decodedEmbeddedFile(databaseEntry, DATABASE_PATH),
@@ -260,23 +292,27 @@
       }
     }
 
-    function databaseEdgeSharedCounts(databasePairs, observationPointIds, observationOffsets) {
+    function frameObservationPointIds(imageIndices, observationPointIds, observationOffsets) {
       const invalidPointId = 0xffffffffffffffffn;
-      function observedPointIds(keyframe) {
-        const ids = new Set();
+      const ids = new Set();
+      for (const imageIndex of imageIndices) {
+        if (imageIndex === null) continue;
         for (
-          let observation = observationOffsets[keyframe];
-          observation < observationOffsets[keyframe + 1];
+          let observation = observationOffsets[imageIndex];
+          observation < observationOffsets[imageIndex + 1];
           ++observation
         ) {
           const pointId = observationPointIds[observation];
           if (pointId !== invalidPointId) ids.add(pointId);
         }
-        return ids;
       }
+      return ids;
+    }
+
+    function databaseEdgeSharedCounts(databasePairs, observationPointIds, observationOffsets) {
       const result = new Uint32Array(databasePairs.length / 2);
       for (let index = 0; index < result.length; ++index) {
-        const leftIds = observedPointIds(databasePairs[index * 2]);
+        const leftIds = frameObservationPointIds([databasePairs[index * 2]], observationPointIds, observationOffsets);
         let shared = 0;
         const right = databasePairs[index * 2 + 1];
         for (let observation = observationOffsets[right]; observation < observationOffsets[right + 1]; ++observation) {
@@ -625,6 +661,8 @@
           keyframeTimeline.imageIds[rightKeyframe]
         );
         showLoopClosurePair({
+          leftImageIndex: leftKeyframe,
+          rightImageIndex: rightKeyframe,
           leftName: leftName,
           rightName: rightName,
           leftKeypoints: matches.leftKeypoints,
@@ -653,13 +691,17 @@
         minimumTrackLength.value = "1";
         minimumTrackLengthLabel.textContent = "1 observation";
         setStatus("reading COLMAP model…");
+        let database = null;
         try {
           const files = selection.files;
           const buffers = await sourceBuffers(files);
           const transferables = COLMAP_FILENAMES.map(name => buffers[name]);
+          const framesBuffer = selection.framesFile === null ? null : await selection.framesFile.arrayBuffer();
+          const manifest = selection.captureManifest === null ? null : parseMapperManifest(await selection.captureManifest.text());
+          if (framesBuffer !== null) transferables.push(framesBuffer);
           const loaded = await workerRequest(
             "load",
-            {buffers: buffers},
+            {buffers: buffers, framesBuffer, frameSequence: manifest?.frame_sequence ?? null},
             transferables
           );
           installKeyframeTimeline(loaded.timeline);
@@ -675,12 +717,13 @@
             observationPositions: loaded.cameras.observationPositions,
             observationPointIds: loaded.cameras.observationPointIds,
             observationOffsets: loaded.cameras.observationOffsets,
-            database: null,
+            database: database,
             loopClosurePairs: null,
             ranks: null,
             eligibleCount: 0
           };
           replacePointGeometry(state.positions, loaded.points.colors);
+          installPointIds(state.pointIds);
           installTrackLengths(loaded.points.trackLengths);
           let maximumTrackLength = 1;
           for (const length of loaded.points.trackLengths) maximumTrackLength = Math.max(maximumTrackLength, length);
@@ -696,7 +739,8 @@
             setStatus("model loaded; validating loop-closure masks…");
             const loopClosurePairs = parseLoopClosureMasks(await selection.loopClosureMasks.text());
             setStatus("loop-closure masks validated; reading verified database edges…");
-            state.database = await openDatabase(selection.database);
+            if (database === null) database = await openDatabase(selection.database);
+            state.database = database;
             state.loopClosurePairs = loopClosurePairs;
             const databasePairs = databaseEdgeKeyframes(
               state.database,
@@ -721,15 +765,15 @@
             state.observationPointIds,
             state.observationOffsets
           );
-          showKeyframe(Number(keyframeSlider.value));
           if (
             selection.imagePreviews !== null &&
             Object.keys(selection.imagePreviews).length > 0
           ) {
-            installImageDirectory(selection.imagePreviews);
+            imageDirectory = selection.imagePreviews;
           } else if (selection.localInput !== null) {
-            installImageDirectory(parseLocalInput(await selection.localInput.text()));
+            imageDirectory = parseLocalInput(await selection.localInput.text());
           }
+          showKeyframe(Number(keyframeSlider.value));
           setStatus(`${state.positions.length / 3} points loaded; checking covariance cache…`);
           let cacheBuffer = null;
           if (selection.covarianceCache !== null) {
@@ -756,7 +800,7 @@
             }
           }
         } catch (error) {
-          if (state !== null && state.database !== null) state.database.close();
+          if (database !== null) database.close();
           state = null;
           resetRunVisualState();
           reportError(errorMessage(error));
@@ -879,11 +923,14 @@
 
     if (typeof module !== "undefined" && module.exports) {
       module.exports = {
+        parseMapperManifest: parseMapperManifest,
         matchingFingerprints: matchingFingerprints,
+        frameObservationPointIds: frameObservationPointIds,
         parseCovarianceCache: parseCovarianceCache,
         covarianceCacheBuffer: covarianceCacheBuffer,
         parseLocalInput: parseLocalInput,
         selectionFrom: selectionFrom,
+        databaseEdgeKeyframes: databaseEdgeKeyframes,
         databaseEdgeSharedCounts: databaseEdgeSharedCounts,
         sharedTrackObservations: sharedTrackObservations,
         loopClosureMatchObservations: loopClosureMatchObservations,

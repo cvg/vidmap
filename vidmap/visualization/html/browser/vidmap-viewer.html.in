@@ -66,12 +66,20 @@
     #keyframe-preview-panel summary {
       width: max-content; cursor: pointer; font-weight: 600; user-select: none;
     }
-    #keyframe-preview {
+    #keyframe-previews { position: relative; display: flex; gap: 8px; align-items: flex-start; }
+    #keyframe-preview-panel.rig-frame[open] { width: min(88vw, 1500px); }
+    .keyframe-camera { flex: 1; min-width: 0; margin: 0; }
+    .keyframe-camera figcaption { overflow-wrap: anywhere; font-size: 11px; }
+    #keyframe-previews[data-loading="true"]::after {
+      content: "Loading synchronized images…"; position: absolute; top: 0; right: 0;
+      padding: 2px 4px; border-radius: 3px; background: rgba(255,255,255,.9);
+    }
+    .keyframe-preview {
       display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain;
       border-radius: 3px; background: #111;
     }
-    #keyframe-preview-stage { position: relative; width: 100%; margin-top: 4px; line-height: 0; }
-    #tracked-keypoints-overlay {
+    .keyframe-preview-stage { position: relative; width: 100%; margin-top: 4px; line-height: 0; }
+    .tracked-keypoints-overlay {
       position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
     }
     #loop-closure-pair-panel {
@@ -113,11 +121,13 @@ __SQLITE_SCRIPT__
   <div id="background-layer"></div>
   <details id="keyframe-preview-panel" open>
     <summary>Keyframe</summary>
-    <div id="keyframe-preview-stage">
-      <img id="keyframe-preview" alt="Selected keyframe">
-      <canvas id="tracked-keypoints-overlay"></canvas>
-    </div>
+    <div id="keyframe-previews"></div>
   </details>
+  <template id="keyframe-card">
+    <figure class="keyframe-camera"><figcaption></figcaption><div class="keyframe-preview-stage">
+      <img class="keyframe-preview"><canvas class="tracked-keypoints-overlay"></canvas>
+    </div></figure>
+  </template>
   <aside id="loop-closure-pair-panel" hidden>
     <button id="loop-closure-pair-close" type="button" aria-label="Close shared-track pair">×</button>
     <div id="loop-closure-pair-title">Loop closure</div>
@@ -188,7 +198,10 @@ __SQLITE_SCRIPT__
       <input id="keyframe-slider" type="range" min="0" max="0" step="1" value="0" disabled>
       <span id="keyframe-label"></span>
     </div>
+    <label><input id="frame-observations-toggle" type="checkbox" checked> selected frame points</label>
     <div class="control-row keyframe-playback-row">
+      <button id="keyframe-previous" type="button" disabled>prev</button>
+      <button id="keyframe-next" type="button" disabled>next</button>
       <button id="keyframe-play" type="button" disabled>play</button>
       <label class="setting">speed
         <select id="keyframe-speed">
@@ -228,6 +241,8 @@ __SQLITE_SCRIPT__
       <label class="toggle"><input id="paths-toggle" type="checkbox" checked> trajectories</label>
       <label class="setting">line <input id="paths-width" type="number" min="0.5" max="20" step="0.5" value="6"></label>
       <label class="setting">estimated <input id="estimated-path-color" type="color" value="#0064ff"></label>
+    </div>
+    <div class="control-row">
     </div>
     <div class="control-row">
       <label class="toggle"><input id="loop-closures-toggle" type="checkbox" checked> loop closures</label>

@@ -9,7 +9,7 @@ from vidmap.configuration.dump import config_to_dict
 from vidmap.configuration.names import config_name_to_output_slug
 from vidmap.frontend.cache import fingerprint
 
-FRONTEND_IDENTITY_SCHEMA_VERSION = 4
+FRONTEND_IDENTITY_SCHEMA_VERSION = 6
 
 
 def semantic_frontend_config(conf) -> dict[str, object]:
@@ -37,11 +37,6 @@ def frontend_config_identity(conf) -> dict[str, object]:
         "config_name": conf.name,
         "config_fingerprint": semantic_frontend_fingerprint(conf),
         "colmap_runtime": conf.colmap_runtime,
-        "boundary_options": {
-            "estimator": conf.pipeline.camera_priors.estimator,
-            "inference": conf.pipeline.camera_priors.inference,
-            "initialization": conf.pipeline.camera_priors.initialization,
-        },
     }
 
 
@@ -58,9 +53,7 @@ class FrontendIdentity:
     mode: str
     testset_id: str
     reference_image_ids: tuple[int, ...]
-    estimator: str
-    inference: str
-    initialization: str
+    source_fingerprint: str | None = None
 
     @classmethod
     def from_config(
@@ -72,6 +65,7 @@ class FrontendIdentity:
         mode: str,
         testset_id: str,
         reference_image_ids: Sequence[int],
+        source_fingerprint: str | None = None,
     ) -> "FrontendIdentity":
         if conf.name is None:
             raise ValueError("FrontendConfig requires its canonical root-relative name")
@@ -86,13 +80,11 @@ class FrontendIdentity:
             mode=mode,
             testset_id=testset_id,
             reference_image_ids=tuple(reference_image_ids),
-            estimator=conf.pipeline.camera_priors.estimator,
-            inference=conf.pipeline.camera_priors.inference,
-            initialization=conf.pipeline.camera_priors.initialization,
+            source_fingerprint=source_fingerprint,
         )
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "schema_version": FRONTEND_IDENTITY_SCHEMA_VERSION,
             "tag": self.tag,
             "config_name": self.config_name,
@@ -103,9 +95,10 @@ class FrontendIdentity:
             "mode": self.mode,
             "testset_id": self.testset_id,
             "reference_image_ids": list(self.reference_image_ids),
-            "boundary_options": {
-                "estimator": self.estimator,
-                "inference": self.inference,
-                "initialization": self.initialization,
-            },
         }
+
+        # CPU-only lookup identities select an existing boundary without reopening media.
+        # Every published boundary requires this field in the manifest validator.
+        if self.source_fingerprint is not None:
+            payload["source_fingerprint"] = self.source_fingerprint
+        return payload

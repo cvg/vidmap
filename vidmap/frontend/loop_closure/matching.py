@@ -15,11 +15,12 @@ from functools import partial
 import h5py
 import numpy as np
 import torch
+from natsort import natsorted
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from vidmap.frontend.cache import CacheMetadataMismatch, inspect_incremental_items
-from vidmap.frontend.correspondences import canonical_pair_names
+from vidmap.frontend.correspondences import canonical_pair_names, combine_and_deduplicate_pairs
 from vidmap.frontend.h5_write_queue import H5WriteQueue, write_pair_matches
 from vidmap.frontend.image_dataset import ImageDatasetOptions, get_image_size
 from vidmap.frontend.tracking.kernels import select_lc_matches_from_dense
@@ -27,6 +28,8 @@ from vidmap.frontend.video_images import RomaVideoImageDataset, load_roma_resolu
 from vidmap.utils.io import H5KeypointReader, ordered_pair_images
 from vidmap.utils.logging import progress_bars_enabled
 from vidmap.utils.parsers import names_to_pair
+
+EXTENDED_MATCH_DIRECTION_POLICY = "temporal-tracking-selected-retrieval-canonical-storage-v2"
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +92,43 @@ def collate_retrieval_pair(batch):
     return batch[0]
 
 
+def queue_extended_matches(
+    name0, name1, keypoints0, keypoints1, matches_dense, certainty, *, scene_parser, match_threshold, writer_queue
+):
+    """Sample in inference direction, then canonicalize only the persisted rows."""
+    lc_result = select_lc_matches_from_dense(
+        keypoints0,
+        keypoints1,
+        matches_dense,
+        certainty,
+        source_size=get_image_size(scene_parser, name0),
+        target_size=get_image_size(scene_parser, name1),
+        lc_match_thresh=match_threshold,
+    )
+    matches0 = lc_result["matches0"]
+    matching_scores0 = lc_result["matching_scores0"]
+    pair = tuple(natsorted((name0, name1)))
+    if pair != (name0, name1):
+        source = np.flatnonzero(matches0 >= 0)
+        target = matches0[source]
+        matches = np.full(len(keypoints1), -1, dtype=np.int32)
+        scores = np.zeros(len(keypoints1), dtype=np.float32)
+        matches[target] = source
+        scores[target] = matching_scores0[source]
+        matches0 = matches
+        matching_scores0 = scores
+    writer_queue.put(
+        (
+            names_to_pair(*pair),
+            {
+                "matches0": torch.from_numpy(matches0)[None],
+                "matching_scores0": torch.from_numpy(matching_scores0).float()[None],
+            },
+        )
+    )
+    return int((matches0 >= 0).sum())
+
+
 def _match_loop_closures_streaming(
     scene_parser,
     sparse_features_path,
@@ -98,8 +138,8 @@ def _match_loop_closures_streaming(
     lowres_match_resolution,
     *,
     device: torch.device,
+    lc_writer_queue,
     lc_match_thresh=0.5,
-    lc_writer_queue=None,
 ):
     """
     Streaming LC frontend for retrieval pairs.
@@ -116,7 +156,7 @@ def _match_loop_closures_streaming(
         lowres_match_resolution: Processing resolution for lowres matches
         device: Execution device
         lc_match_thresh: Certainty threshold for LC matches
-        lc_writer_queue: Optional H5WriteQueue instance
+        lc_writer_queue: H5WriteQueue instance
     """
     if not retrieval_pairs:
         return
@@ -221,37 +261,17 @@ def _match_loop_closures_streaming(
             kpts0 = keypoint_reader.get(name0)
             kpts1 = keypoint_reader.get(name1)
 
-            # Get dimensions
-            W0, H0 = get_image_size(scene_parser, name0)
-            W1, H1 = get_image_size(scene_parser, name1)
-
-            # === Core LC frontend ===
-            lc_result = select_lc_matches_from_dense(
+            _stats["total_matches"] += queue_extended_matches(
+                name0,
+                name1,
                 kpts0,
                 kpts1,
                 matches_dense,
                 certainty,
-                source_size=(W0, H0),
-                target_size=(W1, H1),
-                lc_match_thresh=lc_match_thresh,
+                scene_parser=scene_parser,
+                match_threshold=lc_match_thresh,
+                writer_queue=lc_writer_queue,
             )
-            matches0 = lc_result["matches0"]
-            matching_scores0 = lc_result["matching_scores0"]
-
-            num_matches = (matches0 >= 0).sum()
-            _stats["total_matches"] += num_matches
-
-            # Also write to disk if caching is enabled
-            if lc_writer_queue is not None:
-                lc_writer_queue.put(
-                    (
-                        pair_name,
-                        {
-                            "matches0": torch.from_numpy(matches0)[None],
-                            "matching_scores0": torch.from_numpy(matching_scores0).float()[None],
-                        },
-                    )
-                )
 
             # Free tensors from this iteration
             del matches_dense, certainty
@@ -304,7 +324,7 @@ def repair_extended_match_pairs(
     device: torch.device,
 ):
     """Repair and verify one planned set of extended-match pairs."""
-    expected_names = canonical_pair_names(pairs)
+    expected_names = canonical_pair_names(combine_and_deduplicate_pairs(pairs))
     present_names, missing_names = inspect_incremental_items(
         paths.extended_matches_path,
         expected_names,
@@ -312,7 +332,7 @@ def repair_extended_match_pairs(
         repair_malformed=True,
     )
     missing_name_set = set(missing_names)
-    missing_pairs = [pair for pair in pairs if names_to_pair(*pair) in missing_name_set]
+    missing_pairs = [pair for pair in pairs if names_to_pair(*natsorted(pair)) in missing_name_set]
     if missing_pairs:
         logger.info("Streaming LC frontend for %d %s pairs", len(missing_pairs), label)
         match_loop_closures_streaming(

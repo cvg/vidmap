@@ -1,10 +1,4 @@
-"""Two-stage VGC geometric verification.
-
-Creates the per-run database (``database_complete.db``), runs geometric
-verification either in a single pass or in two passes (strict for VGC and
-relaxed for the rest of the pipeline).
-
-"""
+"""Verify the selected image pairs in one caller-owned private database."""
 
 from __future__ import annotations
 
@@ -22,7 +16,8 @@ import pycolmap
 from vidmap.frontend.colmap_database import create_database_from_frontend, run_geometric_verification
 from vidmap.frontend.correspondences import ImagePair
 from vidmap.frontend.options.preparation import GeomVerifOptions
-from vidmap.mapper.inputs import FileProvenance, require_finalized_sqlite, sqlite_sidecar_paths
+from vidmap.frontend.preparation.mapper_inputs import prepare_frame_sequence
+from vidmap.mapper.inputs import require_finalized_sqlite, sqlite_sidecar_paths
 from vidmap.mapper.replay.evidence.stages import database_file_summary
 from vidmap.repro.frontend import write_sqlite_summary_artifact
 from vidmap.utils.logging import progress_bars_enabled
@@ -37,11 +32,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class GeometricVerificationResult:
-    """Exact finalized database path and optional strict-VGC exclusions."""
+    """The published database and its allocated capture timeline."""
 
     database_path: Path
-    database_provenance: FileProvenance
-    vgc_filtered_pairs: frozenset[ImagePair] | None
+    frame_sequence: dict | None
 
 
 def _fsync_file(path: Path) -> None:
@@ -116,6 +110,7 @@ class GeometricVerifier:
         repro_dir: Path | None,
         estimate_intrinsics: bool,
         pre_geom_db_stop: bool = False,
+        capture,
     ):
         self.options = options
         self.database_path = Path(database_path)
@@ -123,6 +118,7 @@ class GeometricVerifier:
         self.repro_dir = repro_dir
         self.estimate_intrinsics = estimate_intrinsics
         self.pre_geom_db_stop = pre_geom_db_stop
+        self.capture = capture
 
     def verify(
         self,
@@ -141,7 +137,7 @@ class GeometricVerifier:
         temporary_path = Path(temporary_name)
         temporary_path.unlink()
         try:
-            vgc_filtered_pairs = _verify_database(
+            allocated = _verify_database(
                 self.options,
                 state,
                 initial_reconstruction,
@@ -150,6 +146,7 @@ class GeometricVerifier:
                 database_path=temporary_path,
                 pre_geom_db_stop=self.pre_geom_db_stop,
             )
+            frame_sequence = None if self.pre_geom_db_stop else prepare_frame_sequence(self.capture, allocated)
             _finalize_sqlite_generation(temporary_path)
             _prepare_sqlite_destination(self.database_path)
             os.replace(temporary_path, self.database_path)
@@ -171,8 +168,7 @@ class GeometricVerifier:
                 "summary.json",
                 database_file_summary(self.database_path),
             )
-        provenance = FileProvenance.from_path(self.database_path)
-        return GeometricVerificationResult(self.database_path, provenance, vgc_filtered_pairs)
+        return GeometricVerificationResult(self.database_path, frame_sequence)
 
 
 def _verify_database(
@@ -184,25 +180,16 @@ def _verify_database(
     estimate_intrinsics: bool,
     database_path: Path,
     pre_geom_db_stop: bool,
-) -> frozenset[ImagePair] | None:
-    if pre_geom_db_stop:
-        create_database_from_frontend(
-            state,
-            initial_reconstruction,
-            database_path,
-            estimate_intrinsics=estimate_intrinsics,
-            matches=tcorr,
-        )
-
-        return None
-
-    create_database_from_frontend(
+) -> pycolmap.Reconstruction:
+    allocated = create_database_from_frontend(
         state,
         initial_reconstruction,
         database_path,
         estimate_intrinsics=estimate_intrinsics,
         matches=tcorr,
     )
+    if pre_geom_db_stop:
+        return allocated
 
     geom_verif_options = _verification_options(options, options.max_H_inlier_ratio)
     run_geometric_verification(
@@ -211,4 +198,4 @@ def _verify_database(
         progress_bars_enabled(),
         geom_verif_options,
     )
-    return None
+    return allocated
