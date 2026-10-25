@@ -27,11 +27,31 @@ class RigCameraOptions:
 
 
 @options_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class PanoramaView:
+    yaw_degrees: Annotated[float, Field(strict=True, allow_inf_nan=False)]
+    pitch_degrees: Annotated[float, Field(strict=True, allow_inf_nan=False)]
+
+
+@options_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class PanoramaOptions:
+    image_size: tuple[Annotated[int, Field(strict=True, gt=0)], Annotated[int, Field(strict=True, gt=0)]]
+    horizontal_fov_degrees: Annotated[float, Field(strict=True, gt=0, lt=180)]
+    views: Annotated[dict[CameraId, PanoramaView], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _validate_reference(self):
+        if 0 not in self.views:
+            raise ValueError("Panorama views must include reference camera 0")
+        return self
+
+
+@options_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class RigOptions:
-    """Input calibration and matching policy for numeric camera IDs."""
+    """Input calibration/projection and matching policy for numeric camera IDs."""
 
     cameras: tuple[RigCameraOptions, ...] = ()
     frames: str | None = None
+    projection: PanoramaOptions | None = None
 
     keyframe_camera: CameraId | None = None
     match_same_timestamp: tuple[CameraPair, ...] = ()
@@ -39,6 +59,8 @@ class RigOptions:
 
     @model_validator(mode="after")
     def _validate(self):
+        if self.projection is not None and self.cameras:
+            raise ValueError("Panorama projection cannot be combined with physical rig calibration")
         for camera_id, camera in enumerate(self.cameras):
             if camera_id == 0:
                 if camera.cam_from_rig_rotation is not None or camera.cam_from_rig_translation is not None:

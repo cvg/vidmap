@@ -30,7 +30,7 @@ estimate camera poses, camera intrinsics, and a sparse 3D map.
 
 - 🔧 [Setup](#setup) — Install dependencies and prepare the environment.
 - 🚀 [Run VidMap](#execution) — Reconstruct a video or image sequence.
-- 📷 [Camera rigs](#camera-rigs) — Configure your cameras.
+- 📷 [Camera rigs and panoramas](#camera-rigs-and-panoramas) — Configure your cameras.
 - 👀 [Visualization](#visualization) — Explore your reconstruction in the browser or Rerun.
 - 🛠️ [Pipeline Configurations](#configuration) — Customize the frontend and mapping settings.
 - ⚡ [Speed up VidMap](#speed-up-vidmap) — Find settings to make extraction and mapping faster.
@@ -107,13 +107,14 @@ under `$OUTPUT_DIR`.
 See [files and folders](docs/files.md) for image layouts, frame associations,
 configuration files and run artifacts.
 
-### Camera rigs
+### Camera rigs and panoramas
 
 | Input | Uncalibrated mono | Calibrated mono | Uncalibrated rig | Calibrated rig |
 |---|:---:|:---:|:---:|:---:|
 | Pinhole | [✓](docs/cameras.md#monocular) | [✓](docs/cameras.md#calibrated-monocular) | ✗ | [✓](docs/cameras.md#camera-rigs) |
 | Distorted perspective | ✗ | [✓](docs/cameras.md#calibrated-monocular)¹ | ✗ | [✓](docs/cameras.md#camera-rigs)¹ |
 | Fisheye | ✗ | [✓](docs/cameras.md#calibrated-monocular)¹ | ✗ | [✓](docs/cameras.md#camera-rigs)¹ |
+| Stitched 360° panorama | N/A | [✓](docs/cameras.md#panoramas) | N/A | ✗ |
 
 Distorted perspective models: `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `FULL_OPENCV`,
 `SIMPLE_DIVISION`, `DIVISION`. See [COLMAP camera models](https://colmap.github.io/cameras.html)

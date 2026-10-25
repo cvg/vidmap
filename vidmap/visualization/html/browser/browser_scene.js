@@ -364,11 +364,54 @@ __RECONSTRUCTION_SCRIPT__
       }
     }
 
+    let panoramaCapture = null;
+    let panoramaViews = null;
+    function installPanoramaPreview(panorama, views) {
+      panoramaCapture = panorama;
+      panoramaViews = views;
+    }
+
+    function drawPanorama(frameIndex, preview, canvas) {
+      const {drawing: ctx, pixelRatio: ratio, scaleX: sx, scaleY: sy} = overlayContext(preview, canvas);
+      const frame = keyframeTimeline.frames[frameIndex];
+      const size = panoramaCapture.panorama_size;
+      const colors = ["#00ffaa", "#ffb347", "#69c4ff", "#ed89ff"];
+      frame.cameraIds.forEach((cameraId, slot) => {
+        const view = panoramaViews.get(frame.rigId).get(cameraId);
+        ctx.strokeStyle = colors[slot % colors.length];
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.lineWidth = 2 * ratio;
+        for (const path of panoramaOutline(view, size)) {
+          ctx.beginPath();
+          path.forEach((point, i) => {
+            if (i === 0) ctx.moveTo(point[0] * sx, point[1] * sy);
+            else ctx.lineTo(point[0] * sx, point[1] * sy);
+          });
+          ctx.stroke();
+        }
+        const center = panoramaPixel(view, [view.camera.width / 2, view.camera.height / 2], size);
+        ctx.font = `${13 * ratio}px sans-serif`;
+        ctx.fillText(`Camera ${cameraId}`, center[0] * sx, center[1] * sy);
+        const imageIndex = frame.imageIndices[slot];
+        if (imageIndex === null || trackedKeypointOffsets === null ||
+            !document.getElementById("tracked-keypoints-toggle").checked) return;
+        for (let i = trackedKeypointOffsets[imageIndex]; i < trackedKeypointOffsets[imageIndex + 1]; ++i) {
+          if (trackedKeypointPointIds[i] === 0xffffffffffffffffn) continue;
+          const point = panoramaPixel(view,
+            [trackedKeypointPositions[i * 2], trackedKeypointPositions[i * 2 + 1]], size);
+          for (const shift of [-size[0] * sx, 0, size[0] * sx]) {
+            ctx.beginPath(); ctx.arc(point[0] * sx + shift, point[1] * sy, 2.5 * ratio, 0, 2 * Math.PI); ctx.fill();
+          }
+        }
+      });
+    }
+
     let previewGeneration = 0;
     let framePreviewCards = [];
     function drawTrackedKeypoints() {
       for (const card of framePreviewCards) {
         if (card.stage.hidden) continue;
+        if (card.panorama) { drawPanorama(card.frameIndex, card.image, card.canvas); continue; }
         if (card.imageIndex !== null) drawTrackedImageKeypoints(card.imageIndex, card.image, card.canvas);
       }
     }
@@ -379,21 +422,25 @@ __RECONSTRUCTION_SCRIPT__
       const container = document.getElementById("keyframe-previews");
       if (frame === undefined) return;
       container.dataset.loading = "true";
+      const panorama = panoramaCapture !== null;
       const directory = imageDirectory;
-      const cards = frame.cameraIds.map((cameraId, slot) => {
+      const source = panorama ? panoramaCapture.frames.find(item => item.frame_id === frame.frameId) : null;
+      if (panorama && source === undefined) throw new Error("Panorama source frame association is missing");
+      const cards = (panorama ? [null] : frame.cameraIds).map((cameraId, slot) => {
         const figure = document.importNode(document.getElementById("keyframe-card").content.firstElementChild, true);
         const caption = figure.querySelector("figcaption"), stage = figure.querySelector("div");
         const image = figure.querySelector("img"), canvas = figure.querySelector("canvas");
-        figure.className = "keyframe-camera";
-        figure.dataset.cameraId = String(cameraId);
-        const imageIndex = frame.imageIndices[slot];
-        const name = imageIndex === null ? null : keyframeTimeline.names[imageIndex];
-        caption.textContent = `Camera ${cameraId} · ${name ?? "not registered in this frame"}`;
-        image.alt = `Selected frame camera ${cameraId}`;
+        figure.className = panorama ? "keyframe-camera panorama-camera" : "keyframe-camera";
+        if (!panorama) figure.dataset.cameraId = String(cameraId);
+        const imageIndex = panorama ? null : frame.imageIndices[slot];
+        const name = panorama ? source.image_name : imageIndex === null ? null : keyframeTimeline.names[imageIndex];
+        caption.textContent = panorama ? `${name} · ${frame.cameraIds.length} virtual cameras`
+          : `Camera ${cameraId} · ${name ?? "not registered in this frame"}`;
+        image.alt = panorama ? "Source equirectangular panorama" : `Selected frame camera ${cameraId}`;
         image.dataset.imageIndex = imageIndex === null ? "" : String(imageIndex);
         stage.hidden = name === null || directory === null;
         if (name !== null && directory === null) caption.textContent += " · preview unavailable";
-        return {figure, image, canvas, imageIndex, stage, name};
+        return {figure, image, canvas, imageIndex, stage, name, panorama, frameIndex};
       });
       // Decode every camera before revealing any image. A newer slider change
       // invalidates the entire pending frame, never just one camera's request.
@@ -543,10 +590,27 @@ __RECONSTRUCTION_SCRIPT__
       );
     }
 
+    function loopClosurePreview(imageIndex, name, keypoints) {
+      if (panoramaCapture === null) return {directory: imageDirectory, name, keypoints};
+      const frame = keyframeTimeline.frames.find(frame => frame.imageIndices.includes(imageIndex));
+      const cameraId = frame.cameraIds[frame.imageIndices.indexOf(imageIndex)];
+      const view = panoramaViews.get(frame.rigId).get(cameraId);
+      const source = panoramaCapture.frames.find(item => item.frame_id === frame.frameId);
+      const projected = new Float32Array(keypoints.length);
+      for (let i = 0; i < keypoints.length; i += 2) {
+        projected.set(panoramaPixel(view,
+          [keypoints[i], keypoints[i + 1]], panoramaCapture.panorama_size), i);
+      }
+      return {directory: imageDirectory, name: source.image_name, keypoints: projected};
+    }
+
     function showLoopClosurePair(selection) {
-      if (imageDirectory === null) {
+      const left = loopClosurePreview(selection.leftImageIndex, selection.leftName, selection.leftKeypoints);
+      const right = loopClosurePreview(selection.rightImageIndex, selection.rightName, selection.rightKeypoints);
+      if (left.directory === null || right.directory === null) {
         throw new Error("Load the reconstruction image source before opening a pair");
       }
+      selection = {...selection, leftKeypoints: left.keypoints, rightKeypoints: right.keypoints};
       const panel = document.getElementById("loop-closure-pair-panel");
       activeLoopClosurePair = selection;
       const leftImage = document.getElementById("loop-closure-left-image");
@@ -571,8 +635,8 @@ __RECONSTRUCTION_SCRIPT__
         selection.matchClasses
       ));
       panel.hidden = false;
-      loadImage(leftImage, imageDirectory, selection.leftName);
-      loadImage(rightImage, imageDirectory, selection.rightName);
+      loadImage(leftImage, left.directory, left.name);
+      loadImage(rightImage, right.directory, right.name);
       setLoopClosurePointHighlights(selection.sharedPointPositions);
     }
 

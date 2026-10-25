@@ -81,6 +81,18 @@
     return {modelId: modelId, fx: fx, fy: fy, cx: cx, cy: cy, width: width, height: height};
   }
 
+  function databaseCameras(rows) {
+    const cameras = new Map();
+    for (const [id, model, width, height, params] of rows) {
+      if (!Number.isSafeInteger(id) || id < 0 || cameras.has(id) ||
+          !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0 ||
+          !ArrayBuffer.isView(params)) throw new Error("Invalid native database camera");
+      cameras.set(id, cameraParameters(model, width, height,
+        new DataView(params.buffer, params.byteOffset, params.byteLength)));
+    }
+    return cameras;
+  }
+
   function quaternionRotation(w, x, y, z) {
     const norm = Math.hypot(w, x, y, z);
     if (!(norm > 0)) throw new Error("Invalid zero-norm image quaternion");
@@ -140,6 +152,92 @@
     }
     if (offset !== view.byteLength) throw new Error(`Unexpected trailing images.bin bytes: ${view.byteLength - offset}`);
     return images;
+  }
+
+  function parseRigs(buffer) {
+    const view = new DataView(buffer);
+    requireBytes(view, 0, 8, "rigs.bin header");
+    const count = checkedCount(view.getBigUint64(0, true), "rig count");
+    const rigs = new Map();
+    let offset = 8;
+    for (let index = 0; index < count; ++index) {
+      requireBytes(view, offset, 8, "rig record");
+      const rigId = view.getUint32(offset, true);
+      const sensorCount = view.getUint32(offset + 4, true);
+      offset += 8;
+      if (rigs.has(rigId) || sensorCount === 0) throw new Error("Invalid COLMAP rig inventory");
+      const sensors = new Map();
+      for (let sensor = 0; sensor < sensorCount; ++sensor) {
+        requireBytes(view, offset, sensor === 0 ? 8 : 9, "rig sensor");
+        const type = view.getInt32(offset, true);
+        const cameraId = view.getUint32(offset + 4, true);
+        offset += 8;
+        if (type !== 0 || sensors.has(cameraId)) throw new Error("Panorama rigs require unique camera sensors");
+        let rotation = quaternionRotation(1, 0, 0, 0), translation = [0, 0, 0];
+        if (sensor !== 0) {
+          const hasPose = view.getUint8(offset++);
+          if (hasPose !== 0 && hasPose !== 1) throw new Error("Invalid COLMAP sensor pose flag");
+          if (hasPose === 0) rotation = null;
+          else {
+            requireBytes(view, offset, 56, "rig sensor pose");
+            const pose = Array.from({length: 7}, (_, i) => view.getFloat64(offset + i * 8, true));
+            if (!pose.every(Number.isFinite)) throw new Error("Nonfinite COLMAP sensor pose");
+            rotation = quaternionRotation(...pose.slice(0, 4));
+            translation = pose.slice(4);
+            offset += 56;
+          }
+        }
+        sensors.set(cameraId, {rotation, translation});
+      }
+      rigs.set(rigId, sensors);
+    }
+    if (offset !== view.byteLength) throw new Error("Unexpected trailing rigs.bin bytes");
+    return rigs;
+  }
+
+  function panoramaCalibration(cameras, rigs, panorama) {
+    const alignment = panorama?.rig_from_panorama_rotation;
+    if (panorama == null || "projection" in panorama || !Array.isArray(alignment) || alignment.length !== 3 ||
+        alignment.some(row => !Array.isArray(row) || row.length !== 3 || !row.every(Number.isFinite))) {
+      throw new Error("Panorama provenance requires rig_from_panorama_rotation and native COLMAP calibration");
+    }
+    const a = alignment.flat();
+    const determinant = a[0] * (a[4] * a[8] - a[5] * a[7]) -
+      a[1] * (a[3] * a[8] - a[5] * a[6]) + a[2] * (a[3] * a[7] - a[4] * a[6]);
+    for (let row = 0; row < 3; ++row) {
+      for (let other = 0; other < 3; ++other) {
+        const dot = alignment[row].reduce((sum, value, k) => sum + value * alignment[other][k], 0);
+        if (Math.abs(dot - (row === other ? 1 : 0)) > 1e-6 || Math.abs(determinant - 1) > 1e-6) {
+          throw new Error("Panorama alignment must be a rotation");
+        }
+      }
+    }
+    if (rigs.size !== 1) throw new Error("Panorama capture requires one native rig");
+    const result = new Map();
+    for (const [rigId, sensors] of rigs) {
+      const views = new Map();
+      for (const [cameraId, sensor] of sensors) {
+        const camera = cameras.get(cameraId);
+        if (camera === undefined || ![0, 1].includes(camera.modelId) ||
+            ![camera.fx, camera.fy, camera.cx, camera.cy].every(Number.isFinite) ||
+            camera.fx <= 0 || camera.fy <= 0 || camera.width === 0 || camera.height === 0) {
+          throw new Error("Panorama views require native pinhole calibration");
+        }
+        if (sensor.rotation === null || sensor.translation.some(value => Math.abs(value) > 1e-10)) {
+          throw new Error("Panorama sensors require fixed rotations and zero baseline");
+        }
+        // camera_from_panorama = camera_from_rig * rig_from_panorama.
+        const rotation = new Float64Array(9);
+        for (let row = 0; row < 3; ++row) {
+          for (let col = 0; col < 3; ++col) {
+            for (let k = 0; k < 3; ++k) rotation[row * 3 + col] += sensor.rotation[row * 3 + k] * a[k * 3 + col];
+          }
+        }
+        views.set(cameraId, {camera, rotation});
+      }
+      result.set(rigId, views);
+    }
+    return result;
   }
 
   function numericTimestampToken(name) {
@@ -589,10 +687,13 @@
     crc32: crc32,
     fingerprints: fingerprints,
     parseCameras: parseCameras,
+    databaseCameras: databaseCameras,
     parseImages: parseImages,
     imageTimeline: imageTimeline,
     frameTimeline: frameTimeline,
     parseFrames: parseFrames,
+    parseRigs: parseRigs,
+    panoramaCalibration: panoramaCalibration,
     cameraGeometry: cameraGeometry,
     parsePointsForDisplay: parsePointsForDisplay,
     computeCovariances: computeCovariances,
@@ -608,6 +709,24 @@
           const buffers = message.buffers;
           const images = parseImages(buffers["images.bin"]);
           const timeline = frameTimeline(images, message.framesBuffer ?? null, message.frameSequence ?? null);
+          let panorama = null;
+          if (message.panorama != null) {
+            if (message.rigsBuffer == null) throw new Error("Panorama capture requires native COLMAP rigs.bin");
+            // No original calibration means unavailable overlays, never projection
+            // through refined reconstruction intrinsics.
+            const rigs = parseRigs(message.rigsBuffer);
+            const renderingCameras = message.panoramaCameraRows == null
+              ? null : databaseCameras(message.panoramaCameraRows);
+            // Validate geometry even when original media/calibration is unavailable.
+            const views = panoramaCalibration(renderingCameras ?? parseCameras(buffers["cameras.bin"]), rigs,
+              message.panorama);
+            panorama = renderingCameras === null ? null : views;
+            for (const frame of timeline.frames) {
+              if (frame.cameraIds.some(id => !views.get(frame.rigId)?.has(id))) {
+                throw new Error("Panorama frame membership contradicts native rig calibration");
+              }
+            }
+          }
           const keyframeImageIds = timeline.imageIds;
           const points = parsePointsForDisplay(
             buffers["points3D.bin"],
@@ -621,7 +740,7 @@
           );
           const sourceFingerprints = fingerprints(buffers);
           root.postMessage(
-            {type: "loaded", points: points, cameras: cameras, fingerprints: sourceFingerprints, timeline: timeline},
+            {type: "loaded", points: points, cameras: cameras, fingerprints: sourceFingerprints, timeline: timeline, panorama},
             [
               points.positions.buffer,
               points.colors.buffer,

@@ -109,10 +109,11 @@ class PreparedCapture:
     rec: pycolmap.Reconstruction
     rgb_dir: Path
     frame_timestamps_ns: Mapping[int, int] | None
-    kind: Literal["rig"] | None
+    kind: Literal["rig", "panorama"] | None
     provenance: Mapping
     preserve_calibration: bool = True
     scene: str = "capture"
+    preview_image_dir: Path | None = None
     forced_keyframe_names: frozenset[str] = frozenset()
     _image_ids_by_name: Mapping[str, int] = field(init=False, repr=False, compare=False)
 
@@ -151,6 +152,8 @@ class PreparedCapture:
             raise ValueError("Capture image names must be unique")
         self._image_ids_by_name = image_ids
         self.rgb_dir = Path(self.rgb_dir)
+        if self.preview_image_dir is not None:
+            self.preview_image_dir = Path(self.preview_image_dir)
         if self.frame_timestamps_ns is not None:
             self.frame_timestamps_ns = dict(self.frame_timestamps_ns)
         self.provenance = dict(self.provenance)
@@ -199,6 +202,12 @@ class PreparedCapture:
             if name not in images or images[name] != expected:
                 raise ValueError(f"Prepared capture image changed: {name}")
         return CaptureSnapshot(self, images)
+
+    def panorama_metadata(self) -> dict | None:
+        """Expose only the source media needed by the panoramic viewer."""
+        if self.kind != "panorama":
+            return None
+        return dict(self.provenance["panorama"])
 
 
 def read_frame_table(path: Path) -> tuple[dict, ...]:

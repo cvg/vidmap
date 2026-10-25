@@ -79,6 +79,7 @@ def write_local_input_provenance(
     image_dir: str | Path,
     *,
     overwrite: bool = False,
+    preview_image_dir: str | Path | None = None,
 ) -> Path:
     """Record the resolved RGB root needed to visualize a local reconstruction."""
     directory = Path(directory).expanduser()
@@ -91,6 +92,11 @@ def write_local_input_provenance(
         "schema_version": _LOCAL_INPUT_SCHEMA_VERSION,
         "image_dir": str(image_dir),
     }
+    if preview_image_dir is not None:
+        preview_image_dir = Path(preview_image_dir).expanduser().resolve(strict=True)
+        if not preview_image_dir.is_dir():
+            raise ValueError("Preview image root must be a directory")
+        payload["preview_image_dir"] = str(preview_image_dir)
     if path.is_file() and not overwrite:
         if _read_local_input_provenance(path) != payload:
             raise ValueError(f"Local input provenance already identifies different images: {path}")
@@ -105,8 +111,8 @@ def write_local_input_provenance(
     return path
 
 
-def local_input_image_dir(mapper_inputs: str | Path | MapperInputs) -> Path | None:
-    """Return recorded reconstruction images."""
+def local_input_image_dir(mapper_inputs: str | Path | MapperInputs, *, preview: bool = False) -> Path | None:
+    """Return recorded reconstruction images, or their optional preview override."""
     directory = (
         Path(mapper_inputs).expanduser() if isinstance(mapper_inputs, (str, Path)) else Path(mapper_inputs.directory)
     )
@@ -114,7 +120,8 @@ def local_input_image_dir(mapper_inputs: str | Path | MapperInputs) -> Path | No
     if not source.is_file():
         return None
     payload = _read_local_input_provenance(source)
-    root = Path(payload["image_dir"]).expanduser()
+    key = "preview_image_dir" if preview and "preview_image_dir" in payload else "image_dir"
+    root = Path(payload[key]).expanduser()
     if not root.is_dir():
         raise FileNotFoundError(f"Recorded local input image directory is missing: {root}")
     return root
@@ -162,13 +169,19 @@ def _read_local_input_provenance(path: Path) -> dict:
         raise ValueError(f"Invalid local input provenance: {path}") from error
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"schema_version", "image_dir"}
+        or not {"schema_version", "image_dir"} <= set(payload) <= {"schema_version", "image_dir", "preview_image_dir"}
         or payload["schema_version"] != _LOCAL_INPUT_SCHEMA_VERSION
         or isinstance(payload["schema_version"], bool)
         or not isinstance(payload["image_dir"], str)
         or not payload["image_dir"]
     ):
         raise ValueError(f"Invalid local input provenance: {path}")
+    if "preview_image_dir" in payload and (
+        not isinstance(payload["preview_image_dir"], str)
+        or not payload["preview_image_dir"]
+        or not Path(payload["preview_image_dir"]).is_absolute()
+    ):
+        raise ValueError(f"Invalid preview image directory: {path}")
     return payload
 
 

@@ -9,9 +9,10 @@ JPG, JPEG and PNG are supported.
 | Uncalibrated monocular | The image folder itself, or an MP4/MOV video |
 | Calibrated monocular | A directory containing `cam0/` |
 | Physical rig | A directory containing `cam0/`, `cam1/`, … |
+| Panorama | A directory containing `cam0/` with 360° equirectangular images |
 
 Uncalibrated monocular images use natural filename order (`frame2.png` before
-`frame10.png`). Rigs and calibrated monocular resolve numeric filenames
+`frame10.png`). Rigs, calibrated monocular and panoramas resolve numeric filenames
 automatically: `000001.png`, `1.100.png` or `1.100-left.png`. Numbers are seconds;
 every `camN/` folder must contain exactly one image per shared timestamp.
 
@@ -69,12 +70,12 @@ Optional outputs:
 | Path | Contents |
 |---|---|
 | `video_frames/<video-id>/` | Decoded video images |
-| `prepared_capture/images/` | Undistorted rig images |
+| `prepared_capture/images/` | Projected panorama views or undistorted rig images |
 | `full_depth_maps.h5` | Full depth maps retained with `--cache-depth-maps` |
 | `vidmap-viewer-embedded.html` | Standalone viewer, after [export](../README.md#browser-viewer) |
 
 Original image folders remain at their input paths. Use a new output directory
-when changing sources or calibration.
+when changing sources, calibration or projection.
 
 ### Mapper inputs
 

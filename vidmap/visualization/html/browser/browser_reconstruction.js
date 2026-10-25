@@ -118,6 +118,7 @@
         localInput: options.localInput ?? null,
         covarianceCache: options.covarianceCache ?? null,
         framesFile: await optionalFile(getFile, "rec/frames.bin"),
+        rigsFile: await optionalFile(getFile, "rec/rigs.bin"),
         captureManifest: await optionalFile(getFile, "mapper_inputs/manifest.json"),
         database: database,
         loopClosureMasks: loopClosureMasks
@@ -246,6 +247,40 @@
       if (typeof initSqlJs !== "function") throw new Error("SQLite browser runtime failed to load");
       const SQL = await initSqlJs({locateFile: () => VIDMAP_SQLITE_WASM_URL});
       return new SQL.Database(new Uint8Array(await databaseFile.arrayBuffer()));
+    }
+
+    // Pixel coordinates use COLMAP's edge origin (the first pixel center is .5).
+    function panoramaPixel(view, pixel, panoramaSize) {
+      const {camera, rotation: r} = view;
+      const x = (pixel[0] - camera.cx) / camera.fx;
+      const y = (pixel[1] - camera.cy) / camera.fy;
+      // Rotate the native camera ray back into the source panorama coordinates.
+      const px = r[0] * x + r[3] * y + r[6];
+      const py = r[1] * x + r[4] * y + r[7];
+      const pz = r[2] * x + r[5] * y + r[8];
+      const longitude = Math.atan2(px, pz);
+      const latitude = Math.atan2(py, Math.hypot(px, pz));
+      const [pw, ph] = panoramaSize;
+      return [((longitude / (2 * Math.PI) + .5) * pw + pw) % pw,
+        Math.max(0, Math.min(ph, (latitude / Math.PI + .5) * ph))];
+    }
+
+    function panoramaOutline(view, panoramaSize) {
+      const {width: w, height: h} = view.camera;
+      const corners = [[0, 0], [w, 0], [w, h], [0, h], [0, 0]];
+      const paths = [[]];
+      let previous = null;
+      for (let edge = 0; edge < 4; ++edge) {
+        for (let step = 0; step <= 48; ++step) {
+          const t = step / 48;
+          const pixel = corners[edge].map((v, i) => v * (1 - t) + corners[edge + 1][i] * t);
+          const point = panoramaPixel(view, pixel, panoramaSize);
+          if (previous !== null && Math.abs(point[0] - previous[0]) > panoramaSize[0] / 2) paths.push([]);
+          paths.at(-1).push(point);
+          previous = point;
+        }
+      }
+      return paths;
     }
 
     function databaseEdgeKeyframes(database, keyframeNames, loopClosurePairs) {
@@ -406,7 +441,7 @@
       const manifest = JSON.parse(text);
       if (
         manifest === null || typeof manifest !== "object" || Array.isArray(manifest) ||
-        Object.keys(manifest).sort().join(",") !== "image_dir,schema_version" ||
+        !["image_dir,schema_version", "image_dir,preview_image_dir,schema_version"].includes(Object.keys(manifest).sort().join(",")) ||
         manifest.schema_version !== 1
       ) {
         throw new Error("Local input manifest has an invalid schema");
@@ -414,7 +449,9 @@
       if (typeof manifest.image_dir !== "string" || !manifest.image_dir.startsWith("/")) {
         throw new Error("Local input manifest must contain an absolute image directory");
       }
-      return manifest.image_dir;
+      if ("preview_image_dir" in manifest && (typeof manifest.preview_image_dir !== "string" ||
+          !manifest.preview_image_dir.startsWith("/"))) throw new Error("Preview image root must be absolute");
+      return manifest.preview_image_dir ?? manifest.image_dir;
     }
 
     function sharedTrackObservations(
@@ -697,14 +734,25 @@
           const buffers = await sourceBuffers(files);
           const transferables = COLMAP_FILENAMES.map(name => buffers[name]);
           const framesBuffer = selection.framesFile === null ? null : await selection.framesFile.arrayBuffer();
+          const rigsBuffer = selection.rigsFile === null ? null : await selection.rigsFile.arrayBuffer();
           const manifest = selection.captureManifest === null ? null : parseMapperManifest(await selection.captureManifest.text());
+          const panorama = manifest?.panorama ?? null;
+          let panoramaCameraRows = null;
+          if (panorama !== null && selection.database !== null) {
+            database = await openDatabase(selection.database);
+            const rows = database.exec("SELECT camera_id, model, width, height, params FROM cameras");
+            if (rows.length !== 1) throw new Error("Panorama mapper inputs contain no rendering cameras");
+            panoramaCameraRows = rows[0].values;
+          }
           if (framesBuffer !== null) transferables.push(framesBuffer);
+          if (rigsBuffer !== null) transferables.push(rigsBuffer);
           const loaded = await workerRequest(
             "load",
-            {buffers: buffers, framesBuffer, frameSequence: manifest?.frame_sequence ?? null},
+            {buffers: buffers, framesBuffer, rigsBuffer, panorama, panoramaCameraRows, frameSequence: manifest?.frame_sequence ?? null},
             transferables
           );
           installKeyframeTimeline(loaded.timeline);
+          installPanoramaPreview(panorama, loaded.panorama);
           state = {
             files: files,
             directoryHandle: selection.reconstructionHandle,
@@ -773,6 +821,7 @@
           } else if (selection.localInput !== null) {
             imageDirectory = parseLocalInput(await selection.localInput.text());
           }
+          if (panorama !== null && loaded.panorama === null) imageDirectory = null;
           showKeyframe(Number(keyframeSlider.value));
           setStatus(`${state.positions.length / 3} points loaded; checking covariance cache…`);
           let cacheBuffer = null;
@@ -933,6 +982,8 @@
         databaseEdgeKeyframes: databaseEdgeKeyframes,
         databaseEdgeSharedCounts: databaseEdgeSharedCounts,
         sharedTrackObservations: sharedTrackObservations,
+        panoramaPixel: panoramaPixel,
+        panoramaOutline: panoramaOutline,
         loopClosureMatchObservations: loopClosureMatchObservations,
         parseLoopClosureMasks: parseLoopClosureMasks
       };

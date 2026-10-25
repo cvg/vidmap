@@ -76,15 +76,22 @@ def run_local_frontend(
         if imnames is not None:
             raise ValueError("Rig configuration supplies calibration and complete frames")
         rig = conf.pipeline.rig
-        from vidmap.datasets.prepare.rig_capture import load_capture, prepare_rig_capture
+        if rig.projection is not None:
+            from vidmap.datasets.prepare.panorama_capture import prepare_panorama_capture
 
-        source_capture = load_capture(input_path, rig)
-        preparation_plan = resolve_camera_preparation(source_capture, conf.pipeline)
-        input_snapshot = prepare_rig_capture(
-            source_capture,
-            workspace / "prepared_capture",
-            camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
-        )
+            input_snapshot = prepare_panorama_capture(
+                input_path, rig, workspace / "prepared_capture", frontend_options=conf.pipeline
+            )
+        else:
+            from vidmap.datasets.prepare.rig_capture import load_capture, prepare_rig_capture
+
+            source_capture = load_capture(input_path, rig)
+            preparation_plan = resolve_camera_preparation(source_capture, conf.pipeline)
+            input_snapshot = prepare_rig_capture(
+                source_capture,
+                workspace / "prepared_capture",
+                camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
+            )
         scene_parser = input_snapshot.capture
     else:
         from vidmap.reconstruction import prepare_reconstruction_images
@@ -136,6 +143,7 @@ def run_local_frontend(
             mapper_inputs.directory,
             image_dir,
             overwrite=True,
+            preview_image_dir=scene_parser.preview_image_dir,
         )
         if cache_depth_maps:
             import h5py
@@ -202,6 +210,7 @@ def run_local_frontend(
         mapper_inputs.directory,
         image_dir,
         overwrite=True,
+        preview_image_dir=scene_parser.preview_image_dir,
     )
     if temporary_dir.exists():
         shutil.rmtree(temporary_dir)
@@ -269,6 +278,7 @@ class FrontendRunner:
                             existing.directory,
                             scene_parser.rgb_dir,
                             overwrite=True,
+                            preview_image_dir=scene_parser.preview_image_dir,
                         )
                         result = FrontendTargetResult(identity, existing, reused=True)
                         completed.append(result)
@@ -306,6 +316,7 @@ class FrontendRunner:
                             mapper_inputs.directory,
                             scene_parser.rgb_dir,
                             overwrite=True,
+                            preview_image_dir=scene_parser.preview_image_dir,
                         )
                         result = FrontendTargetResult(identity, mapper_inputs, reused=False)
                         completed.append(result)

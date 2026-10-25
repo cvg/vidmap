@@ -149,6 +149,7 @@ class Frontend:
             tracking,
             verification,
             frontend_identity=frontend_identity,
+            panorama=self.scene_parser.panorama_metadata(),
         )
         publish_full_depth_output(
             mapper_inputs.directory.parent,
