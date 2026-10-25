@@ -69,3 +69,37 @@ In this example:
 - **0–1:** Reliable stereo overlap: included in `match_same_timestamp` and `flag_same_timestamp_as_sequential` for sequential losses.
 - **1–2:** Overlap with a larger viewpoint change: included only in `match_same_timestamp`, using loop-closure losses.
 - **3:** No overlap: omitted from `match_same_timestamp`.
+
+## Panoramas
+
+Put your 360° equirectangular images in `/data/images/cam0/`.
+Save `vidmap/configs/frontend/my_panorama.yaml`:
+
+```yaml
+defaults: [calib/rig]
+rig:
+  projection:
+    image_size: [840, 840]  # width, height
+    horizontal_fov_degrees: 120.0
+    views:
+      0: {yaw_degrees: 0.0, pitch_degrees: 0.0}
+      1: {yaw_degrees: 120.0, pitch_degrees: 0.0}
+      2: {yaw_degrees: 240.0, pitch_degrees: 0.0}
+```
+
+**Full cube:** keep square images and replace the FOV and views inside `projection`:
+
+```yaml
+horizontal_fov_degrees: 90.0
+views:
+  0: {yaw_degrees: 0.0, pitch_degrees: 0.0}
+  1: {yaw_degrees: 90.0, pitch_degrees: 0.0}
+  2: {yaw_degrees: 180.0, pitch_degrees: 0.0}
+  3: {yaw_degrees: 270.0, pitch_degrees: 0.0}
+  4: {yaw_degrees: 0.0, pitch_degrees: 90.0}
+  5: {yaw_degrees: 0.0, pitch_degrees: -90.0}
+```
+
+View 0 is the reference camera. Positive yaw turns right; positive pitch points up. Horizontal FOV must stay below 180°.
+
+See [files and folders](files.md) for input naming, explicit frame associations and outputs.

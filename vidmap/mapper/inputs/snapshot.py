@@ -103,6 +103,7 @@ def mapper_inputs_manifest(
     *,
     frontend_identity: Mapping[str, object],
     frame_sequence: dict,
+    panorama: dict | None = None,
     calibration: CalibrationEvidence | None = None,
 ) -> dict:
     """Build deterministic provenance for canonical mapper-input payloads."""
@@ -112,7 +113,7 @@ def mapper_inputs_manifest(
         name: dict(proof)
         for name, proof in _verified_artifacts(directory, _artifact_signature(directory, names)).items()
     }
-    return _tagged_manifest(artifacts, frontend_identity, frame_sequence, calibration)
+    return _tagged_manifest(artifacts, frontend_identity, frame_sequence, panorama, calibration)
 
 
 def _artifact_signature(
@@ -143,6 +144,7 @@ def _tagged_manifest(
     artifacts: Mapping[str, object],
     frontend_identity: Mapping[str, object],
     frame_sequence: dict,
+    panorama: dict | None = None,
     calibration: CalibrationEvidence | None = None,
 ) -> dict[str, object]:
     """Build the current tagged mapper-input manifest."""
@@ -154,6 +156,8 @@ def _tagged_manifest(
         "frame_sequence": frame_sequence,
         "calibration": None if calibration is None else calibration.as_dict(),
     }
+    if panorama is not None:
+        manifest["panorama"] = panorama
     return manifest
 
 
@@ -163,9 +167,13 @@ def _tagged_identity(manifest: Mapping[str, object], *, manifest_path: Path) -> 
     if schema_version != MANIFEST_SCHEMA_VERSION:
         raise ValueError(f"Mapper inputs require manifest schema {MANIFEST_SCHEMA_VERSION}: {manifest_path}")
     fields = {"schema_version", "frontend_identity", "artifacts", "frame_sequence", "calibration"}
-    if set(manifest) != fields:
+    if set(manifest) not in (fields, fields | {"panorama"}):
         raise ValueError(f"Invalid mapper-input manifest fields: {manifest_path}")
     validate_frame_sequence(manifest["frame_sequence"])
+    if "panorama" in manifest:
+        from vidmap.datasets.panorama_metadata import validate_panorama_metadata
+
+        validate_panorama_metadata(manifest["panorama"])
     identity = manifest.get("frontend_identity")
     _validate_frontend_identity(identity, manifest_path=manifest_path)
     return identity
@@ -176,12 +184,14 @@ def write_mapper_inputs_manifest(
     *,
     frontend_identity: Mapping[str, object],
     frame_sequence: dict,
+    panorama: dict | None = None,
     calibration: CalibrationEvidence | None = None,
 ) -> None:
     payload = mapper_inputs_manifest(
         directory,
         frontend_identity=frontend_identity,
         frame_sequence=frame_sequence,
+        panorama=panorama,
         calibration=calibration,
     )
     (Path(directory) / MANIFEST_NAME).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -335,6 +345,7 @@ class MapperInputs:
             ),
             frontend_identity,
             manifest["frame_sequence"],
+            manifest["panorama"] if "panorama" in manifest else None,
             evidence,
         )
         if manifest != expected_manifest:

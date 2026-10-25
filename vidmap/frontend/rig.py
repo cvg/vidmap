@@ -11,6 +11,8 @@ def resolve_rig_options(capture: PreparedCapture, options: RigOptions):
         raise ValueError("The keyframing camera must belong to the capture")
     if any(cid not in capture.rec.cameras for pair in options.match_same_timestamp for cid in pair):
         raise ValueError("Same-timestamp matching references an unknown camera")
+    if capture.kind == "panorama" and options.match_same_timestamp:
+        raise ValueError("Same-timestamp matching between views of one panorama is not allowed")
     for first, second in options.match_same_timestamp:
         if not any(
             rig.has_sensor(capture.rec.camera(first).sensor_id)

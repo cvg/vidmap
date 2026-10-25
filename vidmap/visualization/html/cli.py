@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--images",
         type=Path,
-        help="Optional image root (requires --run-dir).",
+        help="Optional preview image root; original panoramas for panorama runs (requires --run-dir).",
     )
     parser.add_argument(
         "-o",

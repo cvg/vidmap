@@ -39,6 +39,7 @@ def write_mapper_inputs(
     frontend_identity: Mapping[str, object],
     frame_sequence: dict,
     calibration: CalibrationEvidence | None = None,
+    panorama: dict | None = None,
 ) -> MapperInputs:
     """Replace the directory with one self-contained mapper-input generation."""
     directory = resolve_mapper_inputs_directory(directory)
@@ -82,6 +83,7 @@ def write_mapper_inputs(
         directory,
         frontend_identity=frontend_identity,
         frame_sequence=frame_sequence,
+        panorama=panorama,
         calibration=calibration,
     )
     result = MapperInputs.from_directory(directory, expected_identity=frontend_identity)
@@ -95,6 +97,7 @@ def write_verified_mapper_inputs(
     verification: GeometricVerificationResult,
     *,
     frontend_identity: Mapping[str, object],
+    panorama: dict | None = None,
 ) -> MapperInputs:
     """Validate the current frontend generation, then write its mapper inputs."""
     paths = state.paths
@@ -129,6 +132,7 @@ def write_verified_mapper_inputs(
         frontend_identity=frontend_identity,
         frame_sequence=verification.frame_sequence,
         calibration=None if calibration is None else calibration.evidence,
+        panorama=panorama,
     )
 
 

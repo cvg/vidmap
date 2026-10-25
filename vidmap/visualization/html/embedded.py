@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import gzip
 import io
+import json
 import sqlite3
 import tempfile
 from collections.abc import Mapping
@@ -14,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from vidmap.mapper.inputs import LC_MASKS_NAME
+from vidmap.repro.hashing import sha256_file
 from vidmap.utils.loop_closure_masks import read_loop_closure_masks
 
 from . import scene
@@ -29,6 +31,7 @@ def _embed_image_previews(
     image_names: tuple[str, ...],
     *,
     maximum_size: int = 640,
+    source_hashes: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     """Encode bounded JPEG previews for an embedded keyframe timeline."""
     if maximum_size < 1:
@@ -44,6 +47,9 @@ def _embed_image_previews(
             raise ValueError(f"Reconstruction image name escapes the image directory: {name}")
         if not image_path.is_file():
             raise FileNotFoundError(f"Timeline image does not exist: {image_path}")
+        if source_hashes is not None:
+            if sha256_file(image_path) != source_hashes[name]:
+                raise ValueError(f"Panorama source content differs from capture: {image_path}")
         with Image.open(image_path) as source:
             preview = source.convert("RGB")
             preview.thumbnail((maximum_size, maximum_size), Image.Resampling.LANCZOS)
@@ -89,6 +95,8 @@ def _rows_for_pair_ids(connection, table: str, columns: str, pair_ids: tuple[int
 def _compact_loop_closure_database(
     database: Path,
     loop_closure_masks: Mapping[tuple[str, str], np.ndarray],
+    *,
+    include_cameras: bool = False,
 ) -> bytes:
     """Retain only the SQLite rows queried by the embedded LC viewer."""
     uri = f"{database.resolve().as_uri()}?mode=ro&immutable=1"
@@ -119,6 +127,8 @@ def _compact_loop_closure_database(
         valid_pair_ids = tuple(sorted(int(row[0]) for row in geometry_rows))
         match_rows = tuple(_rows_for_pair_ids(source, "matches", "pair_id, rows, cols, data", valid_pair_ids))
         selected_images = tuple(sorted((image_ids[name], name) for name in selected_names))
+        if include_cameras:
+            cameras = tuple(source.execute("SELECT camera_id, model, width, height, params FROM cameras"))
 
     temporary: Path | None = None
     try:
@@ -134,6 +144,12 @@ def _compact_loop_closure_database(
                 CREATE TABLE matches(pair_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB);
                 """
             )
+            if include_cameras:
+                target.execute(
+                    "CREATE TABLE cameras(camera_id INTEGER PRIMARY KEY, model INTEGER, "
+                    "width INTEGER, height INTEGER, params BLOB)"
+                )
+                target.executemany("INSERT INTO cameras VALUES (?, ?, ?, ?, ?)", cameras)
             target.executemany("INSERT INTO images VALUES (?, ?)", selected_images)
             target.executemany("INSERT INTO two_view_geometries VALUES (?, ?, ?)", geometry_rows)
             target.executemany("INSERT INTO matches VALUES (?, ?, ?, ?)", match_rows)
@@ -143,14 +159,25 @@ def _compact_loop_closure_database(
             temporary.unlink(missing_ok=True)
 
 
-def _image_previews(model, images_dir: Path) -> dict[str, dict[str, object]]:
+def _image_previews(model, images_dir: Path, panorama=None) -> dict[str, dict[str, object]]:
     registered = [image for image in model.images.values() if image.has_pose]
-    sizes = {
-        image.name: (model.cameras[image.camera_id].width, model.cameras[image.camera_id].height)
-        for image in registered
-    }
+    hashes = None
+    if panorama is None:
+        sizes = {
+            image.name: (model.cameras[image.camera_id].width, model.cameras[image.camera_id].height)
+            for image in registered
+        }
+    else:
+        frame_ids = {image.frame_id for image in registered}
+        frames = [frame for frame in panorama["frames"] if frame["frame_id"] in frame_ids]
+        if len(frames) != len(frame_ids) or {frame["frame_id"] for frame in frames} != frame_ids:
+            raise ValueError("Panorama source associations do not cover registered frames exactly")
+        sizes = {frame["image_name"]: panorama["panorama_size"] for frame in frames}
+        hashes = {frame["image_name"]: frame["sha256"] for frame in frames}
     names = tuple(sorted(sizes))
-    previews = _embed_image_previews(images_dir, names)
+    previews = _embed_image_previews(
+        images_dir, names, maximum_size=640 if panorama is None else 1600, source_hashes=hashes
+    )
     return {
         name: {
             "url": preview,
@@ -177,15 +204,23 @@ def _embedded_run_payload(
     files = {name: _encoded_file(path) for name, path in source_files.items()}
     for relative, source in (
         ("rec/frames.bin", reconstruction / "frames.bin"),
+        ("rec/rigs.bin", reconstruction / "rigs.bin"),
         ("mapper_inputs/manifest.json", mapper_inputs / "manifest.json"),
     ):
         if source.is_file():
             files[relative] = _encoded_file(source)
+    manifest_path = mapper_inputs / "manifest.json"
+    panorama = None
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text())
+        if "panorama" in manifest:
+            panorama = manifest["panorama"]
     from vidmap.reconstruction import local_input_image_dir
 
+    is_panorama = panorama is not None
     root = images_dir
     if root is None:
-        root = local_input_image_dir(mapper_inputs)
+        root = local_input_image_dir(mapper_inputs, preview=True)
     database = mapper_inputs / "database_complete.db"
     loop_closure_masks_path = mapper_inputs / LC_MASKS_NAME
     if database.is_file() != loop_closure_masks_path.is_file():
@@ -197,11 +232,11 @@ def _embedded_run_payload(
         import pycolmap
 
         model = pycolmap.Reconstruction(reconstruction)
-    previews = {} if root is None else _image_previews(model, Path(root).expanduser().resolve(strict=True))
+    previews = {} if root is None else _image_previews(model, Path(root).expanduser().resolve(strict=True), panorama)
     if database.is_file():
         loop_closure_masks = read_loop_closure_masks(loop_closure_masks_path)
         files["mapper_inputs/database_complete.db"] = _encoded_bytes(
-            _compact_loop_closure_database(database, loop_closure_masks)
+            _compact_loop_closure_database(database, loop_closure_masks, include_cameras=is_panorama)
         )
         files[f"mapper_inputs/{LC_MASKS_NAME}"] = _encoded_file(loop_closure_masks_path)
     covariance = reconstruction / "visualization_cache" / "point_covariance_rank_v2.bin"
