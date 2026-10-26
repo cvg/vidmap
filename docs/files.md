@@ -96,4 +96,5 @@ Keep this directory together to rerun mapping without extraction:
 frontend config. External mapper inputs are neither modified nor copied into
 the output folder.
 
-Regenerate older flat-layout datasets in a new root to update both images and COLMAP paths.
+To migrate flat-layout datasets, move images under `cam0/` and update the corresponding
+paths in COLMAP models and sidecars, along with applicable preparation metadata.
