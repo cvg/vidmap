@@ -8,6 +8,5 @@ void BindRecords(pybind11::module_& module);
 void BindMappingSidecars(pybind11::module_& module);
 void BindViewGraph(pybind11::module_& module);
 void BindTracks(pybind11::module_& module);
-void BindGlobalPositioning(pybind11::module_& module);
 
 }  // namespace vidmap

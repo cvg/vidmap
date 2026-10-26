@@ -1,3 +1,4 @@
+#include "colmap/estimators/cost_functions/depth.h"
 #include "colmap/estimators/cost_functions/motion_averaging.h"
 #include "colmap/estimators/cost_functions/utils.h"
 #include "colmap/estimators/global_positioning.h"
@@ -11,7 +12,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "stages/metric_depth.h"
 #include "stages/rig_geometry.h"
 #include "stages/weighted_motion_averaging.h"
 #include "vidmap_native/mapping_sidecars.h"
@@ -466,10 +466,15 @@ PYBIND11_MODULE(global_positioning, m) {
       "Keep the returned scales, reconstruction, centers and loss alive "
       "while using the problem.");
   m.def("split_depth_observations",
-        [](const std::vector<ObservationSelection*>& selections,
+        [](colmap::GlobalPositioner& positioner,
+           const colmap::Reconstruction& reconstruction,
+           const std::vector<ObservationSelection*>& selections,
            const vidmap::MappingSidecars& sidecars,
            const std::map<colmap::image_t, vidmap::VectorXb>& outlier_masks) {
-          std::map<std::pair<bool, bool>, ObservationSelection> groups;
+          using Depths =
+              std::map<colmap::point2D_t, std::pair<double, double>>;
+          using Key = std::tuple<bool, bool, colmap::image_t>;
+          std::map<Key, std::pair<Depths, ObservationSelection>> groups;
           std::map<colmap::image_t, size_t> counts;
           for (const auto* selection : selections) {
             for (const auto& obs : selection->observations) {
@@ -482,43 +487,78 @@ PYBIND11_MODULE(global_positioning, m) {
               const bool outlier = mask == outlier_masks.end()
                                        ? MaskValue(data.is_depth_outlier, index)
                                        : MaskValue(mask->second, index);
-              groups[{obs.loop, outlier}].observations.push_back(obs);
+              auto& [depths, explicit_observations] =
+                  groups[{obs.loop, outlier, obs.ImageId()}];
+              const auto& image = reconstruction.Image(obs.ImageId());
+              if (!obs.loop &&
+                  image.Point2D(index).point3D_id == obs.point_id &&
+                  obs.center ==
+                      positioner.FrameCenterParameterBlock(image.FrameId())) {
+                THROW_CHECK(
+                    depths
+                        .emplace(index,
+                                 std::make_pair(data.depth_values(index),
+                                                data.depth_stddevs(index)))
+                        .second);
+              } else {
+                // LC associations may repeat a feature or use a different
+                // point. Warmup can also supply centers outside the positioner.
+                explicit_observations.observations.push_back(obs);
+              }
               ++counts[obs.ImageId()];
             }
           }
           return py::make_tuple(groups, counts);
         });
-  m.def("append_depth_observations",
-        [](ceres::Problem& problem,
-           const colmap::Reconstruction& reconstruction,
-           const vidmap::MappingSidecars& sidecars,
-           const ObservationSelection& selection,
-           const py::dict& scales,
-           const std::shared_ptr<ceres::LossFunction>& loss,
-           bool use_log_scales,
-           vidmap::MetricDepthResidualType residual_type,
-           bool zero_residual_behind,
-           double log_linear_threshold) {
-          const auto scale_pointers = CenterPointers(scales);
-          for (const auto& obs : selection.observations) {
-            const auto& data = sidecars.images.at(obs.ImageId());
-            auto* cost = vidmap::MetricDepthError::Create(
-                reconstruction.Image(obs.ImageId()).CamFromWorld().rotation(),
-                data.depth_values(obs.Index()),
-                data.depth_stddevs(obs.Index()),
-                use_log_scales,
-                residual_type,
-                zero_residual_behind,
-                log_linear_threshold,
-                vidmap::RigTranslationInWorld(
-                    reconstruction.Image(obs.ImageId())));
-            problem.AddResidualBlock(cost,
-                                     loss.get(),
-                                     obs.center,
-                                     obs.point,
-                                     scale_pointers.at(obs.ImageId()));
-          }
-        });
+  m.def(
+      "append_lc_depths",
+      [](ceres::Problem& problem,
+         const colmap::Reconstruction& reconstruction,
+         const vidmap::MappingSidecars& sidecars,
+         const ObservationSelection& selection,
+         py::array_t<double, py::array::c_style> log_depth_scale,
+         const std::shared_ptr<ceres::LossFunction>& loss,
+         const colmap::GPDepthConstraintOptions& options) {
+        THROW_CHECK_EQ(log_depth_scale.ndim(), 1);
+        THROW_CHECK_EQ(log_depth_scale.size(), 1);
+        THROW_CHECK(log_depth_scale.writeable());
+        THROW_CHECK(std::isfinite(*log_depth_scale.data()));
+        if (options.residual_type == colmap::DepthResidualType::kLogLinear) {
+          THROW_CHECK_GT(options.log_linear_threshold, 0);
+          THROW_CHECK_LT(options.log_linear_threshold, 1);
+        }
+        for (const auto& obs : selection.observations) {
+          const auto& image = reconstruction.Image(obs.ImageId());
+          const auto& data = sidecars.images.at(obs.ImageId());
+          const double depth = data.depth_values(obs.Index());
+          const double stddev = data.depth_stddevs(obs.Index());
+          THROW_CHECK(std::isfinite(depth) && depth > 0);
+          THROW_CHECK(std::isfinite(stddev) && stddev > 0);
+          THROW_CHECK(problem.HasParameterBlock(obs.point));
+          THROW_CHECK(problem.HasParameterBlock(obs.center));
+          const colmap::WorldFromCamCenterDepthCostFunctor depth_cost{
+              depth,
+              stddev,
+              options.residual_type,
+              options.log_linear_threshold,
+              image.CamFromWorld().rotation().toRotationMatrix().row(2)};
+          auto* cost = new ceres::AutoDiffCostFunction<
+              colmap::RigWorldFromCamCenterDepthConstantRigCostFunctor,
+              1,
+              3,
+              3,
+              1>(new colmap::RigWorldFromCamCenterDepthConstantRigCostFunctor{
+              depth_cost, vidmap::FixedSensorFromRig(image).translation().z()});
+          problem.AddResidualBlock(cost,
+                                   loss.get(),
+                                   obs.point,
+                                   obs.center,
+                                   log_depth_scale.mutable_data());
+        }
+        return selection.observations.size();
+      },
+      "Append explicit LC/warmup point and center blocks using COLMAP depth "
+      "costs. Keep the reconstruction, centers, log scale and loss alive.");
   m.def("playback_point_ids",
         [](ceres::Problem& problem,
            const colmap::Reconstruction& reconstruction,
