@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from PIL import Image
 
@@ -109,7 +109,6 @@ class PreparedCapture:
     rec: pycolmap.Reconstruction
     rgb_dir: Path
     frame_timestamps_ns: Mapping[int, int] | None
-    kind: Literal["rig", "panorama"] | None
     provenance: Mapping
     preserve_calibration: bool = True
     scene: str = "capture"
@@ -169,9 +168,11 @@ class PreparedCapture:
     def frame_ids(self) -> tuple[int, ...]:
         if self.frame_timestamps_ns is not None:
             return tuple(sorted(self.rec.frames, key=self.frame_timestamps_ns.__getitem__))
-        images = sorted(self.rec.images.values(), key=lambda image: image.image_id)
         return tuple(
-            image.frame_id for image in sorted(images, key=lambda image: timestamp_from_image_name(image.name))
+            image.frame_id
+            for image in sorted(
+                self.rec.images.values(), key=lambda image: (timestamp_from_image_name(image.name), image.image_id)
+            )
         )
 
     @property
@@ -188,7 +189,7 @@ class PreparedCapture:
         root = self.rgb_dir.resolve(strict=True)
         for name in self.imnames:
             source = root / name
-            if self.kind == "rig":
+            if self.preserve_calibration:
                 source = source.resolve(strict=True)
                 if not source.is_relative_to(root):
                     raise ValueError("Capture image escapes the image directory")
@@ -205,7 +206,7 @@ class PreparedCapture:
 
     def panorama_metadata(self) -> dict | None:
         """Expose only the source media needed by the panoramic viewer."""
-        if self.kind != "panorama":
+        if "panorama" not in self.provenance:
             return None
         return dict(self.provenance["panorama"])
 
@@ -280,8 +281,8 @@ def build_capture_reconstruction(cameras, rig, rows):
     for fid, entries in grouped.items():
         frame = pycolmap.Frame(frame_id=fid, rig_id=rig.rig_id)
         images = []
+        frame_times[fid] = entries[0]["timestamp_ns"]
         for entry in sorted(entries, key=lambda row: row["camera_id"]):
-            frame_times[fid] = entry["timestamp_ns"]
             image = pycolmap.Image(
                 image_id=image_id, name=entry["image_name"], camera_id=entry["camera_id"], frame_id=fid
             )
@@ -291,7 +292,7 @@ def build_capture_reconstruction(cameras, rig, rows):
         rec.add_frame(frame)
         for image in images:
             rec.add_image(image)
-    return rec, frame_times
+    return rec, None if all(timestamp is None for timestamp in frame_times.values()) else frame_times
 
 
 def _calibration(rec: pycolmap.Reconstruction) -> dict:
@@ -330,7 +331,6 @@ def prepare_scene_capture(scene_parser) -> PreparedCapture:
         rec=copy_unposed_reconstruction(scene_parser.rec),
         rgb_dir=scene_parser.rgb_dir,
         frame_timestamps_ns=None,
-        kind=None,
         provenance={},
         preserve_calibration=False,
         forced_keyframe_names=frozenset(image.name for image in scene_parser.rec.images.values() if image.has_pose),

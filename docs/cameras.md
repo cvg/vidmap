@@ -16,6 +16,7 @@ python -m vidmap.run --input_data /data/images --output /results/run \
 
 ## Monocular
 
+Put images in `/data/images/cam0/` and pass `/data/images` as the input root.
 The default configuration uses uncalibrated monocular input.
 
 ### Distorted monocular

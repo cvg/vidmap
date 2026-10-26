@@ -337,7 +337,7 @@ def _convert_scene(
                 member = prefix + f"raw_data/images/{timestamp}.jpg"
                 if member not in members:
                     raise ValueError(f"LaMAR archive is missing {member}")
-                _copy_image(bundle, member, destination / "images" / name, rotations)
+                _copy_image(bundle, member, destination / "images" / "cam0" / name, rotations)
                 rotated += bool(rotations)
                 seen_names.add(name)
 
@@ -351,6 +351,9 @@ def _convert_scene(
         testset = LAMAR_LAYOUT.testset_path(scene, mode)
         if yaml.safe_load(testset.read_text(encoding="utf-8")) != expected:
             raise ValueError(f"Canonical LaMAR {mode} testset content mismatch: {testset}")
+    for image in ground_truth.images.values():
+        image.name = f"cam0/{image.name}"
+    ground_truth.write_binary(rec_dir)
     with (destination / "preparation.json").open("x", encoding="utf-8") as file:
         json.dump(
             {
@@ -384,7 +387,11 @@ def lamar_scene_is_prepared(scene_dir: Path) -> bool:
     ground_truth = pycolmap.Reconstruction(scene_dir / "rec")
     if ground_truth.num_images() != _EXPECTED_GT_IMAGE_COUNTS[scene]:
         return False
-    expected_names = _sample_image_names(scene, ground_truth)
+    if any(not image.name.startswith("cam0/") for image in ground_truth.images.values()):
+        return False
+    for image in ground_truth.images.values():
+        image.name = image.name.removeprefix("cam0/")
+    expected_names = {f"cam0/{name}" for name in _sample_image_names(scene, ground_truth)}
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         return False

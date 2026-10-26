@@ -9,7 +9,11 @@ import pycolmap
 from pydantic import ConfigDict
 
 from vidmap.configuration.validators import dataclass as pydantic_dataclass
-from vidmap.utils.trajectory import align_reconstruction_to_reference_sequence, remap_poses_to_timeline
+from vidmap.utils.trajectory import (
+    align_reconstruction_to_reference_sequence,
+    remap_poses_to_timeline,
+    trajectory_images,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -427,11 +431,9 @@ class AbsoluteTrajectoryEvaluator:
 
     def absolute_pose_errors(self, estim_rec, gt_rec):
         poses_es_world_full = {
-            id: image.cam_from_world().inverse() for id, image in estim_rec.images.items() if image.has_pose
+            image.image_id: image.cam_from_world().inverse() for image in trajectory_images(estim_rec)
         }
-        poses_gt_world_full = {
-            id: image.cam_from_world().inverse() for id, image in gt_rec.images.items() if image.has_pose
-        }
+        poses_gt_world_full = {image.image_id: image.cam_from_world().inverse() for image in trajectory_images(gt_rec)}
         have_ids = [id for id in poses_es_world_full if id in poses_gt_world_full]
         should_have_ids = list(poses_gt_world_full)
 
@@ -460,11 +462,14 @@ class AbsoluteTrajectoryEvaluator:
         if (self.options.windowed_ate_sizes or self.options.windowed_ate_auc_full_thresholds) and len(
             poses_gt_world_full
         ) > 0:
-            # Sort by image name (encodes timestamp) for correct path length.
+            # Preserve the chronological GT timeline for path length.
             # With eval_on_full_gt_timeline, windows are laid out on the full GT
             # path while local alignment uses only registered estimated poses.
-            gt_window_ids = should_have_ids if self.options.eval_on_full_gt_timeline else have_ids
-            gt_window_ids = sorted(gt_window_ids, key=lambda imid: gt_rec.images[imid].name)
+            gt_window_ids = [
+                image_id
+                for image_id in should_have_ids
+                if self.options.eval_on_full_gt_timeline or image_id in poses_es_world_full
+            ]
             p_gt_sorted = np.array([poses_gt_world_full[imid].translation for imid in gt_window_ids])
             imnames_sorted = [gt_rec.images[imid].name for imid in gt_window_ids]
             # GT cumulative path length

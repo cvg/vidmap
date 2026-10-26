@@ -21,7 +21,7 @@ from vidmap.datasets.layouts import get_dataset_layout
 from vidmap.datasets.prepare.video_common import checksum, resumable_http_download
 from vidmap.datasets.resources import dataset_asset
 
-EUROC_PREPARATION_VERSION = 1
+EUROC_PREPARATION_VERSION = 2
 EUROC_LICENSE = "In Copyright - Non-Commercial Use Permitted"
 EUROC_SOURCE = "https://www.research-collection.ethz.ch/items/bcaf173e-5dac-484b-bc37-faf97a594f1f"
 EUROC_LAYOUT = get_dataset_layout("euroc")
@@ -268,7 +268,7 @@ def _images_bytes(images: tuple[ImagePose, ...]) -> bytes:
         output.write(struct.pack("<dddd", qw, qx, qy, qz))
         output.write(struct.pack("<ddd", *transform[:3, 3]))
         output.write(struct.pack("<I", 1))
-        output.write(image.name.encode("utf-8") + b"\0")
+        output.write(f"cam0/{image.name}".encode("utf-8") + b"\0")
         output.write(struct.pack("<Q", 0))
     return output.getvalue()
 
@@ -348,7 +348,7 @@ def euroc_scene_is_prepared(scene_dir: Path) -> bool:
     if scene_dir.name not in sequences:
         return False
     sequence = sequences[scene_dir.name]
-    images_dir = scene_dir / "images"
+    images_dir = scene_dir / "images" / "cam0"
     rec_dir = scene_dir / "rec"
     testset = EUROC_LAYOUT.testsets / sequence.scene / "all.yaml"
     if not images_dir.is_dir() or not all((rec_dir / name).is_file() for name in _MODEL_FILES):
@@ -371,7 +371,7 @@ def euroc_scene_is_prepared(scene_dir: Path) -> bool:
         and camera.model_name == "PINHOLE"
         and len(ordered) == sequence.canonical_images
         and tuple(image_id for image_id, _ in ordered) == tuple(range(sequence.canonical_images))
-        and tuple(image.name for _, image in ordered) == tuple(path.name for path in image_paths)
+        and tuple(image.name for _, image in ordered) == tuple(f"cam0/{path.name}" for path in image_paths)
     )
 
 
@@ -434,7 +434,7 @@ def prepare_scene(scene: str, download_dir: Path) -> None:
         for image in poses:
             contents = _read_member(bundle, f"mav0/cam0/data/{image.name}")
             _write_exact(
-                staging_scene / "images" / image.name,
+                staging_scene / "images" / "cam0" / image.name,
                 _rectify_png(contents, map1, map2, (calibration.width, calibration.height)),
             )
 

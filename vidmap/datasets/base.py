@@ -156,7 +156,7 @@ def _missing_standard_scene_artifacts(layout: DatasetLayout, scenes: tuple[str, 
     for scene in scenes:
         images = layout.images_dir(scene)
         reconstruction = layout.reconstruction_dir(scene)
-        if not images.is_dir() or not any(path.is_file() for path in images.rglob("*")):
+        if not (images / "cam0").is_dir() or not any(path.is_file() for path in (images / "cam0").rglob("*")):
             missing.append(images)
         if not reconstruction.is_dir() or not any(reconstruction.iterdir()):
             missing.append(reconstruction)
