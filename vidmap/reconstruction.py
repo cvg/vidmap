@@ -27,7 +27,7 @@ _FRAME_PATTERN = "%06d.jpg"
 _TIMESTAMP_FRAME_PATTERN = "timestamp-seconds.jpg"
 _TIMESTAMP_FILENAME_WIDTH = 20
 _VIDEO_MANIFEST_NAME = "video_frames.json"
-_VIDEO_MANIFEST_SCHEMA_VERSION = 1
+_VIDEO_MANIFEST_SCHEMA_VERSION = 2
 _VIDEO_DECODE_PROFILE = "ffmpeg-jpeg-q2-vsync0-best-effort-timestamps-v1"
 LOCAL_INPUT_MANIFEST_NAME = "local_input.json"
 _LOCAL_INPUT_SCHEMA_VERSION = 1
@@ -206,6 +206,7 @@ def decode_video_frames(video_path: str | Path, workspace: str | Path) -> Path:
         return frames_dir
 
     staging = Path(tempfile.mkdtemp(prefix=f".{frames_dir.name}.", dir=frames_root))
+    (staging / "cam0").mkdir()
     try:
         command = [
             ffmpeg,
@@ -221,7 +222,7 @@ def decode_video_frames(video_path: str | Path, workspace: str | Path) -> Path:
             "0",
             "-q:v",
             "2",
-            str(staging / _FRAME_PATTERN),
+            str(staging / "cam0" / _FRAME_PATTERN),
         ]
         subprocess.run(command, check=True)
         sequential_frames = _validated_frame_names(staging)
@@ -233,9 +234,9 @@ def decode_video_frames(video_path: str | Path, workspace: str | Path) -> Path:
             )
         frames = []
         for source, timestamp in zip(sequential_frames, frame_times, strict=True):
-            name = f"{timestamp:0{_TIMESTAMP_FILENAME_WIDTH}.9f}.jpg"
+            name = f"cam0/{timestamp:0{_TIMESTAMP_FILENAME_WIDTH}.9f}.jpg"
             destination = staging / name
-            if destination.exists() and destination.name != source:
+            if destination.exists() and destination.relative_to(staging).as_posix() != source:
                 raise RuntimeError(f"Video frame timestamps are not unique at nanosecond precision: {name}")
             (staging / source).rename(destination)
             frames.append(name)
@@ -400,13 +401,15 @@ def _validate_frame_timestamps(frames, timestamps, source: Path) -> None:
 
 
 def _validated_frame_names(path: Path) -> list[str]:
-    images = sorted(entry for entry in path.iterdir() if entry.is_file() and entry.suffix.lower() in IMAGE_SUFFIXES)
+    images = sorted(
+        entry for entry in (path / "cam0").iterdir() if entry.is_file() and entry.suffix.lower() in IMAGE_SUFFIXES
+    )
     if not images:
         raise RuntimeError(f"FFmpeg did not decode any supported images into {path}")
     for image_path in images:
         with Image.open(image_path) as image:
             image.verify()
-    return [image_path.name for image_path in images]
+    return [image_path.relative_to(path).as_posix() for image_path in images]
 
 
 def run_mapping(

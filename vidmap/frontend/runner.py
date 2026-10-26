@@ -62,59 +62,44 @@ def run_local_frontend(
     device: str | torch.device | None = None,
 ) -> FrontendTargetResult:
     """Process local media or a prepared capture into a finalized boundary."""
-    from vidmap.datasets.capture import PreparedCapture, prepare_scene_capture
-    from vidmap.datasets.local import LocalImageParser
+    from vidmap.datasets.capture import PreparedCapture
 
     workspace = Path(workspace).expanduser()
     input_snapshot = None
-    preparation_plan = None
     if isinstance(input_path, PreparedCapture):
         if imnames is not None:
             raise ValueError("Capture inputs already supply calibration and complete frames")
         scene_parser = input_path
-    elif conf.pipeline.rig is not None:
+    elif conf.pipeline.rig is not None and conf.pipeline.rig.projection is not None:
+        from vidmap.datasets.prepare.panorama_capture import prepare_panorama_capture
+
         if imnames is not None:
-            raise ValueError("Rig configuration supplies calibration and complete frames")
-        rig = conf.pipeline.rig
-        if rig.projection is not None:
-            from vidmap.datasets.prepare.panorama_capture import prepare_panorama_capture
-
-            input_snapshot = prepare_panorama_capture(
-                input_path, rig, workspace / "prepared_capture", frontend_options=conf.pipeline
-            )
-        else:
-            from vidmap.datasets.prepare.rig_capture import load_capture, prepare_rig_capture
-
-            source_capture = load_capture(input_path, rig)
-            preparation_plan = resolve_camera_preparation(source_capture, conf.pipeline)
-            input_snapshot = prepare_rig_capture(
-                source_capture,
-                workspace / "prepared_capture",
-                camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
-            )
+            raise ValueError("Panorama inputs require complete frames")
+        input_snapshot = prepare_panorama_capture(
+            input_path, conf.pipeline.rig, workspace / "prepared_capture", frontend_options=conf.pipeline
+        )
         scene_parser = input_snapshot.capture
     else:
+        from vidmap.datasets.prepare.rig_capture import load_capture
         from vidmap.reconstruction import prepare_reconstruction_images
 
-        if conf.pipeline.camera_priors.initialization != "predicted":
-            raise ValueError("Calibrated local input requires a rig configuration, including for one camera")
         image_dir = prepare_reconstruction_images(input_path, workspace)
-        scene_parser = LocalImageParser(image_dir=image_dir, imnames=imnames)
+        scene_parser = load_capture(image_dir, conf.pipeline.rig, imnames=imnames)
+        if not scene_parser.preserve_calibration and conf.pipeline.camera_priors.initialization != "predicted":
+            raise ValueError("Supplied local calibration requires rig.cameras, including for one camera")
     from vidmap.reconstruction import write_local_input_provenance
 
-    scene_parser = prepare_scene_capture(scene_parser)
-    if preparation_plan is None:
-        preparation_plan = resolve_camera_preparation(scene_parser, conf.pipeline)
-        if preparation_plan.undistort_camera_ids:
-            from vidmap.datasets.prepare.rig_capture import prepare_rig_capture
+    preparation_plan = resolve_camera_preparation(scene_parser, conf.pipeline)
+    if preparation_plan.undistort_camera_ids:
+        from vidmap.datasets.prepare.rig_capture import prepare_rig_capture
 
-            input_snapshot = prepare_rig_capture(
-                scene_parser,
-                workspace / "prepared_capture",
-                camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
-            )
-            scene_parser = input_snapshot.capture
-    if input_snapshot is None and (scene_parser.kind is not None or scene_parser.frame_timestamps_ns is not None):
+        input_snapshot = prepare_rig_capture(
+            scene_parser,
+            workspace / "prepared_capture",
+            camera_ids_to_undistort=preparation_plan.undistort_camera_ids,
+        )
+        scene_parser = input_snapshot.capture
+    if input_snapshot is None and (scene_parser.preserve_calibration or scene_parser.frame_timestamps_ns is not None):
         input_snapshot = scene_parser.snapshot()
     device = resolve_device(device)
     image_dir = scene_parser.rgb_dir
@@ -122,7 +107,7 @@ def run_local_frontend(
     identity = FrontendIdentity.from_config(
         conf,
         dataset="local",
-        scene="local" if scene_parser.kind is None else scene_parser.scene,
+        scene="local" if not scene_parser.preserve_calibration else scene_parser.scene,
         mode="all",
         testset_id="input",
         reference_image_ids=reference_image_ids,
@@ -255,7 +240,7 @@ class FrontendRunner:
                     scene_parser = prepare_scene_capture(scene_parser)
                     input_snapshot = (
                         scene_parser.snapshot()
-                        if scene_parser.kind is not None or scene_parser.frame_timestamps_ns is not None
+                        if scene_parser.preserve_calibration or scene_parser.frame_timestamps_ns is not None
                         else None
                     )
                     identity = FrontendIdentity.from_config(

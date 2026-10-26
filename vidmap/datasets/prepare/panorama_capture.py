@@ -110,7 +110,6 @@ def _capture(output, identity, hashes, preview_image_dir, cameras, rig, rotation
         rec=rec,
         rgb_dir=output / "images",
         frame_timestamps_ns=frame_times,
-        kind="panorama",
         provenance={
             "source_fingerprint": fingerprint(identity),
             "panorama": panorama,

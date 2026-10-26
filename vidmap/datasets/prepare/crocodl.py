@@ -41,7 +41,7 @@ _CAMERA_PARAMETER_COUNTS = {
 _TESTSET_LENGTHS = (100, 250, 500, 1500)
 _SAMPLE_TESTSET = re.compile(r"sample-(\d+)\.yaml")
 _HUGGING_FACE_REPOSITORY = "https://huggingface.co/datasets/CroCoDL"
-CROCODL_PREPARATION_VERSION = 1
+CROCODL_PREPARATION_VERSION = 2
 CROCODL_LICENSE = "No dataset license declared by the pinned official Hugging Face repositories"
 
 
@@ -489,7 +489,7 @@ def _build_reconstruction(
                 # intrinsics vary slightly, but changing that policy changes
                 # the canonical mapper input and prior benchmark outputs.
                 camera_id=0 if shared_ios_camera else camera_ids[source.sensor_id],
-                name=source.basename,
+                name=f"cam0/{source.basename}",
                 image_id=image_id,
             ),
             cam_from_world,
@@ -559,8 +559,8 @@ def convert_single_camera_session(
         metadata["source"] = dict(provenance)
     session_dir = Path(output_dir) / location / session_id
     with _staged_session(session_dir) as staging:
-        images_dir, rec_dir = staging / "images", staging / "rec"
-        images_dir.mkdir()
+        images_dir, rec_dir = staging / "images" / "cam0", staging / "rec"
+        images_dir.mkdir(parents=True)
         rec_dir.mkdir()
         _materialize_images(
             reader,

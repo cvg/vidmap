@@ -2,11 +2,12 @@
 
 ## Input images
 
-JPG, JPEG and PNG are supported.
+JPG, JPEG and PNG are supported. Image names are relative to the input root,
+e.g. `cam0/1.png`.
 
 | Input | `--input_data` points to |
 |---|---|
-| Uncalibrated monocular | The image folder itself, or an MP4/MOV video |
+| Uncalibrated monocular | A directory containing `cam0/`, or an MP4/MOV video |
 | Calibrated monocular | A directory containing `cam0/` |
 | Physical rig | A directory containing `cam0/`, `cam1/`, … |
 | Panorama | A directory containing `cam0/` with 360° equirectangular images |
@@ -69,7 +70,7 @@ Optional outputs:
 
 | Path | Contents |
 |---|---|
-| `video_frames/<video-id>/` | Decoded video images |
+| `video_frames/<video-id>/cam0/` | Decoded video images |
 | `prepared_capture/images/` | Projected panorama views or undistorted rig images |
 | `full_depth_maps.h5` | Full depth maps retained with `--cache-depth-maps` |
 | `vidmap-viewer-embedded.html` | Standalone viewer, after [export](../README.md#browser-viewer) |
@@ -94,3 +95,5 @@ Keep this directory together to rerun mapping without extraction:
 [Rerun mapping](../README.md#execution) with `--mapper-inputs` and the original
 frontend config. External mapper inputs are neither modified nor copied into
 the output folder.
+
+Regenerate older flat-layout datasets in a new root to update both images and COLMAP paths.

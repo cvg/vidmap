@@ -396,19 +396,19 @@ local/
 │   ├── lamar/
 │   │   └── scene: <CAB|HGE|LIN>/
 │   │       ├── images/
-│   │       │   └── <capture>/<timestamp>.jpg  # e.g. ios_2022-06-30_15.55.53/130156492755.jpg
+│   │       │   └── cam0/<capture>/<timestamp>.jpg  # e.g. ios_2022-06-30_15.55.53/130156492755.jpg
 │   │       ├── rec/
 │   │       └── preparation.json
 │   ├── euroc/
 │   │   └── scene: <machine_hall-MH_01_easy|machine_hall-MH_02_easy|...>/
 │   │       ├── images/
-│   │       │   └── <timestamp>.png  # e.g. 1403636580863555584.png
+│   │       │   └── cam0/<timestamp>.png  # e.g. 1403636580863555584.png
 │   │       ├── rec/
 │   │       └── preparation.json
 │   ├── eth3d_slam/
 │   │   └── scene: <plant_1|plant_2|...>/
 │   │       ├── images/
-│   │       │   └── <timestamp>.<ext>  # e.g. 5865.976533.png
+│   │       │   └── cam0/<timestamp>.<ext>  # e.g. 5865.976533.png
 │   │       ├── rec/
 │   │       ├── unposed_images.json
 │   │       └── preparation.json
@@ -416,7 +416,7 @@ local/
 │       └── <location>/  # e.g. ARCHE_D2
 │           └── <session>/  # e.g. ios_2023-07-12_20.46.14_000
 │               ├── images/
-│               │   └── <timestamp>.jpg  # e.g. 4971459477.jpg
+│               │   └── cam0/<timestamp>.jpg  # e.g. 4971459477.jpg
 │               ├── rec/
 │               └── metadata.json
 └── testsets/

@@ -26,7 +26,7 @@ from vidmap.datasets.resources import dataset_asset
 
 _URL_TEMPLATE = "https://www.eth3d.net/data/slam/datasets/{scene}_mono.zip"
 _SOURCE_RECORD = ".source_archive.json"
-ETH3D_SLAM_PREPARATION_VERSION = 1
+ETH3D_SLAM_PREPARATION_VERSION = 2
 ETH3D_SLAM_LAYOUT = get_dataset_layout("eth3d_slam")
 
 
@@ -267,17 +267,17 @@ def _convert_scene(source: Path, destination: Path, *, gt_available: bool = True
     reconstruction = pycolmap.Reconstruction()
     camera = pycolmap.Camera(model="PINHOLE", width=width, height=height, params=calibration, camera_id=0)
     reconstruction.add_camera_with_trivial_rig(camera)
-    images_dir = destination / "images"
+    images_dir = destination / "images" / "cam0"
     rec_dir = destination / "rec"
     images_dir.mkdir(parents=True)
     rec_dir.mkdir()
 
     unposed_names = []
     for image_id, (source_image, _) in enumerate(images):
-        image = pycolmap.Image(camera_id=0, name=source_image.name, image_id=image_id)
+        image = pycolmap.Image(camera_id=0, name=f"cam0/{source_image.name}", image_id=image_id)
         if assigned_poses is None:
             camera_from_world = pycolmap.Rigid3d()
-            unposed_names.append(source_image.name)
+            unposed_names.append(f"cam0/{source_image.name}")
         else:
             pose_id = assigned_poses[image_id]
             rotation = pycolmap.Rotation3d(quaternions[pose_id])

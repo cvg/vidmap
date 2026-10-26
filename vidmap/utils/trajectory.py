@@ -51,13 +51,16 @@ class PoseRemap:
         return self.target_subset is not None
 
 
-def _posed_timeline(reconstruction, image_ids: Iterable[int] | None = None) -> tuple[_TimedImage, ...]:
-    selected_ids = reconstruction.images.keys() if image_ids is None else image_ids
+def _posed_timeline(reconstruction, *, camera_id: int | None = None) -> tuple[_TimedImage, ...]:
     timeline = []
-    for image_id in selected_ids:
-        image = reconstruction.images[image_id]
-        if image.has_pose:
-            timeline.append(_TimedImage(int(image_id), timestamp_from_image_name(image.name)))
+    frame_ids = set()
+    for image_id, image in reconstruction.images.items():
+        if not image.has_pose or (camera_id is not None and image.camera_id != camera_id):
+            continue
+        if image.frame_id in frame_ids:
+            raise ValueError("Trajectory contains multiple camera poses per frame; select a reference camera first")
+        frame_ids.add(image.frame_id)
+        timeline.append(_TimedImage(int(image_id), timestamp_from_image_name(image.name)))
     timeline.sort(key=lambda item: (item.timestamp, item.image_id))
     timestamps = [item.timestamp for item in timeline]
     if len(set(timestamps)) != len(timestamps):
@@ -67,6 +70,15 @@ def _posed_timeline(reconstruction, image_ids: Iterable[int] | None = None) -> t
             _TimedImage(item.image_id, float(item.image_id)) for item in sorted(timeline, key=lambda x: x.image_id)
         )
     return tuple(timeline)
+
+
+def trajectory_images(reconstruction, *, camera_id: int | None = None):
+    """Return one camera pose per frame in temporal order.
+
+    Select a reference camera explicitly for multi-camera reconstructions.
+    Omit camera_id only when the input already represents a single trajectory.
+    """
+    return tuple(reconstruction.images[item.image_id] for item in _posed_timeline(reconstruction, camera_id=camera_id))
 
 
 def match_timestamps(target: Iterable[float], source: Iterable[float]) -> tuple[TimestampMatch, ...]:
