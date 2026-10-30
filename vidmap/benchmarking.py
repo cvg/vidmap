@@ -199,7 +199,7 @@ class BenchmarkCaseRunner:
         align_reconstruction_for_evaluation(estimated_reconstruction, scene_parser.rec)
         estimated_trajectory = reconstruction_to_evo_trajectory(estimated_reconstruction)
         aligned_ground_truth_reconstruction = remap_poses_to_timeline(
-            estimated_reconstruction, scene_parser.rec
+            estimated_reconstruction, scene_parser.rec, interpolate_missing_poses=False
         ).reconstruction
         ground_truth_trajectory = reconstruction_to_evo_trajectory(aligned_ground_truth_reconstruction)
         absolute_trajectory_error = compute_ate_statistics(ground_truth_trajectory, estimated_trajectory)
