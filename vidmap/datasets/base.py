@@ -271,7 +271,9 @@ class PreparedSceneParser:
             if unknown:
                 raise ValueError(f"Canonical unposed-image sidecar references unknown images: {sorted(unknown)}")
             unposed_names.update(sidecar_names)
-        for frame_id in sorted({images_by_name[name].frame_id for name in unposed_names}):
+        for frame_id in sorted(
+            {images_by_name[name].frame_id for name in unposed_names if images_by_name[name].has_pose}
+        ):
             self.rec.deregister_frame(frame_id)
 
     def camera(self, imid: int) -> pycolmap.Camera:

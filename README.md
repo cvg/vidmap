@@ -527,7 +527,7 @@ Pose AUC, averaged equally across sequences (%, higher is better):
 | Dataset | 5 cm | 10 cm | 50 cm | 1 m | 10 m |
 | :--- | ---: | ---: | ---: | ---: | ---: |
 | EuRoC (11 sequences) | 28.86 | 60.02 | 91.96 | 95.98 | 99.60 |
-| ETH3D-SLAM (55 sequences) | 63.96 | 74.59 | 89.19 | 93.25 | 98.91 |
+| ETH3D-SLAM (55 sequences) | 78.48 | 85.74 | 94.39 | 96.61 | 99.52 |
 
 </details>
 

@@ -409,6 +409,7 @@ class AbsoluteTrajectoryEvaluator:
         remap = remap_poses_to_timeline(
             ground_truth_reconstruction,
             estimated_reconstruction,
+            # Full-GT evaluation must retain missing estimates as failures.
             prefer_exact_keyframes=True,
         )
         data = {
@@ -423,6 +424,8 @@ class AbsoluteTrajectoryEvaluator:
         ground_truth = ground_truth_reconstruction
         if remap.target_subset is not None and not self.options.eval_on_full_gt_timeline:
             ground_truth = remap.target_subset
+        if ground_truth.num_reg_images() == 0:
+            raise ValueError("No ground-truth-supported poses available for evaluation")
         data |= self.evaluate_aligned_reconstructions(remap.reconstruction, ground_truth)
 
         data["results"]["scale"] = self.options.gt_scale

@@ -2,6 +2,8 @@
 
 from vidmap.datasets.video import VideoDatasetManifest, VideoSequence
 
+ETH3D_SLAM_PREPARATION_VERSION = 3
+
 ETH3D_SLAM_SCENES = (
     "cables_1",
     "cables_2",

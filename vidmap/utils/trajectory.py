@@ -122,6 +122,8 @@ def _add_target_image(reconstruction, target_image, pose) -> None:
 
 
 def _exact_keyframe_remap(target, source, target_timeline, source_timeline) -> PoseRemap | None:
+    unavailable = {image.name for image in target.images.values() if not image.has_pose}
+    source_timeline = tuple(item for item in source_timeline if source.images[item.image_id].name not in unavailable)
     target_matches = match_timestamps(
         (item.timestamp for item in source_timeline),
         (item.timestamp for item in target_timeline),
@@ -148,12 +150,14 @@ def remap_poses_to_timeline(
     source,
     *,
     prefer_exact_keyframes: bool = False,
+    interpolate_missing_poses: bool = True,
 ) -> PoseRemap:
     """Map source poses to target image IDs by timestamp.
 
     Exact source keyframes can be retained without interpolation when every
     source timestamp exists on the target timeline. Otherwise, source poses are
     interpolated at every target timestamp inside the source time range.
+    Disable filling explicitly unposed source images when the source is GT.
     """
     target_timeline = _posed_timeline(target)
     source_timeline = _posed_timeline(source)
@@ -177,10 +181,17 @@ def remap_poses_to_timeline(
         (item.timestamp for item in source_timeline),
     )
     remapped = _empty_pose_reconstruction(target)
+    unavailable = (
+        {image.name for image in source.images.values() if not image.has_pose}
+        if not interpolate_missing_poses
+        else set()
+    )
     for target_item, match in zip(target_timeline, matches, strict=True):
         if match.fraction is None:
             continue
         target_image = target.images[target_item.image_id]
+        if target_image.name in unavailable:
+            continue
         if match.is_exact:
             source_item = source_timeline[match.before]
             pose = source.images[source_item.image_id].cam_from_world()
@@ -220,10 +231,10 @@ def align_reconstruction_to_reference_sequence(
     colmap_bin: str = "colmap",
 ) -> tuple[pycolmap.Reconstruction, pycolmap.Sim3d]:
     """Align a reconstruction to the posed timeline in a reference model."""
-    posed_image_ids = [image_id for image_id, image in reference.images.items() if image.has_pose]
     mapped_reference = remap_poses_to_timeline(
         reconstruction,
-        _select_subreconstruction(posed_image_ids, reference),
+        reference,
+        interpolate_missing_poses=False,
     ).reconstruction
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -261,7 +272,9 @@ def align_reconstruction_to_reference_sequence(
             used_translation_fallback = True
             shutil.copytree(source_dir, aligned_dir, dirs_exist_ok=True)
 
-            source_centers = [image.projection_center() for image in reconstruction.images.values() if image.has_pose]
+            source_centers = [
+                reconstruction.images[image_id].projection_center() for image_id in mapped_reference.images
+            ]
             reference_centers = [
                 image.projection_center() for image in mapped_reference.images.values() if image.has_pose
             ]

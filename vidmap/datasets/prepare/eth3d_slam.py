@@ -17,16 +17,14 @@ import yaml
 from PIL import Image
 
 from vidmap.datasets.base import CANONICAL_UNPOSED_IMAGES_FILENAME, DatasetLayout
-from vidmap.datasets.eth3d_slam import ETH3D_SLAM_MANIFEST
+from vidmap.datasets.eth3d_slam import ETH3D_SLAM_MANIFEST, ETH3D_SLAM_PREPARATION_VERSION
 from vidmap.datasets.layouts import get_dataset_layout
 from vidmap.datasets.prepare import filesystem as prep_fs
-from vidmap.datasets.prepare.timestamp_matching import assign_images_to_timestamp_ids
 from vidmap.datasets.prepare.video_common import resumable_http_download, safe_extract_zip
 from vidmap.datasets.resources import dataset_asset
 
 _URL_TEMPLATE = "https://www.eth3d.net/data/slam/datasets/{scene}_mono.zip"
 _SOURCE_RECORD = ".source_archive.json"
-ETH3D_SLAM_PREPARATION_VERSION = 2
 ETH3D_SLAM_LAYOUT = get_dataset_layout("eth3d_slam")
 
 
@@ -134,16 +132,12 @@ def _scene_is_complete(layout: DatasetLayout, scene: str) -> bool:
         archive = _source_archive(scene)
     except ValueError:
         archive = None
-    expected_unposed = None
-    if archive is not None:
-        expected_unposed = set() if archive.gt_available else names
     return (
         bool(reconstruction.cameras)
         and bool(image_ids)
         and testsets == {"0": image_ids}
         and unposed is not None
         and set(unposed) <= names
-        and (expected_unposed is None or set(unposed) == expected_unposed)
         and isinstance(preparation, Mapping)
         and preparation.get("preparation_version") == ETH3D_SLAM_PREPARATION_VERSION
         and (archive is None or preparation.get("source") == archive.record())
@@ -254,15 +248,47 @@ def _image_dimensions(images: Sequence[tuple[Path, float]]) -> tuple[int, int]:
     return width, height
 
 
+def ground_truth_poses_at_timestamps(
+    image_times, timestamps, translations, quaternions, *, max_interpolation_timespan=1 / 75
+):
+    """Interpolate world-from-camera GT using the official ETH3D support rule.
+
+    ETH3D excludes extrapolation and brackets wider than its capture-specific limit.
+    In particular, a nearby endpoint does not make a tracking gap valid GT.
+    """
+    poses = []
+    for timestamp in image_times:
+        after = int(np.searchsorted(timestamps, timestamp, side="right"))
+        if (
+            after == 0
+            or after == len(timestamps)
+            or timestamps[after] - timestamps[after - 1] > max_interpolation_timespan
+        ):
+            poses.append(None)
+            continue
+        before = after - 1
+        fraction = (timestamp - timestamps[before]) / (timestamps[after] - timestamps[before])
+        endpoints = [
+            pycolmap.Rigid3d(pycolmap.Rotation3d(quaternions[index]), translations[index]) for index in (before, after)
+        ]
+        poses.append(pycolmap.Rigid3d.interpolate(*endpoints, fraction))
+    return poses
+
+
 def _convert_scene(source: Path, destination: Path, *, gt_available: bool = True) -> list[int]:
     calibration = _read_calibration(source / "calibration.txt")
     images = _source_images(source)
     width, height = _image_dimensions(images)
-    assigned_poses = None
-    translations = quaternions = None
+    poses = [None] * len(images)
     if gt_available:
         timestamps, translations, quaternions = _read_groundtruth(source / "groundtruth.txt")
-        assigned_poses = assign_images_to_timestamp_ids((timestamp for _, timestamp in images), timestamps)
+        poses = ground_truth_poses_at_timestamps(
+            (timestamp for _, timestamp in images),
+            timestamps,
+            translations,
+            quaternions,
+            max_interpolation_timespan=1 / 11.25 if source.name.startswith("sfm_") else 1 / 75,
+        )
 
     reconstruction = pycolmap.Reconstruction()
     camera = pycolmap.Camera(model="PINHOLE", width=width, height=height, params=calibration, camera_id=0)
@@ -275,14 +301,14 @@ def _convert_scene(source: Path, destination: Path, *, gt_available: bool = True
     unposed_names = []
     for image_id, (source_image, _) in enumerate(images):
         image = pycolmap.Image(camera_id=0, name=f"cam0/{source_image.name}", image_id=image_id)
-        if assigned_poses is None:
-            camera_from_world = pycolmap.Rigid3d()
-            unposed_names.append(f"cam0/{source_image.name}")
+        pose = poses[image_id]
+        if pose is None:
+            unposed_names.append(image.name)
+            # COLMAP omits unregistered images when writing; the sidecar removes
+            # this placeholder pose on load while preserving the input image.
+            reconstruction.add_image_with_trivial_frame(image, pycolmap.Rigid3d())
         else:
-            pose_id = assigned_poses[image_id]
-            rotation = pycolmap.Rotation3d(quaternions[pose_id])
-            camera_from_world = pycolmap.Rigid3d(rotation=rotation, translation=translations[pose_id]).inverse()
-        reconstruction.add_image_with_trivial_frame(image, camera_from_world)
+            reconstruction.add_image_with_trivial_frame(image, pose.inverse())
         shutil.copy2(source_image, images_dir / source_image.name)
 
     reconstruction.write_binary(rec_dir)
