@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -442,6 +443,13 @@ def run_mapping(
 
     def initialize_output() -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
+        input_link = output_dir / "mapper_inputs"
+        if input_link.resolve() != mapper_inputs.directory:
+            if input_link.is_symlink() and overwrite_outputs:
+                input_link.unlink()
+            input_link.symlink_to(
+                os.path.relpath(mapper_inputs.directory, output_dir.resolve()), target_is_directory=True
+            )
         dump_mapping_configs(
             frontend_conf,
             mapping_conf,
@@ -463,10 +471,11 @@ def run_mapping(
         overwrite_outputs=overwrite_outputs,
         on_inputs_validated=initialize_output,
     )
+    projection = frontend_conf.pipeline.rig is not None and frontend_conf.pipeline.rig.projection is not None
     extract_point_colors(
         reconstruction,
         mapper_inputs,
-        image_dir=None if scene_parser is None else scene_parser.rgb_dir,
+        image_dir=None if scene_parser is None or projection else scene_parser.rgb_dir,
     )
     if mapper_inputs.full_depth_maps_path is not None:
         from vidmap.depth_artifacts import write_reference

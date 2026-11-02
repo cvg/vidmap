@@ -326,15 +326,7 @@ def prepare_scene_capture(scene_parser) -> PreparedCapture:
     """Adapt a dataset's calibration and image inventory to the frontend capture."""
     if isinstance(scene_parser, PreparedCapture):
         return scene_parser
-
-    return PreparedCapture(
-        rec=copy_unposed_reconstruction(scene_parser.rec),
-        rgb_dir=scene_parser.rgb_dir,
-        frame_timestamps_ns=None,
-        provenance={},
-        preserve_calibration=False,
-        forced_keyframe_names=frozenset(image.name for image in scene_parser.rec.images.values() if image.has_pose),
-    )
+    return scene_parser.frontend_capture()
 
 
 def copy_unposed_reconstruction(source, reference_image_names=None) -> pycolmap.Reconstruction:

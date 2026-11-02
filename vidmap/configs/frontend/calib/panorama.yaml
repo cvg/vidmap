@@ -1,0 +1,11 @@
+defaults:
+  - rig
+
+rig:
+  projection:
+    aspect_ratio: [1, 1]
+    horizontal_fov_degrees: 120.0
+    views:
+      0: {yaw_degrees: 0.0, pitch_degrees: 0.0}
+      1: {yaw_degrees: 120.0, pitch_degrees: 0.0}
+      2: {yaw_degrees: 240.0, pitch_degrees: 0.0}

@@ -4,17 +4,12 @@ import logging
 from dataclasses import replace
 
 from vidmap.benchmark.results import BenchmarkResultStore
-from vidmap.benchmark.trajectory import (
-    AbsoluteTrajectoryEvaluator,
-    AbsoluteTrajectoryOptions,
-    align_reconstruction_for_evaluation,
-)
+from vidmap.benchmark.trajectory import AbsoluteTrajectoryEvaluator
 from vidmap.frontend.identity import FrontendIdentity
 from vidmap.mapper.inputs import MapperInputs
 from vidmap.reconstruction import run_mapping
 from vidmap.run_options import RunOptions
 from vidmap.utils.logging import log_context
-from vidmap.utils.trajectory import compute_ate_statistics, reconstruction_to_evo_trajectory, remap_poses_to_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +31,7 @@ class BenchmarkRunner:
         self.selection = selection
         self.run_options = RunOptions() if run_options is None else run_options
         self.output_name = output_name
-        self.evaluator = AbsoluteTrajectoryEvaluator(options=AbsoluteTrajectoryOptions.from_config(conf.evaluation))
+        self.evaluator = AbsoluteTrajectoryEvaluator.from_config(conf, frontend_conf.pipeline.rig)
 
     def run(
         self,
@@ -196,21 +191,17 @@ class BenchmarkCaseRunner:
 
         if self.evaluator is None:
             raise RuntimeError("Benchmark evaluation requires an evaluator")
-        align_reconstruction_for_evaluation(estimated_reconstruction, scene_parser.rec)
-        estimated_trajectory = reconstruction_to_evo_trajectory(estimated_reconstruction)
-        aligned_ground_truth_reconstruction = remap_poses_to_timeline(
-            estimated_reconstruction, scene_parser.rec, interpolate_missing_poses=False
-        ).reconstruction
-        ground_truth_trajectory = reconstruction_to_evo_trajectory(aligned_ground_truth_reconstruction)
-        absolute_trajectory_error = compute_ate_statistics(ground_truth_trajectory, estimated_trajectory)
-        self.results.write_ate(absolute_trajectory_error)
         trajectory_evaluation = self.evaluator.evaluate(
             estimated_reconstruction=estimated_reconstruction,
             ground_truth_reconstruction=scene_parser.rec,
+            align_in_place=True,
         )
+        self.results.write_ate(trajectory_evaluation.ate)
         trajectory_metrics = trajectory_evaluation.summarize(verbose=logger.isEnabledFor(logging.INFO))
-        self.results.write_metrics(absolute_trajectory_error, trajectory_metrics)
+        self.results.write_metrics(trajectory_evaluation.ate, trajectory_metrics)
         self.results.write_reconstruction(estimated_reconstruction)
-        self.results.write_trajectory(estimated_trajectory, ground_truth_trajectory)
+        self.results.write_trajectory(
+            trajectory_evaluation.estimated_trajectory, trajectory_evaluation.ground_truth_trajectory
+        )
 
         return estimated_reconstruction

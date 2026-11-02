@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -13,6 +13,7 @@ import yaml
 from PIL import Image
 
 if TYPE_CHECKING:
+    from vidmap.datasets.capture import PreparedCapture
     from vidmap.datasets.video import VideoDatasetManifest
 
 from vidmap.datasets.names import EvaluationMetric
@@ -51,6 +52,27 @@ def validate_path_component(value: object, label: str) -> str:
 
 
 @dataclass(frozen=True)
+class PreparedTestset:
+    """A benchmark selection with an explicit prepared input, within its scene."""
+
+    recording: str
+    variant: str
+    image_ids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        validate_path_component(self.recording, "Recording")
+        validate_path_component(self.variant, "Image variant")
+        if any(
+            type(image_id) is not int or not 0 <= image_id < pycolmap.INVALID_IMAGE_ID for image_id in self.image_ids
+        ):
+            raise ValueError("Testsets must contain valid integer image IDs")
+        object.__setattr__(self, "image_ids", tuple(self.image_ids))
+
+    def as_dict(self) -> dict:
+        return dict(recording=self.recording, variant=self.variant, image_ids=list(self.image_ids))
+
+
+@dataclass(frozen=True)
 class DatasetLayout:
     name: str
     data_dir: Path
@@ -61,13 +83,19 @@ class DatasetLayout:
     manifest: VideoDatasetManifest | None = None
 
     def scene_dir(self, scene: str) -> Path:
-        return self.data_dir / scene
+        return self.data_dir / validate_path_component(scene, "Dataset scene")
 
-    def images_dir(self, scene: str) -> Path:
-        return self.scene_dir(scene) / "images"
+    def recording_dir(self, scene: str, recording: str) -> Path:
+        return self.scene_dir(scene) / validate_path_component(recording, "Recording")
 
-    def reconstruction_dir(self, scene: str) -> Path:
-        return self.scene_dir(scene) / "rec"
+    def input_dir(self, scene: str, recording: str, variant: str) -> Path:
+        return self.recording_dir(scene, recording) / validate_path_component(variant, "Image variant")
+
+    def images_dir(self, scene: str, recording: str, variant: str) -> Path:
+        return self.input_dir(scene, recording, variant) / "images"
+
+    def reconstruction_dir(self, scene: str, recording: str, variant: str) -> Path:
+        return self.input_dir(scene, recording, variant) / "rec"
 
     def testset_path(self, scene: str, mode: str) -> Path:
         scene = validate_path_component(scene, "Dataset scene")
@@ -90,7 +118,7 @@ class DatasetLayout:
             raise ValueError(f"Dataset {self.name!r} does not define scenes: {unknown}")
         return tuple(scene for scene in self.scenes if scene in selected_set)
 
-    def read_testsets(self, scene: str, mode: str) -> dict[str, list[int]] | None:
+    def read_testsets(self, scene: str, mode: str) -> dict[str, PreparedTestset] | None:
         path = self.testset_path(scene, mode)
         if not path.exists():
             return None
@@ -102,8 +130,8 @@ class DatasetLayout:
         if not isinstance(testsets, Mapping):
             raise ValueError(f"Invalid testset file {path}: expected a YAML mapping")
 
-        normalized: dict[str, list[int]] = {}
-        for key, image_ids in testsets.items():
+        normalized = {}
+        for key, selection in testsets.items():
             if isinstance(key, bool) or not isinstance(key, (str, int)):
                 raise ValueError(f"Invalid testset file {path}: testset IDs must be strings or integers, got {key!r}")
             testset_id = str(key)
@@ -113,16 +141,13 @@ class DatasetLayout:
                 raise ValueError(f"Invalid testset file {path}: unsafe testset ID {key!r}") from error
             if testset_id in normalized:
                 raise ValueError(f"Invalid testset file {path}: duplicate testset ID {testset_id!r}")
-            if not isinstance(image_ids, list) or any(
-                isinstance(image_id, bool)
-                or not isinstance(image_id, int)
-                or not 0 <= image_id < pycolmap.INVALID_IMAGE_ID
-                for image_id in image_ids
-            ):
+            if not isinstance(selection, Mapping) or set(selection) != {"recording", "variant", "image_ids"}:
                 raise ValueError(
-                    f"Invalid testset file {path}: {testset_id!r} must contain a sequence of valid integer image IDs"
+                    f"Invalid testset file {path}: {testset_id!r} must identify its recording and variant"
                 )
-            normalized[testset_id] = list(image_ids)
+            if not isinstance(selection["image_ids"], list):
+                raise ValueError(f"Invalid testset file {path}: {testset_id!r} image_ids must be a list")
+            normalized[testset_id] = PreparedTestset(**selection)
         return normalized
 
 
@@ -132,9 +157,7 @@ class DatasetParser(Protocol):
     reconstruction_dir: Path | None
     rec: pycolmap.Reconstruction
 
-
-SceneParserFactory = Callable[[str], DatasetParser]
-BatchCaseParser = Callable[[str, Iterable[str]], Iterable[DatasetParser]]
+    def frontend_capture(self) -> PreparedCapture: ...
 
 
 @dataclass(frozen=True)
@@ -146,39 +169,53 @@ class DatasetCapabilities:
 @dataclass(frozen=True)
 class DatasetPreparation:
     module: str
+    profiles: tuple[tuple[str, str], ...] = ()
 
-    def __call__(self, scenes: tuple[str, ...] | None = None) -> None:
-        importlib.import_module(self.module).main(scenes=scenes)
+    def profile(self, mode: str) -> str:
+        profiles = dict(self.profiles)
+        if mode not in profiles:
+            raise ValueError(f"Unsupported preparation mode {mode!r}; expected one of {tuple(profiles)}")
+        return profiles[mode]
+
+    def __call__(self, scenes: tuple[str, ...] | None = None, *, mode: str) -> None:
+        module = importlib.import_module(self.module)
+        if self.profiles:
+            module.main(scenes=scenes, profile=self.profile(mode))
+        else:
+            module.main(scenes=scenes)
 
 
-def _missing_standard_scene_artifacts(layout: DatasetLayout, scenes: tuple[str, ...]) -> tuple[Path, ...]:
+def _missing_standard_scene_artifacts(layout: DatasetLayout, scenes: tuple[str, ...], mode: str) -> tuple[Path, ...]:
     missing = []
     for scene in scenes:
-        images = layout.images_dir(scene)
-        reconstruction = layout.reconstruction_dir(scene)
-        if not (images / "cam0").is_dir() or not any(path.is_file() for path in (images / "cam0").rglob("*")):
-            missing.append(images)
-        if not reconstruction.is_dir() or not any(reconstruction.iterdir()):
-            missing.append(reconstruction)
-        if layout.manifest is not None:
-            sidecar = layout.scene_dir(scene) / CANONICAL_UNPOSED_IMAGES_FILENAME
-            testset = layout.testset_path(scene, "all")
-            if not sidecar.is_file():
-                missing.append(sidecar)
-            if not testset.is_file():
-                missing.append(testset)
+        testsets = layout.read_testsets(scene, mode)
+        if testsets is None:
+            missing.append(layout.testset_path(scene, mode))
+            continue
+        for recording, variant in dict.fromkeys((case.recording, case.variant) for case in testsets.values()):
+            images = layout.images_dir(scene, recording, variant)
+            reconstruction = layout.reconstruction_dir(scene, recording, variant)
+            receipt = layout.recording_dir(scene, recording) / "preparation.json"
+            if not receipt.is_file():
+                missing.append(receipt)
+            if not (images / "cam0").is_dir() or not any(path.is_file() for path in (images / "cam0").rglob("*")):
+                missing.append(images)
+            if not reconstruction.is_dir() or not any(reconstruction.iterdir()):
+                missing.append(reconstruction)
+            if layout.manifest is not None:
+                sidecar = layout.input_dir(scene, recording, variant) / CANONICAL_UNPOSED_IMAGES_FILENAME
+                if not sidecar.is_file():
+                    missing.append(sidecar)
     return tuple(missing)
 
 
 @dataclass(frozen=True)
 class DatasetSpec:
     name: str
-    parser: SceneParserFactory
     layout: DatasetLayout
     preparer: DatasetPreparation | Callable[[], None] | None = None
     capabilities: DatasetCapabilities = DatasetCapabilities()
-    batch_case_parser: BatchCaseParser | None = None
-    missing_artifacts: Callable[[DatasetLayout, tuple[str, ...]], tuple[Path, ...]] | None = (
+    missing_artifacts: Callable[[DatasetLayout, tuple[str, ...], str], tuple[Path, ...]] | None = (
         _missing_standard_scene_artifacts
     )
     default_mode: str = "minimal"
@@ -191,13 +228,24 @@ class DatasetSpec:
         if self.default_evaluation_metric not in {"pose_auc", "wate_auc"}:
             raise ValueError(f"Unsupported default evaluation metric {self.default_evaluation_metric!r}")
 
-    def prepare(self, scenes: Iterable[str] | None = None) -> None:
+    def _missing_preparation_artifacts(self, scenes: tuple[str, ...], mode: str) -> tuple[Path, ...]:
+        missing = self.missing_artifacts(self.layout, scenes, mode)
+        if not self.capabilities.allows_missing_testsets:
+            missing += tuple(
+                self.layout.testset_path(scene, mode)
+                for scene in scenes
+                if not self.layout.testset_path(scene, mode).is_file()
+            )
+        return missing
+
+    def prepare(self, scenes: Iterable[str] | None = None, *, mode: str | None = None) -> None:
         if self.missing_artifacts is None:
             return
         selected_scenes = self.layout.select_scenes(scenes)
         if not selected_scenes:
             return
-        missing = self.missing_artifacts(self.layout, selected_scenes)
+        mode = self.default_mode if mode is None else mode
+        missing = self._missing_preparation_artifacts(selected_scenes, mode)
         if not missing:
             return
         if self.preparer is None:
@@ -207,10 +255,10 @@ class DatasetSpec:
                 f"provide non-empty prepared artifacts at: {expected}"
             )
         if isinstance(self.preparer, DatasetPreparation):
-            self.preparer(selected_scenes)
+            self.preparer(selected_scenes, mode=mode)
         else:
             self.preparer()
-        missing = self.missing_artifacts(self.layout, selected_scenes)
+        missing = self._missing_preparation_artifacts(selected_scenes, mode)
         if missing:
             expected = ", ".join(str(path) for path in missing)
             raise RuntimeError(
@@ -218,7 +266,9 @@ class DatasetSpec:
                 f"missing non-empty prepared artifacts: {expected}"
             )
 
-    def select_testsets(self, scene: str, mode: str, testset_ids: Iterable[str] | None = None) -> dict[str, list[int]]:
+    def select_testsets(
+        self, scene: str, mode: str, testset_ids: Iterable[str] | None = None
+    ) -> dict[str, PreparedTestset]:
         testsets = self.layout.read_testsets(scene, mode)
         if testsets is None:
             if self.capabilities.allows_missing_testsets:
@@ -230,30 +280,40 @@ class DatasetSpec:
             return {testset_id: testsets[testset_id] for testset_id in testset_ids if testset_id in testsets}
         return {testset_id: testsets[testset_id] for testset_id in testset_ids}
 
-    def parsers_for_cases(self, scene: str, testset_descs: Iterable[str]) -> Iterator[DatasetParser]:
-        if self.batch_case_parser is not None:
-            yield from self.batch_case_parser(scene, testset_descs)
-            return
-
-        parser = self.parser(scene)
-        for _ in testset_descs:
+    def parsers_for_cases(self, scene: str, selections: Iterable[PreparedTestset]) -> Iterator[DatasetParser]:
+        parser = None
+        current = None
+        for selection in selections:
+            key = (selection.recording, selection.variant)
+            if key != current:
+                parser = PreparedSceneParser(self.layout, scene, selection)
+                current = key
             yield parser
 
 
 class PreparedSceneParser:
-    def __init__(self, layout: DatasetLayout, scene: str) -> None:
+    def __init__(self, layout: DatasetLayout, scene: str, selection: PreparedTestset) -> None:
         self.layout = layout
         self.scene = scene
-        self.rgb_dir = layout.images_dir(scene)
-        self.reconstruction_dir = layout.reconstruction_dir(scene)
+        self.recording = selection.recording
+        self.variant = selection.variant
+        self.input_dir = layout.input_dir(scene, self.recording, self.variant)
+        self.rgb_dir = self.input_dir / "images"
+        self.reconstruction_dir = self.input_dir / "rec"
+        preparation = json.loads((layout.recording_dir(scene, self.recording) / "preparation.json").read_text())
+        self.input_metadata = preparation["variants"][self.variant]
         self.rec = pycolmap.Reconstruction(self.reconstruction_dir)
+        if self.rec.num_points3D() or any(image.num_points2D() for image in self.rec.images.values()):
+            raise ValueError(
+                f"Prepared reference models must contain only camera poses and calibration: {self.reconstruction_dir}"
+            )
         images_by_name = {image.name: image for image in self.rec.images.values()}
         unposed_names = {
             name for name, image in images_by_name.items() if image.has_pose and not image_has_public_pose(image)
         }
         if layout.manifest is not None:
             layout.manifest.get(scene)
-            sidecar = layout.scene_dir(scene) / CANONICAL_UNPOSED_IMAGES_FILENAME
+            sidecar = self.input_dir / CANONICAL_UNPOSED_IMAGES_FILENAME
             if not sidecar.is_file():
                 raise FileNotFoundError(f"Canonical scene is missing unposed-image sidecar: {sidecar}")
             try:
@@ -275,6 +335,41 @@ class PreparedSceneParser:
             {images_by_name[name].frame_id for name in unposed_names if images_by_name[name].has_pose}
         ):
             self.rec.deregister_frame(frame_id)
+
+    def frontend_capture(self) -> PreparedCapture:
+        """Copy input geometry without exposing ground-truth poses to the frontend."""
+        from vidmap.datasets.capture import PreparedCapture, copy_unposed_reconstruction
+
+        if self.input_metadata["rig"] is not None:
+            from vidmap.datasets.prepare.helpers.rig_capture import load_capture
+            from vidmap.frontend.options.rig import RigOptions
+
+            options = RigOptions(**self.input_metadata["rig"])
+            streams = {Path(image.name).parts[0] for image in self.rec.images.values()}
+            if streams == {"cam0"}:
+                options = replace(options, cameras=options.cameras[:1], frames=None)
+            elif streams != {f"cam{i}" for i in range(len(options.cameras))}:
+                raise ValueError("Prepared rig selection must contain cam0 or all declared streams")
+            capture = load_capture(self.rgb_dir, options)
+            selected = copy_unposed_reconstruction(capture.rec, [image.name for image in self.rec.images.values()])
+            return replace(
+                capture,
+                rec=selected,
+                frame_timestamps_ns={fid: capture.frame_timestamps_ns[fid] for fid in selected.frames},
+            )
+
+        return PreparedCapture(
+            rec=copy_unposed_reconstruction(self.rec),
+            rgb_dir=self.rgb_dir,
+            frame_timestamps_ns=None,
+            provenance={},
+            preserve_calibration=False,
+            forced_keyframe_names=(
+                frozenset(image.name for image in self.rec.images.values() if image.has_pose)
+                if self.input_metadata["force_gt_keyframes"]
+                else frozenset()
+            ),
+        )
 
     def camera(self, imid: int) -> pycolmap.Camera:
         return self.rec.cameras[self.rec.images[imid].camera_id]

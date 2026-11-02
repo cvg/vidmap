@@ -17,11 +17,12 @@ import pycolmap
 import yaml
 from scipy.spatial.transform import Rotation
 
+from vidmap.datasets.base import PreparedTestset
 from vidmap.datasets.layouts import get_dataset_layout
-from vidmap.datasets.prepare.video_common import checksum, resumable_http_download
+from vidmap.datasets.prepare.helpers.video_common import checksum, resumable_http_download
 from vidmap.datasets.resources import dataset_asset
 
-EUROC_PREPARATION_VERSION = 2
+EUROC_PREPARATION_VERSION = 3
 EUROC_LICENSE = "In Copyright - Non-Commercial Use Permitted"
 EUROC_SOURCE = "https://www.research-collection.ethz.ch/items/bcaf173e-5dac-484b-bc37-faf97a594f1f"
 EUROC_LAYOUT = get_dataset_layout("euroc")
@@ -41,7 +42,7 @@ class SourceArchive:
 @dataclass(frozen=True)
 class SequenceSource:
     scene: str
-    archive: str
+    recording: str
     member: str
     size: int
     sha256: str
@@ -81,9 +82,9 @@ def source_inventory() -> tuple[dict[str, SourceArchive], dict[str, SequenceSour
         for name, raw in payload["archives"].items()
     }
     sequences = {
-        scene: SequenceSource(
-            scene=scene,
-            archive=raw["archive"],
+        recording: SequenceSource(
+            scene=raw["archive"],
+            recording=recording,
             member=raw["member"],
             size=int(raw["size"]),
             sha256=raw["sha256"],
@@ -92,12 +93,10 @@ def source_inventory() -> tuple[dict[str, SourceArchive], dict[str, SequenceSour
             first_image=raw["first_image"],
             last_image=raw["last_image"],
         )
-        for scene, raw in payload["sequences"].items()
+        for recording, raw in payload["sequences"].items()
     }
-    if tuple(sequences) != EUROC_LAYOUT.scenes:
-        raise ValueError("EuRoC source inventory does not exactly match the registered sequence manifest")
-    if any(sequence.archive not in archives for sequence in sequences.values()):
-        raise ValueError("EuRoC sequence inventory references an unknown source archive")
+    if tuple(archives) != EUROC_LAYOUT.scenes or {sequence.scene for sequence in sequences.values()} != set(archives):
+        raise ValueError("EuRoC source inventory does not exactly match the registered scenes")
     return archives, sequences
 
 
@@ -273,9 +272,19 @@ def _images_bytes(images: tuple[ImagePose, ...]) -> bytes:
     return output.getvalue()
 
 
-def canonical_testset_bytes(image_count: int) -> bytes:
-    """Return the canonical full-trajectory EuRoC testset bytes."""
-    return yaml.safe_dump({0: list(range(image_count))}, default_flow_style=True).encode("utf-8")
+def canonical_testset_bytes(scene: str) -> bytes:
+    """Select each recording in one scene as an independent full trajectory."""
+    _, sequences = source_inventory()
+    testsets = {
+        sequence.recording: PreparedTestset(
+            sequence.recording, "rectified", tuple(range(sequence.canonical_images))
+        ).as_dict()
+        for sequence in sequences.values()
+        if sequence.scene == scene
+    }
+    if not testsets:
+        raise ValueError(f"Unknown EuRoC scene {scene!r}")
+    return yaml.safe_dump(testsets, sort_keys=False, default_flow_style=True).encode("utf-8")
 
 
 def _write_exact(destination: Path, contents: bytes) -> None:
@@ -295,10 +304,10 @@ def _write_exact(destination: Path, contents: bytes) -> None:
     partial.replace(destination)
 
 
-def _ensure_testset(sequence: SequenceSource) -> None:
+def _ensure_testset(scene: str) -> None:
     _write_exact(
-        EUROC_LAYOUT.testsets / sequence.scene / "all.yaml",
-        canonical_testset_bytes(sequence.canonical_images),
+        EUROC_LAYOUT.testset_path(scene, "all"),
+        canonical_testset_bytes(scene),
     )
 
 
@@ -312,7 +321,7 @@ def _validate_archive(path: Path, *, size: int, sha256: str) -> None:
 
 
 def _sequence_archive(sequence: SequenceSource, aggregate: SourceArchive, download_dir: Path) -> Path:
-    destination = download_dir / "sequences" / f"{sequence.scene}.zip"
+    destination = download_dir / "sequences" / f"{sequence.recording}.zip"
     if destination.exists():
         _validate_archive(destination, size=sequence.size, sha256=sequence.sha256)
         return destination
@@ -342,24 +351,27 @@ def _read_member(bundle: zipfile.ZipFile, member: str) -> bytes:
     return bundle.read(member)
 
 
-def euroc_scene_is_prepared(scene_dir: Path) -> bool:
-    """Check the exact established image/pose/testset boundary for one sequence."""
-    _, sequences = source_inventory()
-    if scene_dir.name not in sequences:
+def _recording_is_prepared(recording_dir: Path, sequence: SequenceSource) -> bool:
+    """Check the established image and reference-model contents for one recording."""
+    images_dir = recording_dir / "rectified" / "images" / "cam0"
+    rec_dir = recording_dir / "rectified" / "rec"
+    receipt = recording_dir / "preparation.json"
+    if (
+        not receipt.is_file()
+        or not images_dir.is_dir()
+        or not all((rec_dir / name).is_file() for name in _MODEL_FILES)
+    ):
         return False
-    sequence = sequences[scene_dir.name]
-    images_dir = scene_dir / "images" / "cam0"
-    rec_dir = scene_dir / "rec"
-    testset = EUROC_LAYOUT.testsets / sequence.scene / "all.yaml"
-    if not images_dir.is_dir() or not all((rec_dir / name).is_file() for name in _MODEL_FILES):
+    preparation = json.loads(receipt.read_text(encoding="utf-8"))
+    if preparation["preparation_version"] != EUROC_PREPARATION_VERSION or preparation["variants"] != {
+        "rectified": {"rig": None, "force_gt_keyframes": True}
+    }:
         return False
     image_paths = tuple(sorted(path for path in images_dir.iterdir() if path.is_file()))
     if (
         len(image_paths) != sequence.canonical_images
         or image_paths[0].name != sequence.first_image
         or image_paths[-1].name != sequence.last_image
-        or not testset.is_file()
-        or testset.read_bytes() != canonical_testset_bytes(sequence.canonical_images)
     ):
         return False
     reconstruction = pycolmap.Reconstruction(rec_dir)
@@ -375,11 +387,29 @@ def euroc_scene_is_prepared(scene_dir: Path) -> bool:
     )
 
 
-def _write_preparation_record(scene_dir: Path, sequence: SequenceSource, aggregate: SourceArchive) -> None:
+def euroc_scene_is_prepared(scene_dir: Path) -> bool:
+    """Check that every recording and the shared scene testset are prepared."""
+    scene = scene_dir.name
+    if scene not in EUROC_LAYOUT.scenes:
+        return False
+    testset = EUROC_LAYOUT.testset_path(scene, "all")
+    if not testset.is_file() or testset.read_bytes() != canonical_testset_bytes(scene):
+        return False
+    _, sequences = source_inventory()
+    return all(
+        _recording_is_prepared(scene_dir / sequence.recording, sequence)
+        for sequence in sequences.values()
+        if sequence.scene == scene
+    )
+
+
+def _write_preparation_record(recording_dir: Path, sequence: SequenceSource, aggregate: SourceArchive) -> None:
     payload = {
         "dataset": "EuRoC MAV",
-        "sequence": sequence.scene,
+        "scene": sequence.scene,
+        "recording": sequence.recording,
         "preparation_version": EUROC_PREPARATION_VERSION,
+        "variants": {"rectified": {"rig": None, "force_gt_keyframes": True}},
         "gt_evaluable": True,
         "camera": "cam0",
         "image_rectification": "opencv-radtan-alpha-0.0",
@@ -391,34 +421,28 @@ def _write_preparation_record(scene_dir: Path, sequence: SequenceSource, aggrega
         "source": EUROC_SOURCE,
     }
     _write_exact(
-        scene_dir / "preparation.json",
+        recording_dir / "preparation.json",
         (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
 
 
-def prepare_scene(scene: str, download_dir: Path) -> None:
+def prepare_recording(sequence: SequenceSource, aggregate: SourceArchive, download_dir: Path) -> None:
     """Prepare one official EuRoC sequence without replacing existing output."""
-    archives, sequences = source_inventory()
-    if scene not in sequences:
-        raise ValueError(f"Unknown EuRoC sequence {scene!r}")
-    sequence = sequences[scene]
-    final_scene = EUROC_LAYOUT.data_dir / scene
-    if final_scene.exists() or final_scene.is_symlink():
-        _ensure_testset(sequence)
-        if euroc_scene_is_prepared(final_scene):
+    destination = EUROC_LAYOUT.recording_dir(sequence.scene, sequence.recording)
+    if destination.exists() or destination.is_symlink():
+        if _recording_is_prepared(destination, sequence):
             return
-        raise RuntimeError(f"Existing EuRoC scene is not the canonical prepared output: {final_scene}")
+        raise RuntimeError(f"Existing EuRoC recording is not the canonical prepared output: {destination}")
 
-    aggregate = archives[sequence.archive]
     sequence_path = _sequence_archive(sequence, aggregate, download_dir)
-    staging_scene = EUROC_LAYOUT.data_dir / ".euroc-preparing" / scene
-    staging_scene.mkdir(parents=True, exist_ok=True)
+    staging = EUROC_LAYOUT.data_dir / ".euroc-preparing" / sequence.scene / sequence.recording
+    staging.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(sequence_path) as bundle:
         calibration = parse_sensor(_read_member(bundle, "mav0/cam0/sensor.yaml").decode("utf-8"))
         image_index = parse_image_index(_read_member(bundle, "mav0/cam0/data.csv").decode("utf-8"))
         if len(image_index) != sequence.raw_cam0_images:
             raise ValueError(
-                f"EuRoC {scene} raw cam0 count mismatch: {len(image_index)} != {sequence.raw_cam0_images}"
+                f"EuRoC {sequence.recording} raw cam0 count mismatch: {len(image_index)} != {sequence.raw_cam0_images}"
             )
         ground_truth = parse_ground_truth(
             _read_member(bundle, "mav0/state_groundtruth_estimate0/data.csv").decode("utf-8")
@@ -429,24 +453,23 @@ def prepare_scene(scene: str, download_dir: Path) -> None:
             or poses[0].name != sequence.first_image
             or poses[-1].name != sequence.last_image
         ):
-            raise ValueError(f"EuRoC {scene} canonical GT-range inventory mismatch")
+            raise ValueError(f"EuRoC {sequence.recording} canonical GT-range inventory mismatch")
         rectified, map1, map2 = _rectification(calibration)
         for image in poses:
             contents = _read_member(bundle, f"mav0/cam0/data/{image.name}")
             _write_exact(
-                staging_scene / "images" / "cam0" / image.name,
+                staging / "rectified" / "images" / "cam0" / image.name,
                 _rectify_png(contents, map1, map2, (calibration.width, calibration.height)),
             )
 
-    _write_exact(staging_scene / "rec" / "cameras.bin", _camera_bytes(calibration, rectified))
-    _write_exact(staging_scene / "rec" / "images.bin", _images_bytes(poses))
-    _write_exact(staging_scene / "rec" / "points3D.bin", struct.pack("<Q", 0))
-    _write_preparation_record(staging_scene, sequence, aggregate)
-    _ensure_testset(sequence)
-    if not euroc_scene_is_prepared(staging_scene):
-        raise RuntimeError(f"Prepared EuRoC scene failed final validation: {scene}")
-    final_scene.parent.mkdir(parents=True, exist_ok=True)
-    staging_scene.replace(final_scene)
+    _write_exact(staging / "rectified" / "rec" / "cameras.bin", _camera_bytes(calibration, rectified))
+    _write_exact(staging / "rectified" / "rec" / "images.bin", _images_bytes(poses))
+    _write_exact(staging / "rectified" / "rec" / "points3D.bin", struct.pack("<Q", 0))
+    _write_preparation_record(staging, sequence, aggregate)
+    if not _recording_is_prepared(staging, sequence):
+        raise RuntimeError(f"Prepared EuRoC recording failed final validation: {sequence.recording}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging.replace(destination)
 
 
 def _validate_zip_response(response) -> None:
@@ -461,23 +484,26 @@ def main(
     download: bool = True,
     delete_files: bool = False,
 ) -> None:
-    """Download official bundles and prepare selected or all EuRoC sequences."""
+    """Download official bundles and prepare every recording in the selected scenes."""
     selected = EUROC_LAYOUT.select_scenes(scenes)
     archives, sequences = source_inventory()
     pending = []
     for scene in selected:
-        final_scene = EUROC_LAYOUT.data_dir / scene
-        if final_scene.exists() or final_scene.is_symlink():
-            _ensure_testset(sequences[scene])
-            if not euroc_scene_is_prepared(final_scene):
-                raise RuntimeError(f"Existing EuRoC scene is not the canonical prepared output: {final_scene}")
+        _ensure_testset(scene)
+    for sequence in sequences.values():
+        if sequence.scene not in selected:
+            continue
+        destination = EUROC_LAYOUT.recording_dir(sequence.scene, sequence.recording)
+        if destination.exists() or destination.is_symlink():
+            if not _recording_is_prepared(destination, sequence):
+                raise RuntimeError(f"Existing EuRoC recording is not the canonical prepared output: {destination}")
         else:
-            pending.append(scene)
+            pending.append(sequence)
     if not pending:
         return
 
     download_dir = EUROC_LAYOUT.data_dir / "downloads"
-    needed_archives = tuple(dict.fromkeys(sequences[scene].archive for scene in pending))
+    needed_archives = tuple(dict.fromkeys(sequence.scene for sequence in pending))
     if download:
         for archive_name in needed_archives:
             archive = archives[archive_name]
@@ -491,11 +517,11 @@ def main(
     for archive_name in needed_archives:
         archive = archives[archive_name]
         _validate_archive(download_dir / archive.filename, size=archive.size, sha256=archive.sha256)
-    for scene in pending:
-        prepare_scene(scene, download_dir)
+    for sequence in pending:
+        prepare_recording(sequence, archives[sequence.scene], download_dir)
     if delete_files:
-        for scene in pending:
-            (download_dir / "sequences" / f"{scene}.zip").unlink(missing_ok=True)
+        for sequence in pending:
+            (download_dir / "sequences" / f"{sequence.recording}.zip").unlink(missing_ok=True)
         for archive_name in needed_archives:
             (download_dir / archives[archive_name].filename).unlink(missing_ok=True)
 

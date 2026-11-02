@@ -5,12 +5,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 from natsort import natsorted
 
 from vidmap.datasets.base import image_has_public_pose
 
-from .dataset_roots import select_dataset_root
+from .dataset_roots import resolve_prepared_input
 
 
 @dataclass(frozen=True)
@@ -131,23 +130,9 @@ def similarity_from_pycolmap(transform: Any) -> Similarity:
 
 
 def resolve_ground_truth_model_path(run: Path) -> Path | None:
-    """Resolve the scene's saved ground-truth model."""
-    from vidmap.configuration.dump import mapping_config_path
-
-    config_path = mapping_config_path(run)
-    if not config_path.is_file():
-        return None
-    config = yaml.safe_load(config_path.read_text()) or {}
-    scene = _single_config_value(config.get("scene"))
-    if scene is None:
-        return None
-    root, _configured = select_dataset_root(
-        config,
-        run,
-        lambda candidate: (candidate / scene / "rec").is_dir(),
-        purpose="Solver playback GT",
-    )
-    return None if root is None else root / scene / "rec"
+    """Resolve the selected recording's ground-truth model."""
+    prepared = resolve_prepared_input(run)
+    return None if prepared is None else prepared[0] / "rec"
 
 
 def estimate_model_to_ground_truth_alignment(
@@ -163,6 +148,11 @@ def estimate_model_to_ground_truth_alignment(
     import pycolmap
 
     gt = pycolmap.Reconstruction(gt_path)
+    selected = None
+    prepared = resolve_prepared_input(run)
+    if prepared is not None and prepared[0] / "rec" == gt_path:
+        _, selection = prepared
+        selected = {gt.images[image_id].name for image_id in selection.image_ids if image_id in gt.images}
     parents = {Path(image.name).parent.as_posix() for image in model.images.values()}
     gt_images = {
         str(image.name): image
@@ -180,52 +170,12 @@ def estimate_model_to_ground_truth_alignment(
     transform = pycolmap.estimate_sim3d(np.asarray(source), np.asarray(target))
     if transform is None:
         raise ValueError("Could not align the selected saved model to GT")
-    selected = _testset_image_names(run, gt_path, gt)
     path_names = gt_images if selected is None else set(gt_images) & selected
     path = np.asarray(
         [_camera_center(gt_images[name]) for name in natsorted(path_names)],
         dtype=np.float64,
     )
     return transform, path.reshape((-1, 3))
-
-
-def _testset_image_names(run: Path | None, gt_path: Path, gt: Any) -> set[str] | None:
-    from vidmap.configuration.dump import mapping_config_path
-
-    if run is None or not (config_path := mapping_config_path(run)).is_file():
-        return None
-    config = yaml.safe_load(config_path.read_text()) or {}
-    mode = config.get("mode")
-    scene = _single_config_value(config.get("scene"))
-    testset = _single_config_value(config.get("testset_id"))
-    if not isinstance(mode, str) or scene is None or testset is None:
-        return None
-
-    from vidmap.datasets.names import SUPPORTED_DATASETS
-    from vidmap.paths import dataset_paths
-
-    candidates = (
-        dataset_paths(part).testsets / scene / f"{mode}.yaml" for part in gt_path.parts if part in SUPPORTED_DATASETS
-    )
-    testset_path = next(
-        (candidate for candidate in candidates if candidate.is_file()),
-        None,
-    )
-    if testset_path is None:
-        return None
-    payload = yaml.safe_load(testset_path.read_text()) or {}
-    image_ids = payload.get(testset)
-    if not isinstance(image_ids, list):
-        return None
-    return {str(gt.images[int(image_id)].name) for image_id in image_ids if int(image_id) in gt.images}
-
-
-def _single_config_value(value: Any) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    if isinstance(value, (list, tuple)) and len(value) == 1:
-        return str(value[0])
-    return None
 
 
 def _camera_center(image: Any) -> np.ndarray:

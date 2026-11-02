@@ -15,9 +15,25 @@ from vidmap.datasets.capture import (
     build_capture_reconstruction,
     resolve_capture_frames,
 )
-from vidmap.datasets.prepare.filesystem import prepare_image_directory
+from vidmap.datasets.prepare.helpers.filesystem import prepare_image_directory
 from vidmap.frontend.cache.metadata import fingerprint
+from vidmap.frontend.options.matching import RoMaImageOptions
+from vidmap.frontend.options.rig import PanoramaOptions
 from vidmap.repro.hashing import sha256_file
+
+
+def camera_from_panorama(view):
+    """Return the declared view rotation in COLMAP's +Z-forward, +Y-down frame."""
+    import pycolmap
+
+    return (
+        pycolmap.Rotation3d(np.array([-math.radians(view["pitch_degrees"]), 0, 0]))
+        * pycolmap.Rotation3d(np.array([0, -math.radians(view["yaw_degrees"]), 0]))
+    ).matrix()
+
+
+def _image_name(camera_id, frame):
+    return f"cam{camera_id}/{Path(frame['image_name']).stem}.png"
 
 
 def _geometry(identity):
@@ -30,13 +46,7 @@ def _geometry(identity):
     if not math.isfinite(focal) or focal <= 0:
         raise ValueError("Projection focal length must be finite and positive")
     ids = sorted(projection["views"])
-    rotations = [
-        (
-            pycolmap.Rotation3d(np.array([-math.radians(projection["views"][cid]["pitch_degrees"]), 0, 0]))
-            * pycolmap.Rotation3d(np.array([0, -math.radians(projection["views"][cid]["yaw_degrees"]), 0]))
-        ).matrix()
-        for cid in ids
-    ]
+    rotations = [camera_from_panorama(projection["views"][cid]) for cid in ids]
     config = create_pano_rig_config(rotations, ref_idx=0)
     cameras = [
         pycolmap.Camera(
@@ -57,7 +67,24 @@ def _geometry(identity):
     return cameras, rig, rotations
 
 
-def _inputs(image_dir, options):
+def _image_size(
+    projection: PanoramaOptions, panorama_size: tuple[int, int], image_options: RoMaImageOptions
+) -> tuple[int, int]:
+    """Resolve view dimensions using the tracking resize policy."""
+    width = panorama_size[0] * projection.horizontal_fov_degrees / 360
+    aspect_width, aspect_height = projection.aspect_ratio
+    size = (width, width * aspect_height / aspect_width)
+    resize_max = image_options.resize_max
+    if resize_max and (image_options.resize_force or max(size) > resize_max):
+        scale = resize_max / max(size)
+        size = tuple(value * scale for value in size)
+    size = tuple(round(value) for value in size)
+    if min(size) < 1:
+        raise ValueError("Panorama aspect ratio and tracking resolution must produce positive image dimensions")
+    return size
+
+
+def _inputs(image_dir, options, image_names, image_options):
     projection = asdict(options.projection)
     root = Path(image_dir).expanduser().resolve(strict=True)
     if not root.is_dir():
@@ -65,6 +92,13 @@ def _inputs(image_dir, options):
     frames = resolve_capture_frames(root, ("cam0",), options.frames)
     if any(row["camera_id"] != 0 or not row["image_name"].startswith("cam0/") for row in frames):
         raise ValueError("Every panorama frame must contain exactly one cam0/ image")
+    if image_names is not None:
+        selected = set(image_names)
+        frames = tuple(frame for frame in frames if frame["image_name"] in selected)
+        if not frames or {frame["image_name"] for frame in frames} != selected:
+            raise ValueError("Panorama selection must contain known source images")
+    if len({Path(frame["image_name"]).stem for frame in frames}) != len(frames):
+        raise ValueError("Panorama filenames must have unique stems")
     records, panorama_size = [], None
     for row in frames:
         source = (root / row["image_name"]).resolve(strict=True)
@@ -79,8 +113,9 @@ def _inputs(image_dir, options):
         records.append(
             {key: value for key, value in row.items() if key != "camera_id"} | {"sha256": sha256_file(source)}
         )
+    projection["image_size"] = _image_size(options.projection, panorama_size, image_options)
     identity = dict(
-        schema_version=2,
+        schema_version=3,
         renderer="colmap-opencv-linear-wrap-v2",
         projection=projection,
         panorama_size=panorama_size,
@@ -100,7 +135,7 @@ def _capture(output, identity, hashes, preview_image_dir, cameras, rig, rotation
             frame_id=frame["frame_id"],
             timestamp_ns=frame["timestamp_ns"],
             camera_id=camera.camera_id,
-            image_name=f"camera-{camera.camera_id}/{frame['frame_id']}.png",
+            image_name=_image_name(camera.camera_id, frame),
         )
         for frame in identity["frames"]
         for camera in cameras
@@ -133,7 +168,7 @@ def _render(identity, source_root, target, cameras, rotations):
         xy = spherical_img_from_cam(tuple(identity["panorama_size"]), rays @ rotation)
         xy = (xy.reshape(width, height, 2).transpose(1, 0, 2) - 0.5).astype(np.float32)
         xy[..., 1] = np.clip(xy[..., 1], 0, identity["panorama_size"][1] - 1)
-        directory = target / f"camera-{camera.camera_id}"
+        directory = target / f"cam{camera.camera_id}"
         directory.mkdir(parents=True)
         maps.append((directory, xy))
 
@@ -142,36 +177,30 @@ def _render(identity, source_root, target, cameras, rotations):
             pixels = np.asarray(image.convert("RGB"))
         for directory, xy in maps:
             rendered = cv2.remap(pixels, xy, None, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
-            Image.fromarray(rendered).save(directory / f"{frame['frame_id']}.png")
+            Image.fromarray(rendered).save(directory / f"{Path(frame['image_name']).stem}.png")
 
 
 def prepare_panorama_capture(
-    image_dir: str | Path, options, output_dir: str | Path, *, frontend_options
+    image_dir: str | Path, options, output_dir: str | Path, *, frontend_options, image_names=None
 ) -> CaptureSnapshot:
-    """Render a declared 2:1 panorama capture as RGB pinhole images; never overwrite existing output.
+    """Render pinhole views at tracking resolution.
 
-    ``projection.image_size`` is [width, height]. Angles define camera-from-panorama
-    ``Rx(-pitch) Ry(-yaw)`` in COLMAP's +Z-forward, +Y-down convention.
-    Source timestamps and frame IDs remain
-    explicit; no image pose or GT is read. Cache identity binds source file contents,
-    source associations and the full declared projection, independently of location.
+    Reuse output only when source files, frame associations and projection match.
     """
     output = Path(output_dir).expanduser().absolute()
-    identity, preview_image_dir = _inputs(image_dir, options)
+    identity, preview_image_dir = _inputs(image_dir, options, image_names, frontend_options.tracks.images)
     cameras, rig, rotations = _geometry(identity)
     from vidmap.frontend.preparation.cameras import resolve_camera_preparation
 
     capture = _capture(output, identity, {}, preview_image_dir, cameras, rig, rotations).capture
     resolve_camera_preparation(capture, frontend_options)
     names = tuple(
-        f"camera-{cid}/{frame['frame_id']}.png"
-        for frame in identity["frames"]
-        for cid in sorted(identity["projection"]["views"])
+        _image_name(cid, frame) for frame in identity["frames"] for cid in sorted(identity["projection"]["views"])
     )
 
     def write_images(image_dir):
         _render(identity, preview_image_dir, image_dir, cameras, rotations)
-        if _inputs(preview_image_dir, options)[0] != identity:
+        if _inputs(preview_image_dir, options, image_names, frontend_options.tracks.images)[0] != identity:
             raise ValueError("Source capture changed while rendering")
 
     hashes = prepare_image_directory(output, identity, names, write_images)

@@ -23,7 +23,7 @@
     }
   },
   "sequences": {
-    "machine_hall-MH_01_easy": {
+    "MH_01_easy": {
       "archive": "machine_hall",
       "member": "machine_hall/MH_01_easy/MH_01_easy.zip",
       "size": 1571292346,
@@ -33,7 +33,7 @@
       "first_image": "1403636580863555584.png",
       "last_image": "1403636762713555456.png"
     },
-    "machine_hall-MH_02_easy": {
+    "MH_02_easy": {
       "archive": "machine_hall",
       "member": "machine_hall/MH_02_easy/MH_02_easy.zip",
       "size": 1292413952,
@@ -43,7 +43,7 @@
       "first_image": "1403636859551666432.png",
       "last_image": "1403637009451666432.png"
     },
-    "machine_hall-MH_03_medium": {
+    "MH_03_medium": {
       "archive": "machine_hall",
       "member": "machine_hall/MH_03_medium/MH_03_medium.zip",
       "size": 1105301873,
@@ -53,7 +53,7 @@
       "first_image": "1403637132938319104.png",
       "last_image": "1403637264388318976.png"
     },
-    "machine_hall-MH_04_difficult": {
+    "MH_04_difficult": {
       "archive": "machine_hall",
       "member": "machine_hall/MH_04_difficult/MH_04_difficult.zip",
       "size": 726518489,
@@ -63,7 +63,7 @@
       "first_image": "1403638128945096960.png",
       "last_image": "1403638227695097088.png"
     },
-    "machine_hall-MH_05_difficult": {
+    "MH_05_difficult": {
       "archive": "machine_hall",
       "member": "machine_hall/MH_05_difficult/MH_05_difficult.zip",
       "size": 828426215,
@@ -73,7 +73,7 @@
       "first_image": "1403638519527829504.png",
       "last_image": "1403638630527829504.png"
     },
-    "vicon_room1-V1_01_easy": {
+    "V1_01_easy": {
       "archive": "vicon_room1",
       "member": "vicon_room1/V1_01_easy/V1_01_easy.zip",
       "size": 1149702102,
@@ -83,7 +83,7 @@
       "first_image": "1403715274312143104.png",
       "last_image": "1403715417812143104.png"
     },
-    "vicon_room1-V1_02_medium": {
+    "V1_02_medium": {
       "archive": "vicon_room1",
       "member": "vicon_room1/V1_02_medium/V1_02_medium.zip",
       "size": 668079368,
@@ -93,7 +93,7 @@
       "first_image": "1403715524912143104.png",
       "last_image": "1403715608412143104.png"
     },
-    "vicon_room1-V1_03_difficult": {
+    "V1_03_difficult": {
       "archive": "vicon_room1",
       "member": "vicon_room1/V1_03_difficult/V1_03_difficult.zip",
       "size": 801343542,
@@ -103,7 +103,7 @@
       "first_image": "1403715888384058112.png",
       "last_image": "1403715993034057984.png"
     },
-    "vicon_room2-V2_01_easy": {
+    "V2_01_easy": {
       "archive": "vicon_room2",
       "member": "vicon_room2/V2_01_easy/V2_01_easy.zip",
       "size": 883081407,
@@ -113,7 +113,7 @@
       "first_image": "1413393213505760512.png",
       "last_image": "1413393325455760384.png"
     },
-    "vicon_room2-V2_02_medium": {
+    "V2_02_medium": {
       "archive": "vicon_room2",
       "member": "vicon_room2/V2_02_medium/V2_02_medium.zip",
       "size": 898452319,
@@ -123,7 +123,7 @@
       "first_image": "1413393887255760384.png",
       "last_image": "1413394002655760384.png"
     },
-    "vicon_room2-V2_03_difficult": {
+    "V2_03_difficult": {
       "archive": "vicon_room2",
       "member": "vicon_room2/V2_03_difficult/V2_03_difficult.zip",
       "size": 820796031,

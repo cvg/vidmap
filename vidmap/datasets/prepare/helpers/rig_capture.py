@@ -13,7 +13,7 @@ from vidmap.datasets.capture import (
     resolve_capture_frames,
 )
 from vidmap.datasets.local import select_images
-from vidmap.datasets.prepare.filesystem import prepare_image_directory
+from vidmap.datasets.prepare.helpers.filesystem import prepare_image_directory
 
 
 def load_capture(image_dir: str | Path, options=None, *, imnames=None) -> PreparedCapture:

@@ -18,10 +18,10 @@ import pycolmap
 import yaml
 from tqdm import tqdm
 
-from vidmap.datasets.base import validate_path_component
+from vidmap.datasets.base import PreparedTestset, validate_path_component
 from vidmap.datasets.crocodl import benchmark_scene_name, parse_benchmark_scene, validate_ios_session
 from vidmap.datasets.layouts import get_dataset_layout
-from vidmap.datasets.prepare.video_common import resumable_http_download, safe_extract_zip
+from vidmap.datasets.prepare.helpers.video_common import resumable_http_download, safe_extract_zip
 from vidmap.datasets.resources import dataset_asset
 
 PoseKey: TypeAlias = tuple[int, str]
@@ -41,7 +41,7 @@ _CAMERA_PARAMETER_COUNTS = {
 _TESTSET_LENGTHS = (100, 250, 500, 1500)
 _SAMPLE_TESTSET = re.compile(r"sample-(\d+)\.yaml")
 _HUGGING_FACE_REPOSITORY = "https://huggingface.co/datasets/CroCoDL"
-CROCODL_PREPARATION_VERSION = 2
+CROCODL_PREPARATION_VERSION = 3
 CROCODL_LICENSE = "No dataset license declared by the pinned official Hugging Face repositories"
 
 
@@ -374,14 +374,14 @@ def get_testset_data(
     return result
 
 
-def _atomic_yaml(path: Path, data: Mapping[str, list[int]]) -> None:
+def _atomic_yaml(path: Path, data: Mapping[str, PreparedTestset]) -> None:
     temporary = path.with_name(f".{path.name}.crocodl-tmp")
     if temporary.exists():
         temporary.unlink()
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as file:
             yaml.safe_dump(
-                dict(sorted(data.items())),
+                {name: testset.as_dict() for name, testset in sorted(data.items())},
                 file,
                 allow_unicode=False,
                 default_flow_style=False,
@@ -394,7 +394,7 @@ def _atomic_yaml(path: Path, data: Mapping[str, list[int]]) -> None:
 
 
 def write_combined_testsets(
-    testsets: Mapping[TestsetKey, Mapping[str, list[int]]],
+    testsets: Mapping[TestsetKey, Mapping[str, PreparedTestset]],
     output_dir: Path,
     location: str,
     *,
@@ -409,10 +409,10 @@ def write_combined_testsets(
         raise CroCoDLFormatError(f"CroCoDL location {location!r} is not registered")
     output_dir.mkdir(parents=True, exist_ok=True)
     complete = testsets.get("complete")
-    if not complete or any(not image_ids for image_ids in complete.values()):
+    if not complete or any(not testset.image_ids for testset in complete.values()):
         raise CroCoDLFormatError(f"refusing to publish empty complete testsets for scene {scene!r}")
     if any(
-        not subsequences or any(not image_ids for image_ids in subsequences.values())
+        not subsequences or any(not testset.image_ids for testset in subsequences.values())
         for subsequences in testsets.values()
     ):
         raise CroCoDLFormatError(f"refusing to publish empty testsets for scene {scene!r}")
@@ -554,12 +554,13 @@ def convert_single_camera_session(
         "num_images": len(images),
         "num_cameras": len(reconstruction.cameras),
         "preparation_version": CROCODL_PREPARATION_VERSION,
+        "variants": {"native": {"rig": None, "force_gt_keyframes": True}},
     }
     if provenance is not None:
         metadata["source"] = dict(provenance)
-    session_dir = Path(output_dir) / location / session_id
+    session_dir = Path(output_dir) / f"ios-{location}" / session_id
     with _staged_session(session_dir) as staging:
-        images_dir, rec_dir = staging / "images" / "cam0", staging / "rec"
+        images_dir, rec_dir = staging / "native" / "images" / "cam0", staging / "native" / "rec"
         images_dir.mkdir(parents=True)
         rec_dir.mkdir()
         _materialize_images(
@@ -571,7 +572,7 @@ def convert_single_camera_session(
         )
         print(f"  Writing {session_id} ({len(reconstruction.images)} images)")
         reconstruction.write_binary(rec_dir)
-        with (staging / "metadata.json").open("w", encoding="utf-8", newline="\n") as file:
+        with (staging / "preparation.json").open("w", encoding="utf-8", newline="\n") as file:
             json.dump(metadata, file, indent=2, sort_keys=True)
             file.write("\n")
     return ConversionResult(session_id, testsets)
@@ -595,14 +596,19 @@ def _select_session_ids(
 
 def _combine_testsets(
     results: Sequence[ConversionResult],
-) -> TestsetData:
-    combined: TestsetData = {}
+) -> dict[TestsetKey, dict[str, PreparedTestset]]:
+    combined: dict[TestsetKey, dict[str, PreparedTestset]] = {}
     for result in sorted(results, key=lambda item: item.session_id):
         for length, subsequences in result.testsets.items():
             destination = combined.setdefault(length, {})
             if duplicates := destination.keys() & subsequences.keys():
                 raise CroCoDLFormatError(f"duplicate testset subsequences: {sorted(duplicates)}")
-            destination.update(subsequences)
+            destination.update(
+                {
+                    name: PreparedTestset(result.session_id, "native", tuple(image_ids))
+                    for name, image_ids in subsequences.items()
+                }
+            )
     return combined
 
 
@@ -612,15 +618,14 @@ def _prepared_conversion_results(
     allowed_session_ids: Sequence[str] | None = None,
 ) -> list[ConversionResult]:
     """Recompute testsets from every prepared session in one converted location."""
-    location_dir = Path(output_dir) / location
     allowed = None if allowed_session_ids is None else set(allowed_session_ids)
     results: list[ConversionResult] = []
-    for session_dir in sorted(location_dir.iterdir()):
+    for session_dir in sorted((Path(output_dir) / f"ios-{location}").iterdir()):
         if not session_dir.name.startswith("ios_"):
             continue
         if allowed is not None and session_dir.name not in allowed:
             continue
-        metadata_path = session_dir / "metadata.json"
+        metadata_path = session_dir / "preparation.json"
         if not session_dir.is_dir() or not metadata_path.is_file():
             continue
         try:
@@ -634,10 +639,14 @@ def _prepared_conversion_results(
             session_id = validate_ios_session(metadata.get("session"))
         except (TypeError, ValueError) as error:
             raise CroCoDLFormatError(f"invalid prepared CroCoDL metadata {metadata_path}: {error}") from error
-        if metadata.get("location") != location or session_id != session_dir.name:
-            raise CroCoDLFormatError(f"prepared CroCoDL metadata does not match its location: {metadata_path}")
-        reconstruction_dir = session_dir / "rec"
-        images_dir = session_dir / "images"
+        if (
+            metadata["location"] != location
+            or session_id != session_dir.name
+            or metadata["preparation_version"] != CROCODL_PREPARATION_VERSION
+        ):
+            raise CroCoDLFormatError(f"prepared CroCoDL metadata does not match its recording: {metadata_path}")
+        reconstruction_dir = session_dir / "native" / "rec"
+        images_dir = session_dir / "native" / "images"
         if not reconstruction_dir.is_dir() or not images_dir.is_dir():
             raise CroCoDLFormatError(f"prepared CroCoDL session is incomplete: {session_dir}")
         try:
@@ -711,10 +720,10 @@ def convert_location(
 
 
 def _official_session_is_prepared(archive: OfficialIosArchive) -> bool:
-    session_dir = CROCODL_DATA_DIR / archive.location / archive.session_id
-    metadata_path = session_dir / "metadata.json"
-    images_dir = session_dir / "images"
-    rec_dir = session_dir / "rec"
+    session_dir = CROCODL_DATA_DIR / f"ios-{archive.location}" / archive.session_id
+    metadata_path = session_dir / "preparation.json"
+    images_dir = session_dir / "native" / "images"
+    rec_dir = session_dir / "native" / "rec"
     if not metadata_path.is_file() or not images_dir.is_dir() or not rec_dir.is_dir():
         return False
     try:
@@ -733,6 +742,7 @@ def _official_session_is_prepared(archive: OfficialIosArchive) -> bool:
     return (
         metadata.get("location") == archive.location
         and metadata.get("preparation_version") == CROCODL_PREPARATION_VERSION
+        and metadata["variants"] == {"native": {"rig": None, "force_gt_keyframes": True}}
         and metadata.get("session") == archive.session_id
         and source
         == {
@@ -752,13 +762,21 @@ def official_scene_is_prepared(scene: str) -> bool:
     archives = _official_archives_for_scene(scene)
     if not archives or not all(_official_session_is_prepared(archive) for archive in archives):
         return False
-    testset = CROCODL_LAYOUT.testset_path(scene, "complete")
     try:
-        payload = yaml.safe_load(testset.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        testsets = CROCODL_LAYOUT.read_testsets(scene, "complete")
+    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
         return False
-    expected = {f"{archive.session_id}-0" for archive in archives}
-    return isinstance(payload, Mapping) and set(payload) == expected and all(payload[key] for key in expected)
+    expected = {f"{archive.session_id}-0": archive.session_id for archive in archives}
+    return (
+        testsets is not None
+        and set(testsets) == set(expected)
+        and all(
+            testsets[name].recording == recording
+            and testsets[name].variant == "native"
+            and bool(testsets[name].image_ids)
+            for name, recording in expected.items()
+        )
+    )
 
 
 def _extract_official_archive(archive: OfficialIosArchive, downloaded: Path) -> Path:

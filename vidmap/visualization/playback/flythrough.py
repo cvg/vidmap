@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
-import yaml
 from natsort import natsorted
 from scipy.spatial.transform import Rotation, RotationSpline, Slerp
 
@@ -16,7 +15,7 @@ from vidmap.visualization.point_quality import lowest_covariance_point_ids
 
 from .alignment import estimate_model_to_ground_truth_alignment, resolve_ground_truth_model_path
 from .api import Playback, Resolution
-from .dataset_roots import select_dataset_root
+from .dataset_roots import resolve_prepared_input
 from .depth_lift import DepthLiftReader
 from .scene import (
     DEPTH_LIFT_RADIUS_UI_POINTS,
@@ -49,7 +48,7 @@ def build_model_flythrough_sequence(playback: Playback, resolution: Resolution) 
     alignment, gt_centers = estimate_model_to_ground_truth_alignment(
         model,
         gt_path if playback.align_to_ground_truth else None,
-        run=run_root,
+        run=run_root if playback.ground_truth is None else None,
     )
     poses, point_ids, points, observations = _load_sparse_model_scene(
         model,
@@ -185,8 +184,7 @@ def _resolve_flythrough_inputs(
 
     config_path = mapping_config_path(run)
     if not config_path.is_file():
-        raise FileNotFoundError(f"Flythrough needs the run config to infer RGB and GT data: {config_path}")
-    config = yaml.safe_load(config_path.read_text()) or {}
+        raise FileNotFoundError(f"Flythrough run config is missing: {config_path}")
     model_path = _model_path(run, playback.reconstruction)
     import pycolmap
 
@@ -197,7 +195,7 @@ def _resolve_flythrough_inputs(
 
         local_images = local_run_image_dir(run)
         if local_images is None:
-            rgb_dir, gt_path = _resolve_dataset_paths(config, image_names, run=run)
+            rgb_dir, gt_path = _resolve_dataset_paths(run, image_names)
         else:
             rgb_dir, gt_path = _validate_explicit_image_dir(local_images, image_names), None
     else:
@@ -261,27 +259,12 @@ def _model_path(run: Path, selection: str | Path | None) -> Path:
     return path
 
 
-def _resolve_dataset_paths(
-    config: dict[str, Any], names: tuple[str, ...], *, run: Path | None = None
-) -> tuple[Path, Path | None]:
-    scene = _require_single_config_value(config.get("scene"), "scene")
-    parents = {Path(name).parent for name in names}
-    root, configured = select_dataset_root(
-        config,
-        run,
-        lambda candidate: _contains_sequences(candidate, scene, parents),
-        purpose="Flythrough",
-    )
-    if root is not None:
-        dataset = root / scene
-        gt = dataset / "rec"
-        return dataset / "images", gt if gt.is_dir() else None
-    sequences = ", ".join(sorted(str(parent) for parent in parents))
-    requested = ", ".join(configured) if configured else "<not configured>"
-    raise FileNotFoundError(
-        f"Could not resolve RGB data for configured dataset {requested}, "
-        f"scene {scene!r}, and model sequences: {sequences}"
-    )
+def _resolve_dataset_paths(run: Path, names: tuple[str, ...]) -> tuple[Path, Path | None]:
+    prepared = resolve_prepared_input(run)
+    if prepared is None:
+        raise FileNotFoundError("No saved benchmark input identity; provide image_dir for this reconstruction")
+    root, _ = prepared
+    return _validate_explicit_image_dir(root / "images", names), root / "rec"
 
 
 def _validate_explicit_image_dir(image_dir: Path, names: tuple[str, ...]) -> Path:
@@ -293,19 +276,6 @@ def _validate_explicit_image_dir(image_dir: Path, names: tuple[str, ...]) -> Pat
         if not image.is_file():
             raise FileNotFoundError(f"Explicit flythrough image directory is missing model image: {image}")
     return root
-
-
-def _contains_sequences(root: Path, scene: str, parents: set[Path]) -> bool:
-    images = root / scene / "images"
-    return images.is_dir() and all((images / parent).is_dir() for parent in parents)
-
-
-def _require_single_config_value(value: Any, label: str) -> str:
-    if isinstance(value, (list, tuple)) and value:
-        return str(value[0])
-    if isinstance(value, str) and value:
-        return value
-    raise ValueError(f"Run config must contain {label} to infer flythrough inputs")
 
 
 def _load_sparse_model_scene(

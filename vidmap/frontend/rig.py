@@ -1,5 +1,7 @@
 """Frontend selection and pair policy over authoritative COLMAP membership."""
 
+import numpy as np
+
 from vidmap.datasets.capture import PreparedCapture
 from vidmap.frontend.options.rig import RigOptions
 
@@ -14,11 +16,18 @@ def resolve_rig_options(capture: PreparedCapture, options: RigOptions):
     if capture.panorama_metadata() is not None and options.match_same_timestamp:
         raise ValueError("Same-timestamp matching between views of one panorama is not allowed")
     for first, second in options.match_same_timestamp:
-        if not any(
-            rig.has_sensor(capture.rec.camera(first).sensor_id)
-            and rig.has_sensor(capture.rec.camera(second).sensor_id)
-            for rig in capture.rec.rigs.values()
-        ):
+        sensors = [capture.rec.camera(cid).sensor_id for cid in (first, second)]
+        for rig in capture.rec.rigs.values():
+            if not all(rig.has_sensor(sensor) for sensor in sensors):
+                continue
+            centers = [
+                np.zeros(3) if rig.is_ref_sensor(sensor) else rig.sensor_from_rig(sensor).inverse().translation
+                for sensor in sensors
+            ]
+            if np.array_equal(*centers):
+                raise ValueError("Same-timestamp matching requires a nonzero camera baseline")
+            break
+        else:
             raise ValueError("Same-timestamp camera pairs must belong to the same rig")
     sequential = {frozenset(pair) for pair in options.flag_same_timestamp_as_sequential}
     return reference, tuple(

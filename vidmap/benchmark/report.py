@@ -197,7 +197,6 @@ class ReconstructionEvaluationReport:
             if evaluation_options is not None:
                 conf = dataclasses.replace(conf, evaluation=evaluation_options)
                 wate_auc_full_thresholds = evaluation_options.windowed_ate_auc_full_thresholds
-            dataset.prepare()
             result_evaluator = BenchmarkResultEvaluator(
                 conf,
                 dataset,
@@ -249,7 +248,9 @@ class ReconstructionEvaluationReport:
                             wate_colls[mode][scene][wkey + "_trajs"] = len(all_vals)
                         else:
                             wate_colls[mode].setdefault(scene, {})[wkey] = float(np.mean(all_vals))
-        if getattr(args, "scene", None) is None:
+        if dataset.name == "euroc":
+            scenes = list(out)
+        elif getattr(args, "scene", None) is None:
             scenes = result_evaluator.selection.dataset_layout.scenes
         else:
             scenes = args.scene

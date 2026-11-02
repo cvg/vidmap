@@ -16,11 +16,11 @@ import pycolmap
 import yaml
 from PIL import Image
 
-from vidmap.datasets.base import CANONICAL_UNPOSED_IMAGES_FILENAME, DatasetLayout
+from vidmap.datasets.base import CANONICAL_UNPOSED_IMAGES_FILENAME, DatasetLayout, PreparedTestset
 from vidmap.datasets.eth3d_slam import ETH3D_SLAM_MANIFEST, ETH3D_SLAM_PREPARATION_VERSION
 from vidmap.datasets.layouts import get_dataset_layout
-from vidmap.datasets.prepare import filesystem as prep_fs
-from vidmap.datasets.prepare.video_common import resumable_http_download, safe_extract_zip
+from vidmap.datasets.prepare.helpers import filesystem as prep_fs
+from vidmap.datasets.prepare.helpers.video_common import resumable_http_download, safe_extract_zip
 from vidmap.datasets.resources import dataset_asset
 
 _URL_TEMPLATE = "https://www.eth3d.net/data/slam/datasets/{scene}_mono.zip"
@@ -115,19 +115,19 @@ def _read_unposed_names(scene_dir: Path) -> tuple[str, ...] | None:
 
 
 def _scene_is_complete(layout: DatasetLayout, scene: str) -> bool:
-    images_dir = layout.images_dir(scene)
-    rec_dir = layout.reconstruction_dir(scene)
+    images_dir = layout.images_dir(scene, "0", "native")
+    rec_dir = layout.reconstruction_dir(scene, "0", "native")
     if not images_dir.is_dir() or not prep_fs.complete_colmap_model(rec_dir):
         return False
     try:
         reconstruction = pycolmap.Reconstruction(rec_dir)
         testsets = layout.read_testsets(scene, "all")
-        preparation = json.loads((layout.scene_dir(scene) / "preparation.json").read_text(encoding="utf-8"))
+        preparation = json.loads((layout.recording_dir(scene, "0") / "preparation.json").read_text(encoding="utf-8"))
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         return False
     image_ids = sorted(reconstruction.images)
     names = {image.name for image in reconstruction.images.values()}
-    unposed = _read_unposed_names(layout.scene_dir(scene))
+    unposed = _read_unposed_names(layout.input_dir(scene, "0", "native"))
     try:
         archive = _source_archive(scene)
     except ValueError:
@@ -135,11 +135,12 @@ def _scene_is_complete(layout: DatasetLayout, scene: str) -> bool:
     return (
         bool(reconstruction.cameras)
         and bool(image_ids)
-        and testsets == {"0": image_ids}
+        and testsets == {"0": PreparedTestset("0", "native", tuple(image_ids))}
         and unposed is not None
         and set(unposed) <= names
         and isinstance(preparation, Mapping)
         and preparation.get("preparation_version") == ETH3D_SLAM_PREPARATION_VERSION
+        and preparation["variants"] == {"native": {"rig": None, "force_gt_keyframes": True}}
         and (archive is None or preparation.get("source") == archive.record())
         and (archive is None or preparation.get("gt_available") is archive.gt_available)
         and all(
@@ -152,9 +153,9 @@ def _scene_is_complete(layout: DatasetLayout, scene: str) -> bool:
 def _pending_scenes(layout: DatasetLayout, scenes: tuple[str, ...] | None = None) -> tuple[str, ...]:
     pending = []
     for scene in layout.scenes if scenes is None else scenes:
-        destination = layout.scene_dir(scene)
+        destination = layout.recording_dir(scene, "0")
         testset = layout.testset_path(scene, "all")
-        shutil.rmtree(layout.data_dir / f".{scene}.preparing", ignore_errors=True)
+        shutil.rmtree(destination.with_name(f".{destination.name}.preparing"), ignore_errors=True)
         testset.with_name(f".{testset.name}.preparing").unlink(missing_ok=True)
         if destination.exists() or testset.exists():
             if not _scene_is_complete(layout, scene):
@@ -325,19 +326,20 @@ def _prepare_scene(
     archive: SourceArchive | None = None,
 ) -> None:
     gt_available = True if archive is None else archive.gt_available
-    destination = layout.scene_dir(scene)
+    destination = layout.recording_dir(scene, "0")
     testset = layout.testset_path(scene, "all")
     temporary_testset = testset.with_name(f".{testset.name}.preparing")
     testset.parent.mkdir(parents=True, exist_ok=True)
     temporary_testset.unlink(missing_ok=True)
     try:
         with prep_fs.scene_staging(destination) as staging:
-            image_ids = _convert_scene(source, staging, gt_available=gt_available)
+            image_ids = _convert_scene(source, staging / "native", gt_available=gt_available)
             with (staging / "preparation.json").open("w", encoding="utf-8") as file:
                 json.dump(
                     {
                         "gt_available": gt_available,
                         "preparation_version": ETH3D_SLAM_PREPARATION_VERSION,
+                        "variants": {"native": {"rig": None, "force_gt_keyframes": True}},
                         "source": None if archive is None else archive.record(),
                     },
                     file,
@@ -346,8 +348,9 @@ def _prepare_scene(
                 )
                 file.write("\n")
             with temporary_testset.open("x", encoding="utf-8") as file:
-                yaml.safe_dump({0: image_ids}, file, sort_keys=False, default_flow_style=True)
-            if not prep_fs.complete_colmap_model(staging / "rec") or not image_ids:
+                testset_data = PreparedTestset("0", "native", tuple(image_ids)).as_dict()
+                yaml.safe_dump({0: testset_data}, file, sort_keys=False, default_flow_style=True)
+            if not prep_fs.complete_colmap_model(staging / "native" / "rec") or not image_ids:
                 raise RuntimeError(f"ETH3D-SLAM conversion did not produce a complete scene: {staging}")
             if testset.exists() or testset.is_symlink():
                 raise RuntimeError(f"ETH3D-SLAM testset destination appeared during preparation: {testset}")
