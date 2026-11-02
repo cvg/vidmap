@@ -63,7 +63,9 @@ class PreparedTestset:
         validate_path_component(self.recording, "Recording")
         validate_path_component(self.variant, "Image variant")
         if any(
-            type(image_id) is not int or not 0 <= image_id < pycolmap.INVALID_IMAGE_ID for image_id in self.image_ids
+            type(image_id) is not int  # noqa: E721 - bool is not a valid image ID.
+            or not 0 <= image_id < pycolmap.INVALID_IMAGE_ID
+            for image_id in self.image_ids
         ):
             raise ValueError("Testsets must contain valid integer image IDs")
         object.__setattr__(self, "image_ids", tuple(self.image_ids))
