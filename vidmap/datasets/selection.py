@@ -33,6 +33,8 @@ class PreparedTarget:
     testset_type: str
     testset_desc: str
     ref_imids: tuple[int, ...]
+    recording: str
+    variant: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ref_imids", tuple(self.ref_imids))
@@ -60,9 +62,11 @@ class PreparedTargetSelection:
                     scene=scene,
                     testset_type=self.options.mode,
                     testset_desc=str(testset_id),
-                    ref_imids=tuple(ref_imids),
+                    ref_imids=selection.image_ids,
+                    recording=selection.recording,
+                    variant=selection.variant,
                 )
-                for testset_id, ref_imids in testsets.items()
+                for testset_id, selection in testsets.items()
             )
             yield scene, targets
 
@@ -102,8 +106,12 @@ class PreparedTargetSelection:
     def prepared_targets(self) -> Iterator[tuple[PreparedTarget, DatasetParser, list[str]]]:
         """Yield selected targets with their target-specific parser and image names."""
         for scene, scene_targets in self.iter_scene_targets():
-            descriptions = (target.testset_desc for target in scene_targets)
-            parsers = self.dataset_spec.parsers_for_cases(scene, descriptions)
+            from vidmap.datasets.base import PreparedTestset
+
+            selections = (
+                PreparedTestset(target.recording, target.variant, target.ref_imids) for target in scene_targets
+            )
+            parsers = self.dataset_spec.parsers_for_cases(scene, selections)
             source_parser = None
             for target, scene_parser in zip(scene_targets, parsers, strict=True):
                 if scene_parser is not source_parser:

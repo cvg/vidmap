@@ -6,11 +6,14 @@ from dataclasses import field as dc_field
 
 import numpy as np
 import pycolmap
+from evo.core.trajectory import PoseTrajectory3D
 from pydantic import ConfigDict
 
 from vidmap.configuration.validators import dataclass as pydantic_dataclass
 from vidmap.utils.trajectory import (
     align_reconstruction_to_reference_sequence,
+    compute_ate_statistics,
+    reconstruction_to_evo_trajectory,
     remap_poses_to_timeline,
     trajectory_images,
 )
@@ -86,13 +89,52 @@ def windowed_ate_auc_fields(window_size, errors, thresholds):
     return {wate_auc_result_key(window_size, threshold): auc for threshold, auc in zip(thresholds, aucs, strict=True)}
 
 
-def align_reconstruction_for_evaluation(reconstruction, ground_truth_reconstruction) -> None:
-    """Apply the frozen paper-default two-pass Sim(3) alignment."""
-    # Paper-reproduction outputs align once for visualization and refine that
-    # result before evaluation. Keep this numerical contract explicit.
+def _prepare_evaluation_pair(estimated, ground_truth, reference_from_gt=None):
+    """Select cam0 for evaluation and match estimated image IDs to GT by name.
+
+    Keep unposed GT images and GT images with missing estimates so the evaluator
+    can distinguish unavailable ground truth from reconstruction failures.
+    """
+    reference_ids = {
+        image.name: image.image_id for image in ground_truth.images.values() if image.name.startswith("cam0/")
+    }
+    if not reference_ids:
+        raise ValueError("Benchmark ground truth has no cam0 images")
+    selected = []
+    for reconstruction, rotate_gt in ((estimated, False), (ground_truth, reference_from_gt is not None)):
+        images = [image for image in reconstruction.images.values() if image.name.startswith("cam0/")]
+        if (
+            not rotate_gt
+            and len(images) == reconstruction.num_images()
+            and all(image.image_id == reference_ids[image.name] for image in images)
+        ):
+            selected.append(reconstruction)
+            continue
+        output = pycolmap.Reconstruction()
+        for image in images:
+            if image.camera_id not in output.cameras:
+                output.add_camera_with_trivial_rig(image.camera)
+            target = pycolmap.Image(image_id=reference_ids[image.name], camera_id=image.camera_id, name=image.name)
+            if image.has_pose:
+                pose = image.cam_from_world()
+                if rotate_gt:
+                    pose = reference_from_gt * pose
+                output.add_image_with_trivial_frame(target, pose)
+            else:
+                output.add_image_with_trivial_frame(target)
+        selected.append(output)
+    return tuple(selected)
+
+
+def _align_reconstruction_for_evaluation(
+    reconstruction, ground_truth_reconstruction, *, full_reconstruction=None
+) -> None:
+    """Reproduce the paper's two-pass Sim(3) alignment: visualization, then evaluation."""
     for _ in range(2):
         _, similarity = align_reconstruction_to_reference_sequence(reconstruction, ground_truth_reconstruction)
         reconstruction.transform(similarity)
+        if full_reconstruction is not None and full_reconstruction is not reconstruction:
+            full_reconstruction.transform(similarity)
 
 
 def logmap_so3(R):
@@ -203,6 +245,9 @@ def convert_numpy_scalars_to_builtin(obj):
 class AbsoluteTrajectoryResult:
     options: AbsoluteTrajectoryOptions
     data: dict
+    ate: dict | None = None
+    estimated_trajectory: PoseTrajectory3D | None = None
+    ground_truth_trajectory: PoseTrajectory3D | None = None
 
     def summarize(self, *, verbose=False):
         text, summary = self._build_summary(verbose=verbose)
@@ -316,12 +361,24 @@ class AbsoluteTrajectoryResult:
 
 
 class AbsoluteTrajectoryEvaluator:
-    def __init__(self, *, options: AbsoluteTrajectoryOptions | None = None):
+    def __init__(self, *, options: AbsoluteTrajectoryOptions | None = None, reference_view=None):
         if options is None:
             options = AbsoluteTrajectoryOptions()
         elif not isinstance(options, AbsoluteTrajectoryOptions):
             raise TypeError(f"Expected AbsoluteTrajectoryOptions, got {type(options).__name__}")
         self.options = options
+        self.reference_from_gt = None
+        if reference_view is not None:
+            from vidmap.datasets.prepare.helpers.panorama_capture import camera_from_panorama
+
+            self.reference_from_gt = pycolmap.Rigid3d(
+                pycolmap.Rotation3d(camera_from_panorama(asdict(reference_view))), np.zeros(3)
+            )
+
+    @classmethod
+    def from_config(cls, conf, rig=None):
+        view = None if rig is None or rig.projection is None else rig.projection.views[0]
+        return cls(options=AbsoluteTrajectoryOptions.from_config(conf.evaluation), reference_view=view)
 
     def summarize_pose_errors(self, pose_errors):
         pose_error_summary = {}
@@ -395,10 +452,29 @@ class AbsoluteTrajectoryEvaluator:
         *,
         estimated_reconstruction: pycolmap.Reconstruction,
         ground_truth_reconstruction: pycolmap.Reconstruction,
+        align_in_place: bool = False,
     ) -> AbsoluteTrajectoryResult:
-        for image_id in estimated_reconstruction.images:
-            if image_id not in ground_truth_reconstruction.images:
-                raise ValueError(f"Image {image_id} not in ground truth reconstruction")
+        """Evaluate cam0, matching estimates to GT by image name.
+
+        With align_in_place, also align the full reconstruction for saving and
+        return its cam0 trajectories and ATE using the paper's two-pass alignment.
+        Otherwise, leave both input reconstructions unchanged.
+        """
+        full_reconstruction = estimated_reconstruction
+        estimated_reconstruction, ground_truth_reconstruction = _prepare_evaluation_pair(
+            estimated_reconstruction, ground_truth_reconstruction, self.reference_from_gt
+        )
+        ate = estimated_trajectory = ground_truth_trajectory = None
+        if align_in_place:
+            _align_reconstruction_for_evaluation(
+                estimated_reconstruction, ground_truth_reconstruction, full_reconstruction=full_reconstruction
+            )
+            estimated_trajectory = reconstruction_to_evo_trajectory(estimated_reconstruction)
+            supported_ground_truth = remap_poses_to_timeline(
+                estimated_reconstruction, ground_truth_reconstruction, interpolate_missing_poses=False
+            ).reconstruction
+            ground_truth_trajectory = reconstruction_to_evo_trajectory(supported_ground_truth)
+            ate = compute_ate_statistics(ground_truth_trajectory, estimated_trajectory)
         num_images = estimated_reconstruction.num_images()
         num_registered_images = estimated_reconstruction.num_reg_images()
         estimated_reconstruction, _ = align_reconstruction_to_reference_sequence(
@@ -430,7 +506,13 @@ class AbsoluteTrajectoryEvaluator:
 
         data["results"]["scale"] = self.options.gt_scale
         data["success"] = True
-        return AbsoluteTrajectoryResult(options=self.options, data=data)
+        return AbsoluteTrajectoryResult(
+            options=self.options,
+            data=data,
+            ate=ate,
+            estimated_trajectory=estimated_trajectory,
+            ground_truth_trajectory=ground_truth_trajectory,
+        )
 
     def absolute_pose_errors(self, estim_rec, gt_rec):
         poses_es_world_full = {

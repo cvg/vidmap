@@ -330,7 +330,7 @@ def main(argv=None):
         validate_profile_selection(selection, enabled=run_options.profile)
     except ValueError as error:
         parser.error(str(error))
-    selection.dataset_spec.prepare(conf.selection.scene)
+    selection.dataset_spec.prepare(conf.selection.scene, mode=conf.selection.mode)
 
     import time
 

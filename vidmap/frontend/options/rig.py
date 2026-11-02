@@ -34,7 +34,10 @@ class PanoramaView:
 
 @options_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class PanoramaOptions:
-    image_size: tuple[Annotated[int, Field(strict=True, gt=0)], Annotated[int, Field(strict=True, gt=0)]]
+    aspect_ratio: tuple[
+        Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)],
+        Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)],
+    ]
     horizontal_fov_degrees: Annotated[float, Field(strict=True, gt=0, lt=180)]
     views: Annotated[dict[CameraId, PanoramaView], Field(min_length=1)]
 

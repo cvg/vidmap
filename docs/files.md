@@ -10,7 +10,7 @@ e.g. `cam0/1.png`.
 | Uncalibrated monocular | A directory containing `cam0/`, or an MP4/MOV video |
 | Calibrated monocular | A directory containing `cam0/` |
 | Physical rig | A directory containing `cam0/`, `cam1/`, … |
-| Panorama | A directory containing `cam0/` with 360° equirectangular images |
+| Panorama | A directory containing `cam0/` with 360° equirectangular images, or a stitched MP4/MOV panorama |
 
 Uncalibrated monocular images use natural filename order (`frame2.png` before
 `frame10.png`). Rigs, calibrated monocular and panoramas resolve numeric filenames

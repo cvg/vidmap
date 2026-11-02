@@ -42,9 +42,8 @@ def resolve_camera_preparation(capture: PreparedCapture, options) -> CameraPrepa
     if priors.camera_model not in pycolmap.CameraModelId.__members__:
         raise ValueError(f"Unknown COLMAP camera model: {priors.camera_model}")
     has_multi_sensor_rig = any(rig.num_sensors() != 1 for rig in capture.rec.rigs.values())
-    if capture.preserve_calibration:
-        if priors.initialization != "supplied":
-            raise ValueError("Preserved capture calibration requires supplied initialization")
+    use_supplied = priors.initialization == "supplied"
+    if capture.preserve_calibration and use_supplied:
         if options.keyframes.selection.intrinsics_source != "ground_truth":
             raise ValueError("Preserved capture calibration requires supplied keyframing intrinsics")
         if priors.camera_model != "PINHOLE":
@@ -80,16 +79,16 @@ def resolve_camera_preparation(capture: PreparedCapture, options) -> CameraPrepa
         distorted = camera.model_name not in ("PINHOLE", "SIMPLE_PINHOLE")
         image_mode = settings[cid].image_mode
         if image_mode == "auto":
-            image_mode = "undistort" if capture.preserve_calibration and distorted else "native"
+            image_mode = "undistort" if use_supplied and distorted else "native"
         if image_mode == "undistort" and (distorted or priors.camera_model in DISTORTED_CAMERA_MODELS):
-            if not capture.preserve_calibration:
+            if not use_supplied:
                 raise ValueError("Undistortion requires supplied capture calibration")
             undistort.append(cid)
         elif distorted:
-            if capture.preserve_calibration:
+            if use_supplied:
                 raise ValueError("Native calibrated distorted cameras are unsupported; select undistort")
-            if camera.model_name not in DISTORTED_CAMERA_MODELS or camera.model_name != priors.camera_model:
-                raise ValueError("Native distorted source cameras require a supported matching preparation model")
+            if priors.camera_model not in DISTORTED_CAMERA_MODELS:
+                raise ValueError("Native distorted source cameras require a supported distortion prediction model")
     return CameraPreparationPlan(allocation, priors, tuple(undistort))
 
 
@@ -124,7 +123,7 @@ def prepare_capture(capture: PreparedCapture, plan: CameraPreparationPlan) -> Pr
         frame.add_data_id(prepared.data_id)
         rec.add_frame(frame)
         rec.add_image(prepared)
-    return replace(capture, rec=rec)
+    return replace(capture, rec=rec, preserve_calibration=False)
 
 
 def initialize_selected_camera_geometry(working_rec, source_rec, image_names, plan: CameraPreparationPlan):

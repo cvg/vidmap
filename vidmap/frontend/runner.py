@@ -71,16 +71,18 @@ def run_local_frontend(
             raise ValueError("Capture inputs already supply calibration and complete frames")
         scene_parser = input_path
     elif conf.pipeline.rig is not None and conf.pipeline.rig.projection is not None:
-        from vidmap.datasets.prepare.panorama_capture import prepare_panorama_capture
+        from vidmap.datasets.prepare.helpers.panorama_capture import prepare_panorama_capture
+        from vidmap.reconstruction import prepare_reconstruction_images
 
         if imnames is not None:
             raise ValueError("Panorama inputs require complete frames")
+        image_dir = prepare_reconstruction_images(input_path, workspace)
         input_snapshot = prepare_panorama_capture(
-            input_path, conf.pipeline.rig, workspace / "prepared_capture", frontend_options=conf.pipeline
+            image_dir, conf.pipeline.rig, workspace / "prepared_capture", frontend_options=conf.pipeline
         )
         scene_parser = input_snapshot.capture
     else:
-        from vidmap.datasets.prepare.rig_capture import load_capture
+        from vidmap.datasets.prepare.helpers.rig_capture import load_capture
         from vidmap.reconstruction import prepare_reconstruction_images
 
         image_dir = prepare_reconstruction_images(input_path, workspace)
@@ -91,7 +93,7 @@ def run_local_frontend(
 
     preparation_plan = resolve_camera_preparation(scene_parser, conf.pipeline)
     if preparation_plan.undistort_camera_ids:
-        from vidmap.datasets.prepare.rig_capture import prepare_rig_capture
+        from vidmap.datasets.prepare.helpers.rig_capture import prepare_rig_capture
 
         input_snapshot = prepare_rig_capture(
             scene_parser,
@@ -237,12 +239,25 @@ class FrontendRunner:
                 config=self.conf.name,
             ):
                 try:
-                    scene_parser = prepare_scene_capture(scene_parser)
-                    input_snapshot = (
-                        scene_parser.snapshot()
-                        if scene_parser.preserve_calibration or scene_parser.frame_timestamps_ns is not None
-                        else None
-                    )
+                    if self.conf.pipeline.rig is not None and self.conf.pipeline.rig.projection is not None:
+                        from vidmap.datasets.prepare.helpers.panorama_capture import prepare_panorama_capture
+
+                        input_snapshot = prepare_panorama_capture(
+                            scene_parser.rgb_dir,
+                            self.conf.pipeline.rig,
+                            results.resolved_frontend_work_dir() / "prepared_capture",
+                            frontend_options=self.conf.pipeline,
+                            image_names=reference_image_names,
+                        )
+                        scene_parser = input_snapshot.capture
+                        reference_image_names = scene_parser.imnames
+                    else:
+                        scene_parser = prepare_scene_capture(scene_parser)
+                        input_snapshot = (
+                            scene_parser.snapshot()
+                            if scene_parser.preserve_calibration or scene_parser.frame_timestamps_ns is not None
+                            else None
+                        )
                     identity = FrontendIdentity.from_config(
                         self.conf,
                         dataset=self.selection.dataset_spec.name,

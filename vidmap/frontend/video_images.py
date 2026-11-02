@@ -29,7 +29,8 @@ class RomaVideoImageDataset(ImageDataset):
 
         if self.conf.resize_to_shape is not None:
             target_size = self.conf.resize_to_shape
-            image = resize_image(image, target_size, self.conf.interpolation)
+            if tuple(target_size) != size:
+                image = resize_image(image, target_size, self.conf.interpolation)
         else:
             should_resize = False
             if self.conf.resize_max and (self.conf.resize_force or max_dim > self.conf.resize_max):
@@ -41,7 +42,8 @@ class RomaVideoImageDataset(ImageDataset):
 
             if should_resize:
                 size_new = tuple(int(round(x * scale)) for x in size)
-                image = resize_image(image, size_new, self.conf.interpolation)
+                if size_new != size:
+                    image = resize_image(image, size_new, self.conf.interpolation)
 
         if self.conf.grayscale:
             image = image[None]  # (1, H, W)

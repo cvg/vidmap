@@ -89,14 +89,15 @@ In this example:
 
 ## Panoramas
 
-Put your 360° equirectangular images in `/data/images/cam0/`.
+Put your 360° equirectangular images in `/data/images/cam0/`, or pass a stitched
+MP4/MOV panorama as `--input_data`.
 Save `vidmap/configs/frontend/my_panorama.yaml`:
 
 ```yaml
 defaults: [calib/rig]
 rig:
   projection:
-    image_size: [840, 840]  # width, height
+    aspect_ratio: [1, 1]  # width : height
     horizontal_fov_degrees: 120.0
     views:
       0: {yaw_degrees: 0.0, pitch_degrees: 0.0}
@@ -104,7 +105,9 @@ rig:
       2: {yaw_degrees: 240.0, pitch_degrees: 0.0}
 ```
 
-**Full cube:** keep square images and replace the FOV and views inside `projection`:
+View resolution follows the tracking settings (`tracks.images`).
+
+**Full cube:** keep `[1, 1]` and replace the FOV and views inside `projection`:
 
 ```yaml
 horizontal_fov_degrees: 90.0

@@ -361,7 +361,7 @@ python -m vidmap.datasets.prepare --dataset "$DATASET"
 ```
 
 This downloads and validates the supported evaluation inventory, then converts
-it into the canonical `images/`, `rec/`, and testset layout. LaMAR intentionally
+it into the dataset layouts below. LaMAR intentionally
 prepares only the images referenced by its benchmark testset: sessions and
 images absent from that testset are not retained. Downloads resume after
 interruption and completed sequences are reused. Validated source archives are
@@ -384,7 +384,7 @@ Download sizes are the checksum-pinned source archives; prepared sizes cover
 the canonical dataset after conversion. LaMAR archives are session-level, so
 the download includes unused frames inside each required session ZIP; only the
 94,489 testset images are retained. Retaining downloads requires roughly the sum
-of both columns.
+of both columns, plus conversion staging.
 
 After preparation, the selected dataset is available under
 `./local/datasets/<dataset>/`, with its benchmark definitions under
@@ -392,39 +392,56 @@ After preparation, the selected dataset is available under
 
 ```text
 local/
-├── datasets/
-│   ├── lamar/
-│   │   └── scene: <CAB|HGE|LIN>/
-│   │       ├── images/
-│   │       │   └── cam0/<capture>/<timestamp>.jpg  # e.g. ios_2022-06-30_15.55.53/130156492755.jpg
-│   │       ├── rec/
-│   │       └── preparation.json
-│   ├── euroc/
-│   │   └── scene: <machine_hall-MH_01_easy|machine_hall-MH_02_easy|...>/
-│   │       ├── images/
-│   │       │   └── cam0/<timestamp>.png  # e.g. 1403636580863555584.png
-│   │       ├── rec/
-│   │       └── preparation.json
-│   ├── eth3d_slam/
-│   │   └── scene: <plant_1|plant_2|...>/
-│   │       ├── images/
-│   │       │   └── cam0/<timestamp>.<ext>  # e.g. 5865.976533.png
-│   │       ├── rec/
-│   │       ├── unposed_images.json
-│   │       └── preparation.json
-│   └── crocodl/  # Unlike LaMAR, CroCoDL has GT per session, not per scene.
-│       └── <location>/  # e.g. ARCHE_D2
-│           └── <session>/  # e.g. ios_2023-07-12_20.46.14_000
-│               ├── images/
-│               │   └── cam0/<timestamp>.jpg  # e.g. 4971459477.jpg
-│               ├── rec/
-│               └── metadata.json
-└── testsets/
-    ├── lamar/<scene>/<mode>.yaml  # e.g. HGE/sample.yaml
-    ├── euroc/<sequence>/all.yaml  # e.g. machine_hall-MH_01_easy/all.yaml
-    ├── eth3d_slam/<sequence>/all.yaml  # e.g. plant_1/all.yaml
-    └── crocodl/<ios-location>/<mode>.yaml  # e.g. ios-ARCHE_D2/sample-100.yaml
+├── datasets/<dataset>/<scene>/<recording>/
+│   ├── preparation.json
+│   └── <variant>/
+│       ├── images/cam0/...         # cam1/, cam2/, ... when available
+│       └── rec/                   # Matching calibration and reference poses
+└── testsets/<dataset>/<scene>/<mode>.yaml
 ```
+
+| Dataset | Variant(s) |
+| --- | --- |
+| LaMAR, ETH3D-SLAM, CroCoDL | `native` |
+| EuRoC | `rectified` |
+
+<details>
+<summary>[Examples for each dataset - click to expand]</summary>
+
+```text
+local/datasets/
+├── lamar/CAB/ios_2021-06-02_14.21.49_000/
+│   ├── preparation.json
+│   └── native/
+│       ├── images/cam0/...
+│       └── rec/
+├── euroc/machine_hall/MH_01_easy/
+│   ├── preparation.json
+│   └── rectified/
+│       ├── images/cam0/...
+│       └── rec/
+├── eth3d_slam/plant_1/0/
+│   ├── preparation.json
+│   └── native/
+│       ├── images/cam0/...
+│       └── rec/
+└── crocodl/ios-ARCHE_D2/ios_2023-07-12_20.46.14_000/
+    ├── preparation.json
+    └── native/
+        ├── images/cam0/...
+        └── rec/
+
+local/testsets/
+├── lamar/CAB/sample.yaml
+├── euroc/machine_hall/all.yaml
+├── eth3d_slam/plant_1/all.yaml
+└── crocodl/ios-ARCHE_D2/complete.yaml  # Also sample-*.yaml
+```
+
+</details>
+
+Each `rec/` contains calibration and camera poses, without 3D points.
+Select a benchmark with `--mode`; its testset specifies the recording, image variant and image IDs.
 
 </details>
 
