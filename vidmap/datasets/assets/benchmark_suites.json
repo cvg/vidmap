@@ -1,0 +1,61 @@
+{
+  "spires": {
+    "scenes": [
+      "2024-03-12-keble-college-02",
+      "2024-03-12-keble-college-03",
+      "2024-03-12-keble-college-04",
+      "2024-03-12-keble-college-05",
+      "2024-03-13-observatory-quarter-01",
+      "2024-03-13-observatory-quarter-02",
+      "2024-03-14-blenheim-palace-01",
+      "2024-03-14-blenheim-palace-02",
+      "2024-03-14-blenheim-palace-05",
+      "2024-03-18-christ-church-02",
+      "2024-03-18-christ-church-03",
+      "2024-03-20-christ-church-05",
+      "2024-05-20-bodleian-library-02"
+    ],
+    "modes": {
+      "undistorted-mono": {"variant": "rectified", "num_cameras": 1},
+      "fisheye-mono": {"variant": "native", "num_cameras": 1},
+      "undistorted-rig": {"variant": "rectified", "num_cameras": 3}
+    }
+  },
+  "hilti": {
+    "scenes": [
+      "floor_1_2025-05-05_run_1",
+      "floor_1_2025-07-07_run_1",
+      "floor_1_2025-12-02_run_1",
+      "floor_2_2025-05-05_run_1",
+      "floor_2_2025-10-28_run_1",
+      "floor_2_2025-10-28_run_2",
+      "floor_2_2025-12-02_run_1",
+      "floor_2_2025-12-03_run_1",
+      "floor_3_2025-05-19_run_1",
+      "floor_3_2025-12-02_run_1",
+      "floor_4_2025-05-19_run_1",
+      "floor_4_2025-12-02_run_1",
+      "floor_5_2025-12-02_run_1",
+      "floor_6_2025-06-18_run_1",
+      "floor_6_2025-07-07_run_1",
+      "floor_6_2025-12-02_run_1",
+      "floor_6_2025-12-02_run_2",
+      "floor_7_2025-12-02_run_1",
+      "floor_7_2025-12-02_run_2",
+      "floor_7_2025-12-03_run_1",
+      "floor_EG_2025-10-16_run_1",
+      "floor_EG_2025-12-02_run_1",
+      "floor_EG_2025-12-02_run_2",
+      "floor_UG1_2025-05-19_run_1",
+      "floor_UG1_2025-06-18_run_1",
+      "floor_UG1_2025-10-16_run_1",
+      "floor_UG1_2025-12-02_run_1",
+      "floor_UG1_2025-12-02_run_2",
+      "floor_UG1_2025-12-03_run_1",
+      "floor_UG2_2025-12-02_run_1"
+    ],
+    "modes": {
+      "panorama": {"variant": "panorama", "num_cameras": 1}
+    }
+  }
+}

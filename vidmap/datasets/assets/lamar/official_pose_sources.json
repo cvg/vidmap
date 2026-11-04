@@ -1,0 +1,20 @@
+{
+  "CAB": {
+    "url": "https://cvg-data.inf.ethz.ch/lamar/colmap/CAB.zip",
+    "pose_count": 53071,
+    "pose_sha256": "028afcbf40ce6aaf0c6fb4f430578a900b9a3d19a5957dbb76774191df59f8be",
+    "camera_sha256": "8ac4ae31c66f225752f69f0262fe14143eaebb466898c49404b232938dfe0ece"
+  },
+  "HGE": {
+    "url": "https://cvg-data.inf.ethz.ch/lamar/colmap/HGE.zip",
+    "pose_count": 49877,
+    "pose_sha256": "7e5805fdf863ff3910a8c6b4f1775f4dc3e01fe75896d4960f2121abb35d072a",
+    "camera_sha256": "ad4a2f22ff3b735980eada98b4722d04b07e5d6dda4f63913ed5506cde2db7e9"
+  },
+  "LIN": {
+    "url": "https://cvg-data.inf.ethz.ch/lamar/colmap/LIN.zip",
+    "pose_count": 49120,
+    "pose_sha256": "7f8e14136eb22e8d0bada6644761292574c08b9ba54184ad158bcf629b199f5e",
+    "camera_sha256": "8c46ea750b8f23c919604c03398cd3284b0eb78d52791a12293478c820a81f6a"
+  }
+}

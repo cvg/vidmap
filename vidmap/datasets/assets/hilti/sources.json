@@ -1,0 +1,444 @@
+{
+  "shared": [
+    {
+      "path": "config/hilti_openvins/kalibr_imucam_chain.yaml",
+      "url": "https://raw.githubusercontent.com/Hilti-Research/hilti-trimble-slam-challenge-2026/e0c9277e20ab6d856703d3749d52b3a0f9b43926/config/hilti_openvins/kalibr_imucam_chain.yaml",
+      "size": 3131,
+      "sha256": "0cf7880d137fccf85eaeb1bdbaf1ccb180752da386c65d70ce722a73a815c4b1"
+    },
+    {
+      "path": "config/hilti_openvins/mask_cam0.png",
+      "url": "https://raw.githubusercontent.com/Hilti-Research/hilti-trimble-slam-challenge-2026/e0c9277e20ab6d856703d3749d52b3a0f9b43926/config/hilti_openvins/mask_cam0.png",
+      "size": 10254,
+      "sha256": "b4edcac61543eaba609216edc812c1f6c95767d62894c998eae6b63e23746a65"
+    },
+    {
+      "path": "config/hilti_openvins/mask_cam1.png",
+      "url": "https://raw.githubusercontent.com/Hilti-Research/hilti-trimble-slam-challenge-2026/e0c9277e20ab6d856703d3749d52b3a0f9b43926/config/hilti_openvins/mask_cam1.png",
+      "size": 10254,
+      "sha256": "b4edcac61543eaba609216edc812c1f6c95767d62894c998eae6b63e23746a65"
+    }
+  ],
+  "scenes": {
+    "floor_1_2025-05-05_run_1": [
+      {
+        "path": "data/floor_1/2025-05-05/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_1/2025-05-05/run_1/rosbag/rosbag.db3",
+        "size": 3985178624,
+        "sha256": "4c2bd0c213ced007b7232e590878373e94dee7fa89b187fe95bb0f8a0d34d161"
+      },
+      {
+        "path": "groundtruth/floor_1_2025-05-05_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_1_2025-05-05_run_1.txt",
+        "size": 588772,
+        "sha256": "c617b45096d954aa46fcf78b5339b76e47bc0eaa87efd43720fed1fbd6a4d907"
+      }
+    ],
+    "floor_1_2025-07-07_run_1": [
+      {
+        "path": "data/floor_1/2025-07-07/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_1/2025-07-07/run_1/rosbag/rosbag.db3",
+        "size": 4009676800,
+        "sha256": "086d82941b6d54581c70a146bd1358851f69add5f5be7d52513cc3032d90cf43"
+      },
+      {
+        "path": "groundtruth/floor_1_2025-07-07_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_1_2025-07-07_run_1.txt",
+        "size": 602569,
+        "sha256": "ae8faf4ad2a2bcaadc55da848b537ffadc3f799bd66d654910017016eeb7f015"
+      }
+    ],
+    "floor_1_2025-12-02_run_1": [
+      {
+        "path": "data/floor_1/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_1/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 6999293952,
+        "sha256": "96c9048455b2711bb1d6118c27001ad70379e148ddb4078e2d37996cdd2283d7"
+      },
+      {
+        "path": "groundtruth/floor_1_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_1_2025-12-02_run_1.txt",
+        "size": 1240610,
+        "sha256": "befb7a1d847ad987010d14694b5a741479251a27ff652f5adaa3978195f89537"
+      }
+    ],
+    "floor_2_2025-05-05_run_1": [
+      {
+        "path": "data/floor_2/2025-05-05/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_2/2025-05-05/run_1/rosbag/rosbag.db3",
+        "size": 5531398144,
+        "sha256": "9f66c891ae2ab22302f2119e8891f429013d939dd65403238ac6c2d485e6361a"
+      },
+      {
+        "path": "groundtruth/floor_2_2025-05-05_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_2_2025-05-05_run_1.txt",
+        "size": 838941,
+        "sha256": "59108922d358d01a0803cb231602475dbb358a874cc306e64caedefd1f04f8dc"
+      }
+    ],
+    "floor_2_2025-10-28_run_1": [
+      {
+        "path": "data/floor_2/2025-10-28/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_2/2025-10-28/run_1/rosbag/rosbag.db3",
+        "size": 3068993536,
+        "sha256": "9405f32bfbc828cf510b96a6235c69a9d514c5a722f5711d1bf6992388c2ff99"
+      },
+      {
+        "path": "groundtruth/floor_2_2025-10-28_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_2_2025-10-28_run_1.txt",
+        "size": 459436,
+        "sha256": "44da14e5e5a6c8c695c2bd375383b0bca88a2fc703f679da636542e25c8929e1"
+      }
+    ],
+    "floor_2_2025-10-28_run_2": [
+      {
+        "path": "data/floor_2/2025-10-28/run_2/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_2/2025-10-28/run_2/rosbag/rosbag.db3",
+        "size": 2612477952,
+        "sha256": "a53fc21b209ee1823614cccbd0874016f3d9cea117e5c452673cadb60bcc5299"
+      },
+      {
+        "path": "groundtruth/floor_2_2025-10-28_run_2.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_2_2025-10-28_run_2.txt",
+        "size": 386317,
+        "sha256": "33ea895a4e1bf9434febfc617a5a4baa66971a38ea4ee52b6c8bf7d91c417f0f"
+      }
+    ],
+    "floor_2_2025-12-02_run_1": [
+      {
+        "path": "data/floor_2/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_2/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 3560341504,
+        "sha256": "e65e70bef6d563e7bd4754b5f93a5af6edbefcbea30c9f59b22203a2dcf71b7e"
+      },
+      {
+        "path": "groundtruth/floor_2_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_2_2025-12-02_run_1.txt",
+        "size": 645645,
+        "sha256": "4ac2691d11791f81dabfc020251621229bd11a0257cb077877e2eca8a0f21ad5"
+      }
+    ],
+    "floor_2_2025-12-03_run_1": [
+      {
+        "path": "data/floor_2/2025-12-03/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_2/2025-12-03/run_1/rosbag/rosbag.db3",
+        "size": 4119691264,
+        "sha256": "d050ed81c0cd0216ec5d66bc5300cf549d2af75a6ef49b587f1ee6bc2372386c"
+      },
+      {
+        "path": "groundtruth/floor_2_2025-12-03_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_2_2025-12-03_run_1.txt",
+        "size": 673284,
+        "sha256": "575af8bf797ddd94090121cd167daed2fcfd6cb6d93de71db95f79fefcdc23b7"
+      }
+    ],
+    "floor_3_2025-05-19_run_1": [
+      {
+        "path": "data/floor_3/2025-05-19/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_3/2025-05-19/run_1/rosbag/rosbag.db3",
+        "size": 4174323712,
+        "sha256": "5232881a1e571cdd58234fae3c6baa86e62731101f454da2fb7cba06f9b8789c"
+      },
+      {
+        "path": "groundtruth/floor_3_2025-05-19_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_3_2025-05-19_run_1.txt",
+        "size": 520088,
+        "sha256": "9ce3402032441b3849212807ed79f00c125310d7325378dd22737c84e3a64180"
+      }
+    ],
+    "floor_3_2025-12-02_run_1": [
+      {
+        "path": "data/floor_3/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_3/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 3296927744,
+        "sha256": "7d4b974eb2ac7f1d805de2575d940524865ad3667c058bd6f25a873fbef01aaf"
+      },
+      {
+        "path": "groundtruth/floor_3_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_3_2025-12-02_run_1.txt",
+        "size": 594643,
+        "sha256": "825f969d003f302be219d6d8eea06b7e36ab8e3317143787b5c359bacf087982"
+      }
+    ],
+    "floor_4_2025-05-19_run_1": [
+      {
+        "path": "data/floor_4/2025-05-19/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_4/2025-05-19/run_1/rosbag/rosbag.db3",
+        "size": 3263307776,
+        "sha256": "b1775976ceec860de919357890b53e449d24759833b7e58aa7c3d2e2a3b11f94"
+      },
+      {
+        "path": "groundtruth/floor_4_2025-05-19_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_4_2025-05-19_run_1.txt",
+        "size": 412090,
+        "sha256": "0620e2c5987f7b0317342baedb28fd50732c6291cc87c1e5856f544476b74487"
+      }
+    ],
+    "floor_4_2025-12-02_run_1": [
+      {
+        "path": "data/floor_4/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_4/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 5149523968,
+        "sha256": "fd568b19ca15001d1697a6ea74ff8922eb364489d519d8e21de064bdb9df7d2d"
+      },
+      {
+        "path": "groundtruth/floor_4_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_4_2025-12-02_run_1.txt",
+        "size": 868127,
+        "sha256": "52b3652cf0c7e15f40d8acd0979b8da703f6f66446759fd2439c383fa20ee9f3"
+      }
+    ],
+    "floor_5_2025-12-02_run_1": [
+      {
+        "path": "data/floor_5/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_5/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 4237619200,
+        "sha256": "b94ee21b9c4f2342d70faa8abd86f1dedb2d6592019004384573f79f8b4b6545"
+      },
+      {
+        "path": "groundtruth/floor_5_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_5_2025-12-02_run_1.txt",
+        "size": 719793,
+        "sha256": "7a1dadb07b3ee17733a73d38e490ee167e2ebf7252b441bf11e6407ea60294e2"
+      }
+    ],
+    "floor_6_2025-06-18_run_1": [
+      {
+        "path": "data/floor_6/2025-06-18/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_6/2025-06-18/run_1/rosbag/rosbag.db3",
+        "size": 2924335104,
+        "sha256": "bc53a00191934a22790ead15e9edffa0d4486017074243a52246537fe486ee20"
+      },
+      {
+        "path": "groundtruth/floor_6_2025-06-18_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_6_2025-06-18_run_1.txt",
+        "size": 311974,
+        "sha256": "54dca44556536182d3047d422d290450472eca9d4b8cfdad1ec42d83172c3ddc"
+      }
+    ],
+    "floor_6_2025-07-07_run_1": [
+      {
+        "path": "data/floor_6/2025-07-07/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_6/2025-07-07/run_1/rosbag/rosbag.db3",
+        "size": 2785267712,
+        "sha256": "de341ed02574e74b6f11575b6747d06fc5e7838cd2c0d240cc991167bf80285b"
+      },
+      {
+        "path": "groundtruth/floor_6_2025-07-07_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_6_2025-07-07_run_1.txt",
+        "size": 329009,
+        "sha256": "baace255cb241cf6af9b2da91a7ba6a2ba9b02894766d31f98ecb687ebf6b625"
+      }
+    ],
+    "floor_6_2025-12-02_run_1": [
+      {
+        "path": "data/floor_6/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_6/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 4497391616,
+        "sha256": "5cc66e5067e6adb34ebc55295c3eb7e9617405a322313f331104e6656583eee5"
+      },
+      {
+        "path": "groundtruth/floor_6_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_6_2025-12-02_run_1.txt",
+        "size": 766035,
+        "sha256": "a02b09ac9752850e2fa3c565f0e9939d073be47f4ad43931c9ce4932a5c5e3f6"
+      }
+    ],
+    "floor_6_2025-12-02_run_2": [
+      {
+        "path": "data/floor_6/2025-12-02/run_2/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_6/2025-12-02/run_2/rosbag/rosbag.db3",
+        "size": 3333427200,
+        "sha256": "d5c34633a8a42976fc7f6e0ce118b8dcf6fd2b71d5dbf116ecdcf54efcad9858"
+      },
+      {
+        "path": "groundtruth/floor_6_2025-12-02_run_2.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_6_2025-12-02_run_2.txt",
+        "size": 559320,
+        "sha256": "a9424f75ce2be50a476cc2d0f5f632bac5d66b9caddcfa100804f0138ae5716f"
+      }
+    ],
+    "floor_7_2025-12-02_run_1": [
+      {
+        "path": "data/floor_7/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_7/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 3354808320,
+        "sha256": "08b87fab290ca8838356747ed928bd6dfa600b252f76b4ed86770fe498af8322"
+      },
+      {
+        "path": "groundtruth/floor_7_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_7_2025-12-02_run_1.txt",
+        "size": 529161,
+        "sha256": "efb4fadcd4cdba0aa2f196d5057a0c4b22bd52d1a7e8ac53a4054fc6b4b6eb61"
+      }
+    ],
+    "floor_7_2025-12-02_run_2": [
+      {
+        "path": "data/floor_7/2025-12-02/run_2/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_7/2025-12-02/run_2/rosbag/rosbag.db3",
+        "size": 4229259264,
+        "sha256": "6fb4a573bd1fca6de5394b3ccfc826cf234155af70189c95c295cf32c13ce613"
+      },
+      {
+        "path": "groundtruth/floor_7_2025-12-02_run_2.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_7_2025-12-02_run_2.txt",
+        "size": 696771,
+        "sha256": "76702aa727e9e988af3fc0282db069571d797a8089611ff6636b21b77cedbca2"
+      }
+    ],
+    "floor_7_2025-12-03_run_1": [
+      {
+        "path": "data/floor_7/2025-12-03/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_7/2025-12-03/run_1/rosbag/rosbag.db3",
+        "size": 5609529344,
+        "sha256": "3453f9cfb4e2d0f0893001961f35fa2fa1c6eb6afb1641097c9ba10ab8c8ad88"
+      },
+      {
+        "path": "groundtruth/floor_7_2025-12-03_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_7_2025-12-03_run_1.txt",
+        "size": 888854,
+        "sha256": "ba35fcb19fec8fc6f77bd662db8e819a712dd2ba9c641320d638c896cf55d380"
+      }
+    ],
+    "floor_EG_2025-10-16_run_1": [
+      {
+        "path": "data/floor_EG/2025-10-16/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_EG/2025-10-16/run_1/rosbag/rosbag.db3",
+        "size": 6891782144,
+        "sha256": "5c72def893a338b8dea472d02d8837f22209365d82f1beebbe48307ba388fb72"
+      },
+      {
+        "path": "groundtruth/floor_EG_2025-10-16_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_EG_2025-10-16_run_1.txt",
+        "size": 1090613,
+        "sha256": "d0c0e5b1bfd3b948073e0541794de51159be9b84a9045e37d5050bb4d9e02653"
+      }
+    ],
+    "floor_EG_2025-12-02_run_1": [
+      {
+        "path": "data/floor_EG/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_EG/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 3368960000,
+        "sha256": "d2700faec4a33a68e0a080eae5f2d18ef2946a0422193637383c7c57613ac8eb"
+      },
+      {
+        "path": "groundtruth/floor_EG_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_EG_2025-12-02_run_1.txt",
+        "size": 567512,
+        "sha256": "3b23d275bac02ad4e0a9c80fec4a804156e380cef0174a17fefb52f956a2cfae"
+      }
+    ],
+    "floor_EG_2025-12-02_run_2": [
+      {
+        "path": "data/floor_EG/2025-12-02/run_2/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_EG/2025-12-02/run_2/rosbag/rosbag.db3",
+        "size": 4201840640,
+        "sha256": "40f4ac431816b925bd7e8ee7f59266bdb5833b6166032ca1f8db9d64fcaef8a2"
+      },
+      {
+        "path": "groundtruth/floor_EG_2025-12-02_run_2.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_EG_2025-12-02_run_2.txt",
+        "size": 731333,
+        "sha256": "9760de3fdffbb9dfa234da45c7ab03806c7709122203180f28351c2932340421"
+      }
+    ],
+    "floor_UG1_2025-05-19_run_1": [
+      {
+        "path": "data/floor_UG1/2025-05-19/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG1/2025-05-19/run_1/rosbag/rosbag.db3",
+        "size": 5997969408,
+        "sha256": "a5af3287fe0df2fc6223276930d3a1b27279228ee03428da4ff6cabefcc62961"
+      },
+      {
+        "path": "groundtruth/floor_UG1_2025-05-19_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG1_2025-05-19_run_1.txt",
+        "size": 920075,
+        "sha256": "a51d286349b584629098d53dfd3edb1c9c33a40b636a35ca1ce31da753ac1412"
+      }
+    ],
+    "floor_UG1_2025-06-18_run_1": [
+      {
+        "path": "data/floor_UG1/2025-06-18/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG1/2025-06-18/run_1/rosbag/rosbag.db3",
+        "size": 4719480832,
+        "sha256": "3f43365369d1be2348d05dafd806a3c424f328405810b1310dc7a267bda7b8f7"
+      },
+      {
+        "path": "groundtruth/floor_UG1_2025-06-18_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG1_2025-06-18_run_1.txt",
+        "size": 742284,
+        "sha256": "04fc27f4d4ff2402c1a5f421cc2b202b86c4a8206742465f4923fc4d926a671e"
+      }
+    ],
+    "floor_UG1_2025-10-16_run_1": [
+      {
+        "path": "data/floor_UG1/2025-10-16/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG1/2025-10-16/run_1/rosbag/rosbag.db3",
+        "size": 5849698304,
+        "sha256": "790587d3b61643d44b4dbeef8cc0acf4b8d4fa85d27d85b0d238a6e4cf364e8f"
+      },
+      {
+        "path": "groundtruth/floor_UG1_2025-10-16_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG1_2025-10-16_run_1.txt",
+        "size": 913652,
+        "sha256": "a9f2b00f730a49ca64fbd612e6e3154ae7579d1704121deb99f014dd9c3b992a"
+      }
+    ],
+    "floor_UG1_2025-12-02_run_1": [
+      {
+        "path": "data/floor_UG1/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG1/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 6114402304,
+        "sha256": "18d122d261e50a9577262d1b4211f01f09a0567813ac16b91bf172b3cf8b6e79"
+      },
+      {
+        "path": "groundtruth/floor_UG1_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG1_2025-12-02_run_1.txt",
+        "size": 1139372,
+        "sha256": "f8d1546c79d298e442baa33c36f37267f123f463bbd83a5470eebbd9d39d02a3"
+      }
+    ],
+    "floor_UG1_2025-12-02_run_2": [
+      {
+        "path": "data/floor_UG1/2025-12-02/run_2/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG1/2025-12-02/run_2/rosbag/rosbag.db3",
+        "size": 5227814912,
+        "sha256": "b8185f422f0fdcfceac445e5b086ddec0ec22aa025ec715d98a228012f8aa058"
+      },
+      {
+        "path": "groundtruth/floor_UG1_2025-12-02_run_2.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG1_2025-12-02_run_2.txt",
+        "size": 980878,
+        "sha256": "572355b38476583fcb03a381fa68a1873d0ff02dfb0288aa72315ce3152db4e5"
+      }
+    ],
+    "floor_UG1_2025-12-03_run_1": [
+      {
+        "path": "data/floor_UG1/2025-12-03/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG1/2025-12-03/run_1/rosbag/rosbag.db3",
+        "size": 3395715072,
+        "sha256": "b6c326b72b4d636a7e23354241381991cde734bf1c31f6bf9b6043e44fdbdd00"
+      },
+      {
+        "path": "groundtruth/floor_UG1_2025-12-03_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG1_2025-12-03_run_1.txt",
+        "size": 600741,
+        "sha256": "241058c9e24a92dfb554ed03ba5929c0ec0a92de5c884a6ff8a926575d04226d"
+      }
+    ],
+    "floor_UG2_2025-12-02_run_1": [
+      {
+        "path": "data/floor_UG2/2025-12-02/run_1/rosbag/rosbag.db3",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/data/floor_UG2/2025-12-02/run_1/rosbag/rosbag.db3",
+        "size": 5569863680,
+        "sha256": "1d5072b2205eac40f3e213f148cbc1e8d6bf790ec66cda0efdd2d4f5dc7017e8"
+      },
+      {
+        "path": "groundtruth/floor_UG2_2025-12-02_run_1.txt",
+        "url": "https://huggingface.co/datasets/Hilti-Research/hilti-trimble-slam-challenge-2026/resolve/ac5fd207e10a7a45438f04d1dbc96a529b1088be/groundtruth/floor_UG2_2025-12-02_run_1.txt",
+        "size": 997021,
+        "sha256": "769445df54a5576b5e43e6ea7a2a1dfc3d9d4f6c44c78cccedf373fbe430cdef"
+      }
+    ]
+  }
+}

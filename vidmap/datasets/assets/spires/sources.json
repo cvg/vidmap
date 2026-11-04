@@ -1,0 +1,230 @@
+{
+  "shared": [
+    {
+      "path": "calibration/calibration-sequences-2024-03-19/cam-lidar.yaml",
+      "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/calibration/calibration-sequences-2024-03-19/cam-lidar.yaml",
+      "size": 1644,
+      "sha256": "fa6fd40646923b4ddbacef763fad15f316fc6f8019eb5ab9b3aabfd57bed46e1"
+    },
+    {
+      "path": "calibration/calibration-sequences-2024-03-19/cam0.yaml",
+      "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/calibration/calibration-sequences-2024-03-19/cam0.yaml",
+      "size": 715,
+      "sha256": "2e9c3dbb83617ed3816a28d99d976b397652f3c730bce89dc50d7cf153c6fd6e"
+    },
+    {
+      "path": "calibration/calibration-sequences-2024-03-19/cam1.yaml",
+      "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/calibration/calibration-sequences-2024-03-19/cam1.yaml",
+      "size": 716,
+      "sha256": "51e2f20a46bbaf2e1d02096d6b564871edfbca96d2f1c4506a3f2b9e267dd2ad"
+    },
+    {
+      "path": "calibration/calibration-sequences-2024-03-19/cam2.yaml",
+      "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/calibration/calibration-sequences-2024-03-19/cam2.yaml",
+      "size": 715,
+      "sha256": "8b2433de79113fd3ab2aacc837c8d37d8e164ee703a0bdae9348a9ec6d50921b"
+    }
+  ],
+  "scenes": {
+    "2024-03-12-keble-college-02": [
+      {
+        "path": "sequences/2024-03-12-keble-college-02/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-02/processed/trajectory/gt-tum.txt",
+        "size": 1199863,
+        "sha256": "671ed805ba33e4edd929a1e5e533837081099b443655f494ecf290c46e8f69c6"
+      },
+      {
+        "path": "sequences/2024-03-12-keble-college-02/raw/rosbag/1710255615_2024-03-12-15-00-16_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-02/raw/rosbag/1710255615_2024-03-12-15-00-16_0.bag",
+        "size": 5128342401,
+        "sha256": "cade2da753b755d8c646f92f47b8985c89e9e95c8dbe8a628d98ba39596ff0da"
+      }
+    ],
+    "2024-03-12-keble-college-03": [
+      {
+        "path": "sequences/2024-03-12-keble-college-03/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-03/processed/trajectory/gt-tum.txt",
+        "size": 1152492,
+        "sha256": "b560aa51dbe14f03f31d961236769822e8e99eb6d606a562d6418191f076e3ed"
+      },
+      {
+        "path": "sequences/2024-03-12-keble-college-03/raw/rosbag/1710256011_2024-03-12-15-06-52_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-03/raw/rosbag/1710256011_2024-03-12-15-06-52_0.bag",
+        "size": 4808019426,
+        "sha256": "8385c4f60b436d558eef371a606c795e951185b81032b90fac3448ccde29e21b"
+      }
+    ],
+    "2024-03-12-keble-college-04": [
+      {
+        "path": "sequences/2024-03-12-keble-college-04/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-04/processed/trajectory/gt-tum.txt",
+        "size": 2727907,
+        "sha256": "75c1d42b580d25be10efb9b27dfea5ef25df0f84b07386b728e72c96088f1f70"
+      },
+      {
+        "path": "sequences/2024-03-12-keble-college-04/raw/rosbag/1710256650_2024-03-12-15-17-31_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-04/raw/rosbag/1710256650_2024-03-12-15-17-31_0.bag",
+        "size": 9467104685,
+        "sha256": "c36252921ee27db625b9e5f7d5e83b034a83c0dcf193dfad19a18a0182fd1769"
+      },
+      {
+        "path": "sequences/2024-03-12-keble-college-04/raw/rosbag/1710256650_2024-03-12-15-26-05_1.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-04/raw/rosbag/1710256650_2024-03-12-15-26-05_1.bag",
+        "size": 3887183954,
+        "sha256": "298ed5c7dee66eb859cc783b11cae03d6eb341041c8a1107128daa2f7bcfc6de"
+      }
+    ],
+    "2024-03-12-keble-college-05": [
+      {
+        "path": "sequences/2024-03-12-keble-college-05/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-05/processed/trajectory/gt-tum.txt",
+        "size": 2313696,
+        "sha256": "23d27b6f7536fa0307647a13f26c8315854c0a2cf141a374b3c504684bd0e4b1"
+      },
+      {
+        "path": "sequences/2024-03-12-keble-college-05/raw/rosbag/1710257614_2024-03-12-15-33-35_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-05/raw/rosbag/1710257614_2024-03-12-15-33-35_0.bag",
+        "size": 9427812351,
+        "sha256": "00f6b8b19012d4bb212c2d0ef4916f446e191c1ceb7191c759e406a40a86a097"
+      },
+      {
+        "path": "sequences/2024-03-12-keble-college-05/raw/rosbag/1710257614_2024-03-12-15-42-11_1.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-12-keble-college-05/raw/rosbag/1710257614_2024-03-12-15-42-11_1.bag",
+        "size": 1470324626,
+        "sha256": "dd5d58f0de2c8824ffb99bed385433da6af6285a6a96866bc328683587fc143d"
+      }
+    ],
+    "2024-03-13-observatory-quarter-01": [
+      {
+        "path": "sequences/2024-03-13-observatory-quarter-01/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-13-observatory-quarter-01/processed/trajectory/gt-tum.txt",
+        "size": 1163922,
+        "sha256": "afb6011ad6b21413b811568337d5a0d24447efa967105dc17d29e959490519c1"
+      },
+      {
+        "path": "sequences/2024-03-13-observatory-quarter-01/raw/rosbag/1710338090_2024-03-13-13-54-51_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-13-observatory-quarter-01/raw/rosbag/1710338090_2024-03-13-13-54-51_0.bag",
+        "size": 5466871208,
+        "sha256": "5da1843f9a8949fd0f7dce01e92b3c710ce524213c321b7850cba1a80d8201aa"
+      }
+    ],
+    "2024-03-13-observatory-quarter-02": [
+      {
+        "path": "sequences/2024-03-13-observatory-quarter-02/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-13-observatory-quarter-02/processed/trajectory/gt-tum.txt",
+        "size": 1089467,
+        "sha256": "38334eba0983adb1c1d1aaa6ac07ce9e9980c67e91084efe2b4b3a50cc61caae"
+      },
+      {
+        "path": "sequences/2024-03-13-observatory-quarter-02/raw/rosbag/1710338490_2024-03-13-14-01-30_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-13-observatory-quarter-02/raw/rosbag/1710338490_2024-03-13-14-01-30_0.bag",
+        "size": 5040946363,
+        "sha256": "3e9ec51e7a8bae016d24930cdcc6c6dda8f2b38bcd6fecd3e123a8fcbc12fdcb"
+      }
+    ],
+    "2024-03-14-blenheim-palace-01": [
+      {
+        "path": "sequences/2024-03-14-blenheim-palace-01/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-14-blenheim-palace-01/processed/trajectory/gt-tum.txt",
+        "size": 1604665,
+        "sha256": "94c3453abfc6acbf72fda4ffc4de1a55b2de6367f7a321277ed24c085d36d2f4"
+      },
+      {
+        "path": "sequences/2024-03-14-blenheim-palace-01/raw/rosbag/1710406700_2024-03-14-08-58-21_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-14-blenheim-palace-01/raw/rosbag/1710406700_2024-03-14-08-58-21_0.bag",
+        "size": 6325760912,
+        "sha256": "377ab4e5535ea3f15de121f67e19128a6d2c308c4df9bbd69ec997e4160a2958"
+      }
+    ],
+    "2024-03-14-blenheim-palace-02": [
+      {
+        "path": "sequences/2024-03-14-blenheim-palace-02/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-14-blenheim-palace-02/processed/trajectory/gt-tum.txt",
+        "size": 1469160,
+        "sha256": "3d82207bf75a4c57a3644db8e5500a6bc0eec9139c0bcd1a2993bf86c075299b"
+      },
+      {
+        "path": "sequences/2024-03-14-blenheim-palace-02/raw/rosbag/1710407340_2024-03-14-09-09-01_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-14-blenheim-palace-02/raw/rosbag/1710407340_2024-03-14-09-09-01_0.bag",
+        "size": 5807146911,
+        "sha256": "617fd4d9870bac76c1abdc2be834b927dc868f32b072c650bd04359a658d2164"
+      }
+    ],
+    "2024-03-14-blenheim-palace-05": [
+      {
+        "path": "sequences/2024-03-14-blenheim-palace-05/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-14-blenheim-palace-05/processed/trajectory/gt-tum.txt",
+        "size": 1106541,
+        "sha256": "18dea18c3e351d7ae1f631a8869231829360be4794ecf839e0f4c083aa092f73"
+      },
+      {
+        "path": "sequences/2024-03-14-blenheim-palace-05/raw/rosbag/1710410169_2024-03-14-09-56-09_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-14-blenheim-palace-05/raw/rosbag/1710410169_2024-03-14-09-56-09_0.bag",
+        "size": 5319780246,
+        "sha256": "5e0d7f9ae35e13a355368d79b55ded667359c63844957b0e6d3578a3194cd38b"
+      }
+    ],
+    "2024-03-18-christ-church-02": [
+      {
+        "path": "sequences/2024-03-18-christ-church-02/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-18-christ-church-02/processed/trajectory/gt-tum.txt",
+        "size": 2240218,
+        "sha256": "01b7c1bf7e2b80f9da058dfe39b043bc7509e33c887221aa1505eb11dbde0cae"
+      },
+      {
+        "path": "sequences/2024-03-18-christ-church-02/raw/rosbag/1710754066_2024-03-18-09-27-47_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-18-christ-church-02/raw/rosbag/1710754066_2024-03-18-09-27-47_0.bag",
+        "size": 8973742217,
+        "sha256": "4560361da07ea22219af83722beb621d5e1710d88bc3eab017be36dafb839bed"
+      },
+      {
+        "path": "sequences/2024-03-18-christ-church-02/raw/rosbag/1710754066_2024-03-18-09-36-49_1.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-18-christ-church-02/raw/rosbag/1710754066_2024-03-18-09-36-49_1.bag",
+        "size": 1195460287,
+        "sha256": "79fdea8348dd8a4fe7b5949ce796b7884719787f1a2af6a26e64eaf9b7ad0a66"
+      }
+    ],
+    "2024-03-18-christ-church-03": [
+      {
+        "path": "sequences/2024-03-18-christ-church-03/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-18-christ-church-03/processed/trajectory/gt-tum.txt",
+        "size": 1236394,
+        "sha256": "1c3e1883702f158f103f5c4d8c713f2860c0567c6a40ff9d6757b6921c0bb8fe"
+      },
+      {
+        "path": "sequences/2024-03-18-christ-church-03/raw/rosbag/1710755015_2024-03-18-09-43-36_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-18-christ-church-03/raw/rosbag/1710755015_2024-03-18-09-43-36_0.bag",
+        "size": 5541766461,
+        "sha256": "98d089f404470b0bea7cdb1a8138227a2390bacf405bbcea5fce16ad816f9693"
+      }
+    ],
+    "2024-03-20-christ-church-05": [
+      {
+        "path": "sequences/2024-03-20-christ-church-05/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-20-christ-church-05/processed/trajectory/gt-tum.txt",
+        "size": 1785838,
+        "sha256": "993f09497fbe78679278ba498988ee74c5265997546eabc9dc9be867f13f3119"
+      },
+      {
+        "path": "sequences/2024-03-20-christ-church-05/raw/rosbag/1710926317_2024-03-20-09-18-38_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-03-20-christ-church-05/raw/rosbag/1710926317_2024-03-20-09-18-38_0.bag",
+        "size": 6291326026,
+        "sha256": "70857c06bcd979e3588ba77f9b803793692d316141579f39c09e04f19e000295"
+      }
+    ],
+    "2024-05-20-bodleian-library-02": [
+      {
+        "path": "sequences/2024-05-20-bodleian-library-02/processed/trajectory/gt-tum.txt",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-05-20-bodleian-library-02/processed/trajectory/gt-tum.txt",
+        "size": 1200673,
+        "sha256": "7ceb0f9ac964e9b17cf725e07b77e726e62d998b7250796d55498742a7d0c6bc"
+      },
+      {
+        "path": "sequences/2024-05-20-bodleian-library-02/raw/rosbag/1716183690_2024-05-20-06-41-31_0.bag",
+        "url": "https://huggingface.co/datasets/ori-drs/oxford_spires_dataset/resolve/03f4382308333aa70c3253f12acd3fbf0c7c4a15/sequences/2024-05-20-bodleian-library-02/raw/rosbag/1716183690_2024-05-20-06-41-31_0.bag",
+        "size": 5540105616,
+        "sha256": "04c06c8b45009b034c493113bad272ea6cb263395faee3222a2f974cca828e52"
+      }
+    ]
+  }
+}
