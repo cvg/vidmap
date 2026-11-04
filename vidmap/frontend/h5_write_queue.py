@@ -104,6 +104,10 @@ def save_features(pred, path, name, uncertainty=None):
 def save_keypoints(pred, sparse_features_path):
     """Write one propagation keypoint payload to the sparse-feature artifact."""
     name = pred["name"][0]
-    saved = {key: value for key, value in pred.items() if key in ["keypoints", "scores", "image_size"]}
+    saved = {
+        key: value
+        for key, value in pred.items()
+        if key in ["keypoints", "scores", "image_size", "num_tracking_keypoints"]
+    }
     saved["keypoints"] = saved["keypoints"][0]
     save_features(saved, str(sparse_features_path), name, pred.get("uncertainty"))

@@ -44,6 +44,7 @@ class SparseTrackTransition:
 
     source_keypoints: np.ndarray
     source_uncertainty: np.ndarray
+    num_tracking_keypoints: int
     matches: np.ndarray
     matching_scores: np.ndarray
 
@@ -218,7 +219,7 @@ class SparseTrackState:
             camera=self.camera,
         )
 
-        source_keypoints, certainty_01, covariance_01, _ = self._select_source_keypoints(
+        source_keypoints, certainty_01, covariance_01, selected_salient_mask = self._select_source_keypoints(
             kf_id=kf_id,
             certainty=certainty,
             covariance=covariance,
@@ -268,6 +269,7 @@ class SparseTrackState:
         transition = self._serialize_source_transition(
             projection=projection,
             target_covariance=target_covariance,
+            untracked_keypoints=salient_keypoints[~selected_salient_mask],
         )
         self._commit_transition(
             source_keypoints=source_keypoints,
@@ -337,6 +339,7 @@ class SparseTrackState:
         *,
         projection,
         target_covariance,
+        untracked_keypoints,
     ):
         """Serialize the committed source frame without mutating track state."""
         survivors = projection.survivors
@@ -356,13 +359,40 @@ class SparseTrackState:
             source_covariance_to_save[:, 1, 1] = default_var
             source_covariance_to_save[projection.saved_survivors] = target_covariance_np[survivors]
         source_uncertainty = self._propagated_covar_to_original_pixels_3(source_covariance_to_save)
-        matches0 = projection.matches
-        scores0 = projection.scores
+        source_keypoints_to_save, source_uncertainty = self._append_loop_closure_keypoints(
+            source_keypoints_to_save, source_uncertainty, untracked_keypoints
+        )
+        extra_count = source_keypoints_to_save.shape[1] - len(projection.matches)
         return SparseTrackTransition(
             source_keypoints=source_keypoints_to_save,
             source_uncertainty=source_uncertainty,
-            matches=matches0,
-            matching_scores=scores0,
+            num_tracking_keypoints=len(projection.matches),
+            matches=np.pad(projection.matches, (0, extra_count), constant_values=-1),
+            matching_scores=np.pad(projection.scores, (0, extra_count)),
+        )
+
+    def _append_loop_closure_keypoints(self, keypoints, uncertainty, candidates):
+        """Append spatially distinct ALIKED points to the saved (1, N, 2) array."""
+        if not self.conf.retain_untracked_aliked_for_loop_closure:
+            return keypoints, uncertainty
+        if candidates is None:
+            raise ValueError("salient_keypoints are required when retaining ALIKED loop-closure features")
+
+        accepted = scale_keypoints(keypoints[0], self.scale_ratio).astype(np.float32)
+        for point in candidates:
+            if (((accepted - point) ** 2).sum(axis=1) <= self.conf.nms_radius**2).any():
+                continue
+            accepted = np.vstack([accepted, point.astype(np.float32)])
+        extra = accepted[keypoints.shape[1] :]
+        if not len(extra):
+            return keypoints, uncertainty
+
+        extra = unscale_keypoints(extra, self.scale_ratio).astype(keypoints.dtype)
+        extra_uncertainty = np.zeros((len(extra), 3), dtype=np.float32)
+        extra_uncertainty[:, :2] = _SALIENT_KEYPOINT_STD_PX**2
+        return (
+            np.concatenate([keypoints, extra[None]], axis=1),
+            np.concatenate([uncertainty, extra_uncertainty]),
         )
 
     def _commit_transition(
@@ -388,10 +418,10 @@ class SparseTrackState:
             self.history.mask_tracks(previous_survivors)
         self.history.append_track(source_keypoints[survivors], source_covariance[survivors])
 
-    def serialize_current_target(self) -> tuple[np.ndarray, np.ndarray]:
+    def serialize_current_target(self, *, salient_keypoints=None) -> tuple[np.ndarray, np.ndarray]:
         """Serialize the committed target frame only when it becomes an output."""
         if self.prev_keypoints is None or self.prev_covar is None:
             raise RuntimeError("Cannot serialize target keypoints before a tracking transition")
         keypoints = self.prev_keypoints[None].astype(np.float32)
         uncertainty = self._propagated_covar_to_original_pixels_3(self.prev_covar)
-        return keypoints, uncertainty
+        return self._append_loop_closure_keypoints(keypoints, uncertainty, salient_keypoints)

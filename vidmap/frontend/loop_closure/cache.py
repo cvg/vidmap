@@ -64,6 +64,8 @@ class ExtendedMatchCache:
         lowres_match_resolution,
         match_threshold,
         device: torch.device,
+        non_retrieval_pairs=(),
+        transitive_matches=None,
     ):
         return repair_extended_match_pairs(
             pairs,
@@ -76,12 +78,15 @@ class ExtendedMatchCache:
             lowres_match_resolution=lowres_match_resolution,
             lc_match_thresh=match_threshold,
             device=device,
+            non_retrieval_pairs=non_retrieval_pairs,
+            transitive_matches=transitive_matches,
         )
 
     def collect(self, pairs, *, match_threshold):
         return collect_cached_extended_matches(
             extended_pairs=pairs,
             extended_matches_path=self.path,
+            sparse_features_path=self.paths.sparse_features_path,
             lc_match_thresh=match_threshold,
         )
 

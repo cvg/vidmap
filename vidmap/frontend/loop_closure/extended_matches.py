@@ -287,6 +287,8 @@ class ExtendedMatchBuilder:
         _present_count, missing_count = self.tracks.extended_matches.repair(
             tuple(requests.values()),
             label="extended",
+            non_retrieval_pairs=(*self.tracks.sequential_pairs, *self.keyframes.same_frame_pairs),
+            transitive_matches=self.transitive.tcorr,
             tracker=self.tracker,
             scene_parser=self.scene_parser,
             image_options=self.highres_options,

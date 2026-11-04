@@ -52,6 +52,7 @@ class SparseTrackOptions:
     salient_density_std: float = 0.1
     salient_density_max_scale: float = 3.0
     salient_density_power: float = 1.0
+    retain_untracked_aliked_for_loop_closure: bool = True
     lt_cov_scale: float = 4.0
     multiflow_hops: tuple[int, ...] = (8, 6, 4, 2, 1)
 
