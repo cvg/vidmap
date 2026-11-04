@@ -515,22 +515,19 @@ class BundleAdjuster:
 
             depths = depths[mask]
             variances = variances[mask]
-            inverse_uncertainty = 1 / variances.clip(1e-6, None)
-            point3D_ids = point3D_ids[mask]
             risky_mask = risky_mask[mask]
             if param_multiplier == 0:
                 continue
-            params = param_multiplier * variances**0.5 / depths
-            magnitudes = depth_magnitude_multiplier * depths**2 * inverse_uncertainty
             depth_batches.append(
                 DepthObservationBatch(
                     image_id=image_id,
-                    point_ids=point3D_ids,
+                    point2D_indices=point2D_indices[mask],
                     depths=depths,
-                    robust_scales=params,
-                    weights=magnitudes,
+                    stddevs=np.sqrt(variances),
                     robust_mask=np.ones(len(depths), dtype=bool) if robust_risky_depth else ~risky_mask,
                     loss_type=depth_loss_type,
+                    robust_scale=param_multiplier,
+                    weight=depth_magnitude_multiplier,
                 )
             )
 

@@ -14,5 +14,4 @@ PYBIND11_MODULE(_core, m) {
   vidmap::BindMappingSidecars(m);
   vidmap::BindViewGraph(m);
   vidmap::BindTracks(m);
-  vidmap::BindGlobalPositioning(m);
 }

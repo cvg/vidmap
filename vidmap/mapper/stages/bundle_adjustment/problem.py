@@ -16,12 +16,59 @@ from vidmap.mapper.playback_trace import SolverPlaybackOptions
 @dataclass
 class DepthObservationBatch:
     image_id: int
-    point_ids: np.ndarray
+    point2D_indices: np.ndarray
     depths: np.ndarray
-    robust_scales: np.ndarray
-    weights: np.ndarray
+    stddevs: np.ndarray
     robust_mask: np.ndarray
     loss_type: pycolmap.LossFunctionType
+    robust_scale: float = 1.0
+    weight: float = 1.0
+
+    def loss_groups(self):
+        count = len(self.point2D_indices)
+        if any(np.shape(values) != (count,) for values in (self.depths, self.stddevs, self.robust_mask)):
+            raise ValueError("invalid BA depth observation arrays")
+        if len(np.unique(self.point2D_indices)) != count:
+            raise ValueError("duplicate BA depth observation")
+        if (
+            not np.all(np.isfinite(self.depths))
+            or np.any(self.depths <= 0)
+            or not np.all(np.isfinite(self.stddevs))
+            or np.any(self.stddevs <= 0)
+            or not np.isfinite(self.robust_scale)
+            or self.robust_scale <= 0
+            or not np.isfinite(self.weight)
+            or self.weight < 0
+        ):
+            raise ValueError("invalid BA depth or loss values")
+        if self.weight == 0:
+            return
+        variance = self.stddevs**2
+        trivial = ~self.robust_mask | (self.loss_type == pycolmap.LossFunctionType.TRIVIAL)
+        robust_weight = self.weight * self.robust_scale**2
+        floor = 1e-6
+        # The variance floor changes magnitude, but leaves the robust threshold unchanged.
+        for row in np.flatnonzero(~trivial & (variance < floor)):
+            yield (
+                {
+                    int(self.point2D_indices[row]): (
+                        float(self.depths[row]),
+                        float(self.robust_scale * self.stddevs[row]),
+                    )
+                },
+                self.loss_type,
+                robust_weight * variance[row] / floor,
+            )
+        for mask, stddevs, loss_type, weight in (
+            (~trivial & (variance >= floor), self.robust_scale * self.stddevs, self.loss_type, robust_weight),
+            (trivial, np.sqrt(np.maximum(variance, floor)), pycolmap.LossFunctionType.TRIVIAL, self.weight),
+        ):
+            observations = {
+                int(index): (float(depth), float(stddev))
+                for index, depth, stddev in zip(self.point2D_indices[mask], self.depths[mask], stddevs[mask])
+            }
+            if observations:
+                yield observations, loss_type, weight
 
 
 @dataclass
@@ -103,7 +150,6 @@ def run_bundle_adjustment(
 
     scale_records = {record.image_id: record for record in depth_scales}
     scales = {image_id: np.array([record.log_scale], dtype=float) for image_id, record in scale_records.items()}
-    depth_losses = []
     active_images = set(image_ids)
     for batch in depth_batches:
         image_id = batch.image_id
@@ -111,21 +157,24 @@ def run_bundle_adjustment(
             continue
         if image_id not in scales:
             raise ValueError("depth constraints require a scale record")
-        losses, count = ba_costs.append_depth_observations(
-            problem,
-            reconstruction,
-            image_id,
-            batch.point_ids,
-            batch.depths,
-            batch.robust_scales,
-            batch.weights,
-            batch.robust_mask,
-            batch.loss_type,
-            scales[image_id],
-            not options.refine_rig_from_world
-            or config.has_constant_rig_from_world_pose(reconstruction.image(image_id).frame_id),
-        )
-        depth_losses.append(losses)
+        image = reconstruction.image(image_id)
+        pose = image.frame.rig_from_world.params
+        fix_pose = not options.refine_rig_from_world or config.has_constant_rig_from_world_pose(image.frame_id)
+        if not fix_pose and not problem.has_parameter_block(pose):
+            continue
+        count = 0
+        for observations, loss_type, weight in batch.loss_groups():
+            loss = pycolmap.create_ceres_loss_function(loss_type, 1.0, weight)
+            count += pycolmap.append_ba_depth_constraints(
+                owner,
+                reconstruction,
+                image_id,
+                observations,
+                scales[image_id],
+                loss_function=loss,
+            )
+        if count and fix_pose:
+            problem.set_parameter_block_constant(pose)
         diagnostics.num_depth_residuals += count
 
     for image_id, record in scale_records.items():
