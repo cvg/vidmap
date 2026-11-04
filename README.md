@@ -285,6 +285,9 @@ python -m vidmap.run \
   mapping.mapper.gp.first_pass.loss_lc_geometry.weight=0.4
 ```
 
+FlexGlue is the default matcher. Append `frontend.matcher.name=romav2` to the
+command above to use RoMaV2 instead.
+
 </details>
 
 <a id="gpu-acceleration"></a>
