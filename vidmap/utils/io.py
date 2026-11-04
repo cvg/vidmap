@@ -77,6 +77,11 @@ class H5KeypointReader:
             self._cache.popitem(last=False)
         return value
 
+    def get_tracking(self, name: str):
+        """Read the original point prefix, excluding features retained for retrieval."""
+        keypoints = self.get(name)
+        return keypoints[: int(self._hfile[name]["num_tracking_keypoints"][()])]
+
 
 def get_keypoints(path: Path, name: str, return_uncertainty: bool = False) -> np.ndarray:
     """Get keypoints from H5 file.

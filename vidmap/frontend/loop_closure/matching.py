@@ -29,7 +29,7 @@ from vidmap.utils.io import H5KeypointReader, ordered_pair_images
 from vidmap.utils.logging import progress_bars_enabled
 from vidmap.utils.parsers import names_to_pair
 
-EXTENDED_MATCH_DIRECTION_POLICY = "temporal-tracking-selected-retrieval-canonical-storage-v2"
+EXTENDED_MATCH_DIRECTION_POLICY = "temporal-tracking-selected-retrieval-canonical-storage-v3"
 
 logger = logging.getLogger(__name__)
 
@@ -92,21 +92,58 @@ def collate_retrieval_pair(batch):
     return batch[0]
 
 
+def _unoccupied_matches(matches, occupied):
+    """Return a mask for matches whose source and target are both unused."""
+    return ~np.isin(matches[:, 0], occupied[:, 0]) & ~np.isin(matches[:, 1], occupied[:, 1])
+
+
 def queue_extended_matches(
-    name0, name1, keypoints0, keypoints1, matches_dense, certainty, *, scene_parser, match_threshold, writer_queue
+    name0,
+    name1,
+    keypoints0,
+    keypoints1,
+    matches_dense,
+    certainty,
+    *,
+    scene_parser,
+    match_threshold,
+    writer_queue,
+    num_tracking_keypoints=None,
+    transitive_matches=(),
 ):
     """Sample in inference direction, then canonicalize only the persisted rows."""
-    lc_result = select_lc_matches_from_dense(
-        keypoints0,
-        keypoints1,
-        matches_dense,
-        certainty,
+    select_matches = partial(
+        select_lc_matches_from_dense,
+        matches_dense=matches_dense,
+        certainty=certainty,
         source_size=get_image_size(scene_parser, name0),
         target_size=get_image_size(scene_parser, name1),
         lc_match_thresh=match_threshold,
     )
+    lc_result = select_matches(keypoints0, keypoints1)
     matches0 = lc_result["matches0"]
     matching_scores0 = lc_result["matching_scores0"]
+    # Retained features add matches after resolving original matches against tracking.
+    if num_tracking_keypoints is not None and num_tracking_keypoints != (len(keypoints0), len(keypoints1)):
+        n0, n1 = num_tracking_keypoints
+        original = select_matches(keypoints0[:n0], keypoints1[:n1])
+        # Original matches also pass the existing half-precision cache threshold.
+        original["matches0"][original["matching_scores0"].astype(np.float16) <= match_threshold] = -1
+        original_sources = np.flatnonzero(original["matches0"] >= 0)
+        original_pairs = np.column_stack((original_sources, original["matches0"][original_sources]))
+        tracking_pairs = np.asarray(transitive_matches, dtype=np.int64).reshape(-1, 2)
+        occupied = np.vstack((tracking_pairs, original_pairs[_unoccupied_matches(original_pairs, tracking_pairs)]))
+
+        source = np.flatnonzero(matches0 >= 0)
+        candidates = np.column_stack((source, matches0[source]))
+        retained = (candidates[:, 0] >= n0) | (candidates[:, 1] >= n1)
+        added = candidates[retained & _unoccupied_matches(candidates, occupied)]
+        scores = matching_scores0[added[:, 0]]
+
+        matches0 = np.pad(original["matches0"], (0, len(keypoints0) - n0), constant_values=-1)
+        matching_scores0 = np.pad(original["matching_scores0"], (0, len(keypoints0) - n0))
+        matches0[added[:, 0]] = added[:, 1]
+        matching_scores0[added[:, 0]] = scores
     pair = tuple(natsorted((name0, name1)))
     if pair != (name0, name1):
         source = np.flatnonzero(matches0 >= 0)
@@ -140,6 +177,8 @@ def _match_loop_closures_streaming(
     device: torch.device,
     lc_writer_queue,
     lc_match_thresh=0.5,
+    non_retrieval_pairs=(),
+    transitive_matches=None,
 ):
     """
     Streaming LC frontend for retrieval pairs.
@@ -160,6 +199,10 @@ def _match_loop_closures_streaming(
     """
     if not retrieval_pairs:
         return
+
+    non_retrieval_pairs = {frozenset(pair) for pair in non_retrieval_pairs}
+    if transitive_matches is None:
+        transitive_matches = {}
 
     # Collect unique images from retrieval pairs
     retrieval_images = ordered_pair_images(retrieval_pairs)
@@ -258,8 +301,18 @@ def _match_loop_closures_streaming(
             certainty = certainty.cpu()
 
             # Load sparse keypoints
-            kpts0 = keypoint_reader.get(name0)
-            kpts1 = keypoint_reader.get(name1)
+            read_keypoints = (
+                keypoint_reader.get_tracking
+                if frozenset((name0, name1)) in non_retrieval_pairs
+                else keypoint_reader.get
+            )
+            kpts0 = read_keypoints(name0)
+            kpts1 = read_keypoints(name1)
+            existing = ()
+            if (name0, name1) in transitive_matches:
+                existing = transitive_matches[(name0, name1)]
+            elif (name1, name0) in transitive_matches:
+                existing = transitive_matches[(name1, name0)][:, ::-1]
 
             _stats["total_matches"] += queue_extended_matches(
                 name0,
@@ -271,6 +324,11 @@ def _match_loop_closures_streaming(
                 scene_parser=scene_parser,
                 match_threshold=lc_match_thresh,
                 writer_queue=lc_writer_queue,
+                transitive_matches=existing,
+                num_tracking_keypoints=(
+                    len(keypoint_reader.get_tracking(name0)),
+                    len(keypoint_reader.get_tracking(name1)),
+                ),
             )
 
             # Free tensors from this iteration
@@ -292,6 +350,8 @@ def match_loop_closures_streaming(
     *,
     device: torch.device,
     lc_match_thresh=0.5,
+    non_retrieval_pairs=(),
+    transitive_matches=None,
 ):
     """Run LC frontend with deterministic writer teardown on every exit."""
     if not retrieval_pairs:
@@ -307,6 +367,8 @@ def match_loop_closures_streaming(
             device=device,
             lc_match_thresh=lc_match_thresh,
             lc_writer_queue=writer_queue,
+            non_retrieval_pairs=non_retrieval_pairs,
+            transitive_matches=transitive_matches,
         )
 
 
@@ -322,6 +384,8 @@ def repair_extended_match_pairs(
     lowres_match_resolution,
     lc_match_thresh,
     device: torch.device,
+    non_retrieval_pairs=(),
+    transitive_matches=None,
 ):
     """Repair and verify one planned set of extended-match pairs."""
     expected_names = canonical_pair_names(combine_and_deduplicate_pairs(pairs))
@@ -345,6 +409,8 @@ def repair_extended_match_pairs(
             lowres_match_resolution=lowres_match_resolution,
             device=device,
             lc_match_thresh=lc_match_thresh,
+            non_retrieval_pairs=non_retrieval_pairs,
+            transitive_matches=transitive_matches,
         )
         _, still_missing = inspect_incremental_items(
             paths.extended_matches_path,
@@ -361,16 +427,19 @@ def repair_extended_match_pairs(
     return len(present_names), len(missing_pairs)
 
 
-def _filtered_matches_from_sparse_arrays(raw_matches, raw_scores, reverse, lc_match_thresh):
+def _filtered_matches_from_sparse_arrays(raw_matches, raw_scores, reverse, lc_match_thresh, num_tracking_keypoints):
     valid_idx = np.where(raw_matches != -1)[0]
     matches = np.stack([valid_idx, raw_matches[valid_idx]], -1)
     if reverse:
         matches = np.flip(matches, -1)
     scores = raw_scores[valid_idx]
-    return matches[scores > lc_match_thresh]
+    n0, n1 = num_tracking_keypoints
+    retained = (matches[:, 0] >= n0) | (matches[:, 1] >= n1)
+    # Retained matches already passed the full-precision threshold.
+    return matches[(scores > lc_match_thresh) | retained]
 
 
-def _cached_extended_matches_from_open_file(extended_matches_file, pair, lc_match_thresh):
+def _cached_extended_matches_from_open_file(extended_matches_file, pair, lc_match_thresh, num_tracking_keypoints):
     pair_name_fwd = names_to_pair(pair[0], pair[1])
     if pair_name_fwd in extended_matches_file:
         stored_pair = pair_name_fwd
@@ -383,17 +452,25 @@ def _cached_extended_matches_from_open_file(extended_matches_file, pair, lc_matc
         reverse = True
     raw_matches = extended_matches_file[stored_pair]["matches0"].__array__()
     raw_scores = extended_matches_file[stored_pair]["matching_scores0"].__array__()
-    return _filtered_matches_from_sparse_arrays(raw_matches, raw_scores, reverse, lc_match_thresh)
+    return _filtered_matches_from_sparse_arrays(
+        raw_matches, raw_scores, reverse, lc_match_thresh, num_tracking_keypoints
+    )
 
 
-def collect_cached_extended_matches(*, extended_pairs, extended_matches_path, lc_match_thresh):
+def collect_cached_extended_matches(*, extended_pairs, extended_matches_path, sparse_features_path, lc_match_thresh):
     """Collect extended matches while keeping cached HDF5 matches open once."""
     matches = {}
-    with h5py.File(str(extended_matches_path), "r", libver="latest") as open_matches:
+    with (
+        h5py.File(str(extended_matches_path), "r", libver="latest") as open_matches,
+        h5py.File(str(sparse_features_path), "r", libver="latest") as features,
+    ):
         for pair in extended_pairs:
-            filtered_matches = _cached_extended_matches_from_open_file(open_matches, pair, lc_match_thresh)
+            n0 = int(features[pair[0]]["num_tracking_keypoints"][()])
+            n1 = int(features[pair[1]]["num_tracking_keypoints"][()])
+            filtered_matches = _cached_extended_matches_from_open_file(open_matches, pair, lc_match_thresh, (n0, n1))
             if len(filtered_matches) > 0:
-                matches[pair] = filtered_matches
+                original = (filtered_matches[:, 0] < n0) & (filtered_matches[:, 1] < n1)
+                matches[pair] = np.concatenate((filtered_matches[original], filtered_matches[~original]))
     return matches
 
 
@@ -414,9 +491,7 @@ def merge_matches(tcorr: dict, matches: dict):
             match_array = np.flip(match_array, axis=1)
             mask_pair = existing_pair
         if existing_pair in tcorr:
-            mask0 = ~np.isin(match_array[:, 0], tcorr[existing_pair][:, 0])
-            mask1 = ~np.isin(match_array[:, 1], tcorr[existing_pair][:, 1])
-            mask = mask0 & mask1
+            mask = _unoccupied_matches(match_array, tcorr[existing_pair])
             tcorr[existing_pair] = np.vstack([tcorr[existing_pair], match_array[mask]])
         else:
             tcorr[existing_pair] = match_array

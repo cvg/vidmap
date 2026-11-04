@@ -84,17 +84,18 @@ def _write_sequential_match(
     writer_queue,
 ):
     """Convert one reused dense field into a queued sequential sparse match."""
-    queue_extended_matches(
-        name0,
-        name1,
-        get_keypoints(sparse_features_path, name0),
-        get_keypoints(sparse_features_path, name1),
-        dense.matches,
-        dense.certainty,
-        scene_parser=scene_parser,
-        match_threshold=match_threshold,
-        writer_queue=writer_queue,
-    )
+    with H5KeypointReader(sparse_features_path) as reader:
+        queue_extended_matches(
+            name0,
+            name1,
+            reader.get_tracking(name0),
+            reader.get_tracking(name1),
+            dense.matches,
+            dense.certainty,
+            scene_parser=scene_parser,
+            match_threshold=match_threshold,
+            writer_queue=writer_queue,
+        )
 
 
 def flush_sequential_matches(
@@ -421,6 +422,7 @@ class StreamingTrackPropagator:
                     "scores": np.ones_like(transition.source_keypoints[0, :, 0], dtype=np.float32),
                     "image_size": state.original_size,
                     "uncertainty": transition.source_uncertainty,
+                    "num_tracking_keypoints": transition.num_tracking_keypoints,
                 },
                 self.paths.sparse_features_path,
             )
@@ -447,7 +449,13 @@ class StreamingTrackPropagator:
             )
             accepted_positions.append(candidate_position)
 
-        last_frame_kps, last_frame_covar = self.state.serialize_current_target()
+        final_salient_keypoints = None
+        if self.conf.retain_untracked_aliked_for_loop_closure:
+            final_name = self.keyframe_sequence[accepted_positions[-1]]
+            final_salient_keypoints = scale_keypoints(self.get_keypoints(final_name), self.state.scale_ratio)
+        last_frame_kps, last_frame_covar = self.state.serialize_current_target(
+            salient_keypoints=final_salient_keypoints,
+        )
         save_keypoints(
             {
                 "name": [self.keyframe_sequence[accepted_positions[-1]]],
@@ -455,6 +463,7 @@ class StreamingTrackPropagator:
                 "scores": np.ones_like(last_frame_kps[0, :, 0], dtype=np.float32),
                 "image_size": self.state.original_size,
                 "uncertainty": last_frame_covar,
+                "num_tracking_keypoints": len(self.state.prev_keypoints),
             },
             self.paths.sparse_features_path,
         )
