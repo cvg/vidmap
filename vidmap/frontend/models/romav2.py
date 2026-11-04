@@ -1,14 +1,14 @@
 """RoMaV2 model owner for streaming frontend."""
 
-import gc
 import logging
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
 import torch
 
-from vidmap.frontend.cache import file_fingerprint
+from vidmap.frontend.cache import file_fingerprint, semantic_config
 from vidmap.frontend.models.romav2_compile_cache import CachedRoMaGraph
 from vidmap.frontend.models.romav2_features import (
     FEATURE_NAMES,
@@ -16,9 +16,9 @@ from vidmap.frontend.models.romav2_features import (
     RoMaFeatureProjection,
     RoMaImageFeatures,
 )
+from vidmap.frontend.models.tracker import KeyframeMatch
 from vidmap.frontend.options.matching import RoMaV2Options
 from vidmap.model_sources import import_model_package, model_package_root
-from vidmap.utils.device import empty_device_cache
 
 ROMAV2_SOURCE_REVISION = "f23bab45a53ffb3f3c3cdda0566d0de5365e7339"
 ROMAV2_PACKAGE_ROOT = model_package_root(
@@ -112,6 +112,59 @@ class RoMaV2Model(torch.nn.Module):
                     graph = torch.compile(graph)
             setattr(self, name, graph)
 
+    needs_lowres_images = True
+    normalize_keyframe_images = True
+
+    @staticmethod
+    def cache_identity(conf):
+        return romav2_cache_identity(conf)
+
+    @staticmethod
+    def keyframe_cache_identity(conf, track_options):
+        identity = romav2_cache_identity(conf)
+        if track_options is not None:
+            identity["lookahead_tracks"] = semantic_config(track_options)
+        return identity
+
+    @staticmethod
+    def keyframe_image_options(options):
+        return replace(options, resize_to_shape=(560, 560)) if options.resize_to_shape is None else options
+
+    def prefetch_images(self, inputs, image_keys, *, image_names=None):
+        yield from inputs
+
+    @staticmethod
+    def keyframe_match(matches, certainty, size, tracking_match=None):
+        from vidmap.frontend.keyframes.selection import propagate_keypoints
+
+        return KeyframeMatch(
+            lambda points, threshold: propagate_keypoints(points, matches, certainty, *size, threshold),
+            size,
+            size,
+            tracking_match,
+        )
+
+    @contextmanager
+    def keyframe_matches(self, loader, original_width, original_height, *, batch_size, coarse_only=False):
+        from vidmap.frontend.keyframes.matching import pipelined_matches
+
+        with pipelined_matches(
+            self,
+            loader,
+            original_width,
+            original_height,
+            batch_size=batch_size,
+            device=self.device,
+            coarse_only=coarse_only,
+        ) as batches:
+            yield (
+                [
+                    self.keyframe_match(match, certainty, (original_width, original_height))
+                    for match, certainty in zip(matches, certainties)
+                ]
+                for matches, certainties in batches
+            )
+
     def _apply(self, fn, recurse=True):
         self._feature_buffer.clear()
         self._carried_features = None
@@ -184,7 +237,10 @@ class RoMaV2Model(torch.nn.Module):
         retained_names,
         lowres_resolution,
         return_covariance=False,
-    ) -> RoMaMatch:
+        protect=False,
+        keyframing=False,
+        retrieval=False,
+    ) -> RoMaMatch | KeyframeMatch:
         """Reuse features only while a view belongs to the caller's live window."""
         live = set(retained_names)
         assert len(names) == 2 and set(names) <= live
@@ -200,11 +256,19 @@ class RoMaV2Model(torch.nn.Module):
                 self._feature_buffer[name] = self._extract_features(low, high)
         features_a, features_b = (self._feature_buffer[name] for name in names)
         raw = self._feature_matcher(features_a, features_b, refine=True)
-        return self._pixel_match(
-            raw,
-            output_size=tuple(image_a_highres.shape[-2:][::-1]),
-            return_covariance=return_covariance,
+        output = self._pixel_match(
+            raw, output_size=tuple(image_a_highres.shape[-2:][::-1]), return_covariance=return_covariance
         )
+        output = RoMaMatch(
+            output.matches.cpu(),
+            output.certainty.cpu(),
+            None if output.covariance is None else output.covariance.cpu(),
+        )
+        if keyframing:
+            return self.keyframe_match(
+                output.matches[0], output.certainty[0], tuple(image_a_highres.shape[-2:][::-1]), output
+            )
+        return output
 
     def _pixel_match(self, raw, *, output_size, return_covariance) -> RoMaMatch:
         from romav2.geometry import to_pixel
@@ -231,65 +295,6 @@ def load_romav2_model(conf: RoMaV2Options, device: torch.device) -> RoMaV2Model:
     model = RoMaV2Model(conf, device=device).eval().to(device)
     logger.info("Loaded RoMaV2 model on %s", device)
     return model
-
-
-def _release_romav2_model(tracker_model, *, suppress_errors):
-    errors = []
-    for action in (tracker_model.cpu, empty_device_cache, gc.collect):
-        try:
-            action()
-        except BaseException as error:
-            errors.append(error)
-
-    if errors:
-        logger.warning("Tracker cleanup failed: %s", errors[0])
-    else:
-        logger.debug("Released owned tracker model")
-    if errors and not suppress_errors:
-        raise errors[0]
-
-
-class LazyRoMaV2Tracker:
-    """Own at most one lazily loaded RoMaV2 model for one frontend run."""
-
-    def __init__(self, tracker_conf, device: torch.device):
-        self._tracker_conf = tracker_conf
-        self._device = device
-        self._model = None
-        self._closed = False
-
-    @property
-    def device(self) -> torch.device:
-        return self._device
-
-    def parameters(self):
-        return self.get().parameters()
-
-    def get(self):
-        if self._closed:
-            raise RuntimeError("RoMaV2 owner is closed")
-        if self._model is None:
-            self._model = load_romav2_model(self._tracker_conf, device=self._device)
-        return self._model
-
-    def __enter__(self):
-        if self._closed:
-            raise RuntimeError("RoMaV2 owner is closed")
-        return self
-
-    def __exit__(self, exc_type, _exc, _traceback):
-        self._closed = True
-        if self._model is None:
-            return False
-        model = self._model
-        self._model = None
-        _release_romav2_model(model, suppress_errors=exc_type is not None)
-        return False
-
-
-def create_lazy_romav2_tracker(tracker_conf, device: torch.device):
-    """Return the single lazy tracker owner for one frontend run."""
-    return LazyRoMaV2Tracker(tracker_conf, device=device)
 
 
 def romav2_cache_identity(conf: RoMaV2Options):

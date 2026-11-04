@@ -59,7 +59,7 @@ def refine_long_tracks_adaptive(
 
     track_buf_len = history.track.shape[0]
     for n in sorted(scheduled_hops):
-        if n == 1:
+        if n == 1 or -n not in dense_hops.matches:
             continue
         anchor_idx = -(n - 1)
         if (n - 1) > track_buf_len:

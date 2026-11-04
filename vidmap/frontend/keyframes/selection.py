@@ -134,10 +134,7 @@ def compute_normalized_keypoint_motion_score(
 def score_keyframe_lookahead(
     source_keypoints,
     matches,
-    certainty,
     *,
-    source_grid_size,
-    target_grid_size,
     source_original_size,
     target_original_size,
     source_calibration,
@@ -150,18 +147,11 @@ def score_keyframe_lookahead(
     if not len(source) or source_calibration is None or target_calibration is None:
         return None
 
-    source_on_grid = scale_keypoints(source, np.divide(source_original_size, source_grid_size))
-    target_on_grid, _, visible = propagate_keypoints(
-        source_on_grid,
-        matches,
-        certainty,
-        int(source_grid_size[0]),
-        int(source_grid_size[1]),
-        certainty_threshold,
-    )
+    source_on_grid = scale_keypoints(source, np.divide(source_original_size, matches.source_size))
+    target_on_grid, _, visible = matches.propagate(source_on_grid, certainty_threshold)
     target_on_grid = target_on_grid.detach().cpu().numpy()
     visible = visible.detach().cpu().numpy()
-    target = unscale_keypoints(target_on_grid, np.divide(target_original_size, target_grid_size))
+    target = unscale_keypoints(target_on_grid, np.divide(target_original_size, matches.target_size))
     source_xy = _normalized_xy(source, source_calibration)
     target_xy = _normalized_xy(target, target_calibration)
     drift = np.linalg.norm(target_xy - source_xy, axis=1)

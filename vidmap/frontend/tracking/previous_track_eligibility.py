@@ -36,9 +36,8 @@ def select_previous_track_mask(
     scaled_prev_kps = scale_keypoints(previous_keypoints, scale_ratio)
 
     _s2d = nn_sample_2d
-    dmatches_np = dmatches.cpu().numpy()
     dcertainties_np = dcertainties.cpu().numpy()
-    warped_np = _s2d(dmatches_np, scaled_prev_kps[:, 0], scaled_prev_kps[:, 1]).astype(np.float32)
+    warped_np = _s2d(dmatches, scaled_prev_kps[:, 0], scaled_prev_kps[:, 1]).astype(np.float32)
 
     current_width, current_height = current_size
     masked_canvas = (

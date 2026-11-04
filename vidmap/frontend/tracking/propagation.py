@@ -44,17 +44,25 @@ class DenseMatchField:
 
 @dataclass(frozen=True)
 class DenseHopBuffers:
-    matches: dict[int, np.ndarray]
+    matches: dict[int, np.ndarray | torch.Tensor]
     certainty: dict[int, np.ndarray]
     covariance: dict[int, np.ndarray]
 
     @classmethod
     def from_fields(cls, records, fields):
-        """Borrow CPU tensor storage only for this target's scheduled hops."""
+        """Borrow scheduled fields, retaining CUDA match storage until sampling."""
+        dense = [(r, f) for r, f in zip(records, fields) if f is not None]
         return cls(
-            matches={r.slot: f.matches.numpy().astype(np.float32, copy=False) for r, f in zip(records, fields)},
-            certainty={r.slot: f.certainty.numpy().astype(np.float32, copy=False) for r, f in zip(records, fields)},
-            covariance={r.slot: f.covariance.numpy().astype(np.float32, copy=False) for r, f in zip(records, fields)},
+            matches={
+                r.slot: (
+                    f.matches.to(dtype=torch.float32)
+                    if f.matches.is_cuda
+                    else f.matches.numpy().astype(np.float32, copy=False)
+                )
+                for r, f in dense
+            },
+            certainty={r.slot: f.certainty.numpy().astype(np.float32, copy=False) for r, f in dense},
+            covariance={r.slot: f.covariance.numpy().astype(np.float32, copy=False) for r, f in dense},
         )
 
 
@@ -70,7 +78,7 @@ class CandidateImageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, position):
         highres, lowres = load_roma_resolution_pair(self.highres_dataset, self.lowres_dataset, position)
-        return highres["image"], lowres["image"]
+        return highres["image"], None if lowres is None else lowres["image"]
 
 
 def _write_sequential_match(
@@ -90,8 +98,8 @@ def _write_sequential_match(
             name1,
             reader.get_tracking(name0),
             reader.get_tracking(name1),
-            dense.matches,
-            dense.certainty,
+            None if dense is None else dense.matches,
+            None if dense is None else dense.certainty,
             scene_parser=scene_parser,
             match_threshold=match_threshold,
             writer_queue=writer_queue,
@@ -164,6 +172,7 @@ class StreamingTrackPropagator:
         self._trackprop_first_match = True
         self._current_window_images = {}
         self._salient_keypoint_reader = None
+        self._image_prefetch = None
         self._salient_keypoint_reader_context = None
 
     def _initialize_run(self):
@@ -211,15 +220,16 @@ class StreamingTrackPropagator:
             self.keyframe_sequence,
         )
         self.lowres_dataset.normalize = False
+        if not self.tracker_model.needs_lowres_images:
+            self.lowres_dataset = None
 
-    def _infer_dense_match(self, name0, name1):
-        """Infer one directed dense match with covariance on the CPU."""
+    def _match_pair(self, name0, name1, *, protect, keyframing=False):
         images0 = self._current_window_images[name0]
         images1 = self._current_window_images[name1]
         im_A_hr = images0["highres"].unsqueeze(0)
-        im_A_lr = images0["lowres"].unsqueeze(0)
+        im_A_lr = None if images0["lowres"] is None else images0["lowres"].unsqueeze(0)
         im_B_hr = images1["highres"].unsqueeze(0)
-        im_B_lr = images1["lowres"].unsqueeze(0)
+        im_B_lr = None if images1["lowres"] is None else images1["lowres"].unsqueeze(0)
 
         # Run matching
         from vidmap.utils.profiling import record_timing, sync_time
@@ -234,18 +244,33 @@ class StreamingTrackPropagator:
             retained_names=tuple(self._current_window_images),
             lowres_resolution=self.lowres_match_resolution,
             return_covariance=True,
+            protect=protect,
+            keyframing=keyframing,
         )
         if self._trackprop_first_match:
             record_timing("trackprop_first_match", sync_time() - _mt, first=True)
             self._trackprop_first_match = False
 
+        return match
+
+    def _tracking_field(self, match, name0, name1):
+        if match is None:
+            return None
         return DenseMatchField(
-            matches=match.matches[0].cpu().detach(),
+            matches=match.matches[0].detach(),
             certainty=match.certainty[0].cpu().detach(),
             covariance=match.covariance[0].cpu().detach(),
-            source_size=tuple(im_A_hr.shape[-2:][::-1]),
-            target_size=tuple(im_B_hr.shape[-2:][::-1]),
+            source_size=tuple(self._current_window_images[name0]["highres"].shape[-2:][::-1]),
+            target_size=tuple(self._current_window_images[name1]["highres"].shape[-2:][::-1]),
         )
+
+    def _infer_dense_match(self, name0, name1, *, protect=False):
+        match = self._match_pair(name0, name1, protect=protect)
+        return self._tracking_field(match, name0, name1)
+
+    def _infer_keyframe_match(self, name0, name1):
+        probe = self._match_pair(name0, name1, protect=True, keyframing=True)
+        return probe, self._tracking_field(probe.tracking_match, name0, name1)
 
     def run(self):
         """Run streaming propagation while owning both asynchronous writers."""
@@ -269,7 +294,12 @@ class StreamingTrackPropagator:
         cleanup_error = None
 
         try:
-            self._close_salient_keypoint_reader()
+            try:
+                if self._image_prefetch is not None:
+                    self._image_prefetch.close()
+                    self._image_prefetch = None
+            finally:
+                self._close_salient_keypoint_reader()
         except Exception as error:  # Preserve the processing failure while still releasing later resources.
             cleanup_error = error
 
@@ -305,6 +335,10 @@ class StreamingTrackPropagator:
                 pin_memory=(self.device.type == "cuda"),
             )
         )
+        self._image_prefetch = self.tracker_model.prefetch_images(
+            ({"highres": high, "lowres": low} for high, low in image_batches), ("highres",)
+        )
+        image_batches = ((item["highres"], item["lowres"]) for item in self._image_prefetch)
         loaded_position = -1
 
         for candidate_position in tqdm(
@@ -351,16 +385,13 @@ class StreamingTrackPropagator:
             score = None
             if should_probe:
                 probe_pair = (anchor, lookahead)
-                probe = self._infer_dense_match(*probe_pair)
-                pending_probe = (probe_pair, probe)
+                probe, tracking_field = self._infer_keyframe_match(*probe_pair)
+                pending_probe = (probe_pair, tracking_field) if tracking_field is not None else None
                 anchor_index = self.candidate_indices[anchor_position]
                 lookahead_index = self.candidate_indices[lookahead_position]
                 score = score_keyframe_lookahead(
                     anchor_keypoints,
-                    probe.matches,
-                    probe.certainty,
-                    source_grid_size=probe.source_size,
-                    target_grid_size=probe.target_size,
+                    probe,
                     source_original_size=get_image_size(self.scene_parser, anchor),
                     target_original_size=get_image_size(self.scene_parser, lookahead),
                     source_calibration=self.calibrations.get(anchor_index),
@@ -377,7 +408,7 @@ class StreamingTrackPropagator:
                 if reusable_probe is not None and record.pair == reusable_probe[0]:
                     fields.append(reusable_probe[1])
                 else:
-                    fields.append(self._infer_dense_match(*record.pair))
+                    fields.append(self._infer_dense_match(*record.pair, protect=record.hop == 1))
             fields = tuple(fields)
             direct = next(field for record, field in zip(records, fields) if record.hop == 1)
             if not hasattr(self, "state"):
@@ -392,7 +423,7 @@ class StreamingTrackPropagator:
                     camera=self.scene_parser.rec.camera(self.scene_parser.image(anchor).camera_id),
                 )
             state = self.state
-            if any(field.source_size != state.current_size for field in fields):
+            if any(field.source_size != state.current_size for field in fields if field is not None):
                 raise RuntimeError("Dense multiflow fields changed processing-grid size within one run")
             dense_hops = DenseHopBuffers.from_fields(records, fields)
 
@@ -404,7 +435,7 @@ class StreamingTrackPropagator:
                     & (matches[..., 0] < (state.current_width - 1))
                     & (matches[..., 1] >= 0)
                     & (matches[..., 1] < (state.current_height - 1))
-                )
+                ).to(certainty.device)
             ] = 0
             transition = state.advance(
                 kf_id=len(accepted_positions) - 1,

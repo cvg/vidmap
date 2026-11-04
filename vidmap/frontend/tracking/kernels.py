@@ -57,7 +57,7 @@ def select_lc_matches_from_dense(
     certainty_sampled = (
         F.grid_sample(
             cert_field_t,
-            grid,
+            grid.to(cert_field_t.device),
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
@@ -72,9 +72,9 @@ def select_lc_matches_from_dense(
     kpts1_query = unscale_keypoints(kpts1_sampled - 0.5, target_scale)
     kpts1_reference = kpts1_np
 
-    mkp_ids1 = assign_keypoints(kpts1_query, kpts1_reference, max_error=max_error)
-    valid = certainty_sampled > lc_match_thresh
-    mkp_ids1[~valid] = -1
+    valid = (certainty_sampled > lc_match_thresh) & np.isfinite(kpts1_query).all(axis=1)
+    mkp_ids1 = np.full(len(kpts1_query), -1, dtype=np.int64)
+    mkp_ids1[valid] = assign_keypoints(kpts1_query[valid], kpts1_reference, max_error=max_error)
 
     matches0 = np.full(len(kpts0_np), -1, dtype=np.int32)
     matching_scores0 = np.zeros(len(kpts0_np), dtype=np.float32)
@@ -179,7 +179,7 @@ def build_tracks_from_matches(ref_kps, ref_conf, ref_covar, matches_fine, certai
         covar1: (N, 2, 2) updated covariance (accumulated + current)
     """
     _s2d = bilinear_sample_2d if bilinear else nn_sample_2d
-    matches_np = matches_fine.cpu().numpy() if torch.is_tensor(matches_fine) else matches_fine
+    matches_np = matches_fine.cpu().numpy() if bilinear and torch.is_tensor(matches_fine) else matches_fine
     ref_kps_np = ref_kps.cpu().numpy() if torch.is_tensor(ref_kps) else ref_kps
     H_match, W_match = matches_np.shape[:2]
     kps1 = torch.from_numpy(_s2d(matches_np, ref_kps_np[:, 0], ref_kps_np[:, 1]).astype(np.float32)) - 0.5

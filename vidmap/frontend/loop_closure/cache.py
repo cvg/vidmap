@@ -66,6 +66,8 @@ class ExtendedMatchCache:
         device: torch.device,
         non_retrieval_pairs=(),
         transitive_matches=None,
+        protected_pairs=(),
+        tracking_pairs=(),
     ):
         return repair_extended_match_pairs(
             pairs,
@@ -80,6 +82,8 @@ class ExtendedMatchCache:
             device=device,
             non_retrieval_pairs=non_retrieval_pairs,
             transitive_matches=transitive_matches,
+            protected_pairs=protected_pairs,
+            tracking_pairs=tracking_pairs,
         )
 
     def collect(self, pairs, *, match_threshold):

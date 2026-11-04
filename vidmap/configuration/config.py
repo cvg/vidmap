@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from typing import Annotated
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from pydantic_core import ArgsKwargs
 
 from vidmap.configuration.defaults import (
@@ -20,6 +21,7 @@ from vidmap.frontend.options import (
     PreparationOptions,
     RoMaV2Options,
 )
+from vidmap.frontend.options.matching import FlexGlueOptions
 from vidmap.frontend.options.preparation import CameraProcessingOptions
 from vidmap.frontend.options.rig import CameraId, RigOptions
 from vidmap.mapper.options import MapperOptions
@@ -35,7 +37,9 @@ def _keyword_values(values, *, owner: str):
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class FrontendConfig:
-    roma: RoMaV2Options = dc_field(default_factory=RoMaV2Options)
+    matcher: Annotated[RoMaV2Options | FlexGlueOptions, Field(discriminator="name")] = dc_field(
+        default_factory=FlexGlueOptions
+    )
     keyframes: KeyframeOptions = dc_field(default_factory=KeyframeOptions)
     tracks: FrontendTrackOptions = dc_field(default_factory=FrontendTrackOptions)
     loop_closure: ExtendedMatchOptions = dc_field(default_factory=ExtendedMatchOptions)
@@ -57,7 +61,6 @@ class FrontendConfig:
         if isinstance(values.get("rig"), dict):
             values["rig"] = RigOptions(**values["rig"])
         for name, option_type in {
-            "roma": RoMaV2Options,
             "keyframes": KeyframeOptions,
             "tracks": FrontendTrackOptions,
             "loop_closure": ExtendedMatchOptions,
