@@ -3,6 +3,7 @@
 #include "colmap/estimators/global_positioning.h"
 #include "colmap/scene/camera.h"
 #include "colmap/scene/reconstruction.h"
+#include "colmap/util/hash_containers.h"
 
 #include <cstdint>
 #include <limits>
@@ -63,7 +64,7 @@ class DeadZoneHuberLoss final : public ceres::LossFunction {
 struct Observation {
   colmap::point3D_t point_id;
   colmap::TrackElement element;
-  colmap::TrackElement anchor;
+  std::vector<colmap::TrackElement> anchors;
   bool loop;
   bool support;
   double* center = nullptr;
@@ -98,6 +99,7 @@ bool MaskValue(const vidmap::VectorXb& mask, colmap::point2D_t index) {
   return index < mask.size() && mask(index);
 }
 
+using Feature = std::pair<colmap::image_t, colmap::point2D_t>;
 using ObservationKind = std::tuple<bool, bool, bool>;
 std::map<ObservationKind, ObservationSelection> PrepareObservations(
     const colmap::Reconstruction& reconstruction,
@@ -131,15 +133,25 @@ std::map<ObservationKind, ObservationSelection> PrepareObservations(
                          reconstruction.Image(regular[i].image_id).FrameId()) <=
                      *support_ranks.rbegin();
     }
+    colmap::FlatHashMap<Feature, size_t, colmap::PairHash> loop_targets;
     auto append = [&](const colmap::TrackElement& element,
                       const colmap::TrackElement& anchor,
                       bool loop,
                       bool early) {
       const auto& image = reconstruction.Image(element.image_id);
-      selected[{loop, image.CameraPtr()->HasPriorFocalLength(), early}]
-          .observations.push_back({point_id, element, anchor, loop, early});
+      auto& observations =
+          selected[{loop, image.CameraPtr()->HasPriorFocalLength(), early}]
+              .observations;
+      size_t index = observations.size();
+      if (loop) {
+        const Feature feature{element.image_id, element.point2D_idx};
+        index = loop_targets.emplace(feature, index).first->second;
+      }
+      if (index == observations.size())
+        observations.push_back({point_id, element, {}, loop, early});
+      if (loop) observations[index].anchors.push_back(anchor);
     };
-    std::set<std::pair<colmap::image_t, colmap::point2D_t>> regular_features;
+    std::set<Feature> regular_features;
     for (size_t row = 0; row < regular.size(); ++row) {
       if (!regular_features
                .emplace(regular[row].image_id, regular[row].point2D_idx)
@@ -327,11 +339,13 @@ PYBIND11_MODULE(global_positioning, m) {
             for (const auto& element : point.track.Elements())
               ++counts[element.image_id];
             const auto extra = sidecars.tracks.find(id);
-            if (extra != sidecars.tracks.end())
-              for (Eigen::Index row = 0;
-                   row < extra->second.loop_closure_observations.rows();
-                   ++row)
-                ++counts[extra->second.loop_closure_observations(row, 0)];
+            if (extra == sidecars.tracks.end()) continue;
+            colmap::FlatHashSet<Feature, colmap::PairHash> targets;
+            const auto& elements = extra->second.loop_closure_observations;
+            for (Eigen::Index row = 0; row < elements.rows(); ++row) {
+              if (targets.emplace(elements(row, 0), elements(row, 1)).second)
+                ++counts[elements(row, 0)];
+            }
           }
           return counts;
         });
@@ -551,7 +565,6 @@ PYBIND11_MODULE(global_positioning, m) {
         [](const std::vector<ObservationSelection*>& selections,
            const std::vector<std::shared_ptr<ceres::LossFunction>>& losses,
            const std::unordered_set<colmap::image_t>& images) {
-          using Feature = std::pair<colmap::image_t, colmap::point2D_t>;
           using Edge = std::pair<colmap::image_t, colmap::image_t>;
           struct EdgeScore {
             std::set<std::pair<Feature, Feature>> matches;
@@ -561,16 +574,6 @@ PYBIND11_MODULE(global_positioning, m) {
           for (size_t group = 0; group < selections.size(); ++group) {
             for (const auto& obs : selections[group]->observations) {
               if (!obs.loop) continue;
-              if (obs.anchor.image_id == colmap::kInvalidImageId)
-                throw std::invalid_argument(
-                    "Playback requires exact loop-closure anchors");
-              const auto anchor_image = obs.anchor.image_id;
-              if (!images.count(obs.ImageId()) || !images.count(anchor_image))
-                continue;
-              const Feature a{obs.ImageId(), obs.Index()},
-                  b{anchor_image, obs.anchor.point2D_idx};
-              auto& edge = edges[std::minmax(obs.ImageId(), anchor_image)];
-              edge.matches.insert(std::minmax(a, b));
               const double* parameters[] = {obs.point, obs.center, obs.scale};
               Eigen::Vector3d residual;
               // Evaluate the cost directly: Problem::Evaluate is unavailable in
@@ -580,7 +583,19 @@ PYBIND11_MODULE(global_positioning, m) {
               losses.at(group)->Evaluate(residual.squaredNorm(), rho);
               const double score =
                   std::max(rho[1], 0.0) * std::sqrt(std::max(rho[0], 0.0));
-              if (std::isfinite(score)) edge.score += score;
+              for (const auto& anchor : obs.anchors) {
+                if (anchor.image_id == colmap::kInvalidImageId)
+                  throw std::invalid_argument(
+                      "Playback requires exact loop-closure anchors");
+                if (!images.count(obs.ImageId()) ||
+                    !images.count(anchor.image_id))
+                  continue;
+                const Feature a{obs.ImageId(), obs.Index()},
+                    b{anchor.image_id, anchor.point2D_idx};
+                auto& edge = edges[std::minmax(obs.ImageId(), anchor.image_id)];
+                edge.matches.insert(std::minmax(a, b));
+                if (std::isfinite(score)) edge.score += score;
+              }
             }
           }
           std::vector<Edge> order;

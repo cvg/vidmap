@@ -374,3 +374,50 @@ def test_bundle_adjustment_preserves_camera_without_observations():
     assert result.success
     assert result.diagnostics.num_intrinsics_prior_residuals == 1
     np.testing.assert_array_equal(problem.reconstruction.camera(2).params, camera_params)
+
+
+def test_lc_target_deduplication_preserves_objective_and_playback():
+    def solve(repeats):
+        state = _playback_problem()
+        data = state.sidecars.track(1)
+        data.loop_closure_observations = np.asarray([[3, 0]] * repeats, dtype=np.uint32)
+        data.loop_closure_anchors = np.asarray([[1, 0], [2, 0], [1, 0]][:repeats], dtype=np.uint32)
+        state.reconstruction.point3D(1).xyz += [0.2, 0.1, 1.0]
+        for image_id in state.image_order:
+            image = state.image_data(image_id)
+            image.depth_values = np.asarray([5.0])
+            image.depth_stddevs = np.asarray([0.1])
+            image.depth_validity = np.asarray([1], dtype=np.uint8)
+        options = _gp_options()
+        options = replace(options, common=replace(options.common, use_metric_depth_constraint=True))
+        captures = []
+        result = _run_gp(options, state, captures.append)
+        assert result.success
+        assert len(state.sidecars.track(1).loop_closure_observations) == repeats
+        return result.diagnostics, captures[0]
+
+    unique, _ = solve(1)
+    deduplicated, playback = solve(3)
+    assert deduplicated.num_metric_depth_residuals == 3
+    assert deduplicated.initial_cost == pytest.approx(unique.initial_cost, abs=1e-11)
+    assert deduplicated.final_cost == pytest.approx(unique.final_cost, abs=1e-11)
+    np.testing.assert_array_equal(playback["lc_pairs"], [[1, 3], [2, 3]])
+    np.testing.assert_array_equal(playback["lc_support_count"], [1, 1])
+
+
+def test_lc_target_deduplication_is_per_track_and_exact_feature():
+    state = _playback_problem()
+    for image_id in state.image_order:
+        state.image(image_id).points2D.append(pycolmap.Point2D([320.0, 340.0]))
+    second = state.reconstruction.add_point3D(
+        [0.0, 0.0, 6.0], pycolmap.Track([pycolmap.TrackElement(1, 1), pycolmap.TrackElement(2, 1)])
+    )
+    for point_id in (1, second):
+        data = native.TrackData()
+        data.loop_closure_observations = np.asarray([[3, 0], [3, 0], [3, 1], [1, 0]], dtype=np.uint32)
+        state.sidecars.set_track(point_id, data)
+    options = _gp_options()
+    prepared = gp.prepare_observations(state.reconstruction, state.sidecars, options)
+    counts = gp.gp_costs.observation_counts(list(prepared.values()))
+    assert counts[:3] == (4, 6, 2)
+    assert gp.gp_costs.track_observation_counts(state.reconstruction, state.sidecars) == {1: 4, 2: 2, 3: 4}
