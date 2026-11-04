@@ -98,6 +98,10 @@ def nn_sample_2d(arr, x, y):
     """Nearest-neighbor sampling on (H, W, ...) array. Same API as bilinear_sample_2d."""
     xi = np.clip((np.asarray(x) + 0.5).astype(np.int64), 0, arr.shape[1] - 1)
     yi = np.clip((np.asarray(y) + 0.5).astype(np.int64), 0, arr.shape[0] - 1)
+    if torch.is_tensor(arr):
+        xi = torch.as_tensor(xi, device=arr.device)
+        yi = torch.as_tensor(yi, device=arr.device)
+        return arr[yi, xi].cpu().numpy()
     return arr[yi, xi]
 
 

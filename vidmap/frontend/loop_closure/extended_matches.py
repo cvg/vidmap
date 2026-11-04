@@ -41,7 +41,7 @@ from vidmap.frontend.loop_closure.retrieval import (
     generate_retrieval_pairs,
     retrieval_cache_identity,
 )
-from vidmap.frontend.models.romav2 import LazyRoMaV2Tracker
+from vidmap.frontend.models.tracker import LazyTracker
 from vidmap.frontend.options.matching import ExtendedMatchOptions, RoMaImageOptions
 from vidmap.frontend.paths import FrontendPaths
 from vidmap.frontend.tracking.sparse_tracks import SparseTrackResult
@@ -116,7 +116,7 @@ class ExtendedMatchBuilder:
         paths: FrontendPaths,
         force_recompute: bool,
         repro_dir: Path | None,
-        tracker: LazyRoMaV2Tracker,
+        tracker: LazyTracker,
         tracks: SparseTrackResult,
         keyframes: KeyframePlan,
         transitive: TransitiveCorrespondenceResult,
@@ -295,6 +295,8 @@ class ExtendedMatchBuilder:
             lowres_match_resolution=self.lowres_match_resolution,
             match_threshold=self.extended_options.lc_match_thresh,
             device=self.device,
+            protected_pairs={frozenset(pair) for pair in self.tracks.track_pairs},
+            tracking_pairs={frozenset(pair) for pair in self.tracks.sequential_pairs},
         )
         if missing_count:
             record_timing("lc_streaming", sync_time() - started)

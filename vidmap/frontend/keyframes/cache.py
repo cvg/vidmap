@@ -15,7 +15,7 @@ from vidmap.frontend.cache import (
 from vidmap.frontend.geocalib import keyframe_bootstrap_cache_identity
 from vidmap.frontend.keyframes import selector as keyframe_selector
 from vidmap.frontend.models.aliked import aliked_cache_identity
-from vidmap.frontend.models.romav2 import romav2_cache_identity
+from vidmap.frontend.models.tracker import tracker_type
 
 _RUNTIME_CONFIG_FIELDS = frozenset({"num_workers"})
 
@@ -40,15 +40,16 @@ def admitted_frames_cache_metadata(
     image_fingerprint = input_snapshot.image_content_fingerprint
     intrinsics_source = keyframe_options.intrinsics_source
     keyframe_config = semantic_config(keyframe_options, exclude_fields=frozenset({"intrinsics_source"}))
+    matcher = tracker_type(tracker_options)
+    lookahead_tracks = track_options if keyframe_options.lookahead_pruning else None
     config = {
-        "tracker": romav2_cache_identity(tracker_options),
+        "tracker": matcher.keyframe_cache_identity(tracker_options, lookahead_tracks),
         "lowres": lowres_options,
         "keyframes": keyframe_config,
         "salient_features": semantic_config(salient_options),
         "salient_feature_model": aliked_cache_identity(),
     }
     if keyframe_options.lookahead_pruning:
-        config["lookahead_tracks"] = semantic_config(track_options)
         config["highres"] = highres_options
     if lowres_options.batch_size > 1:
         # Zero-pad the final partial batch to reuse the full-batch compiled graph.

@@ -69,6 +69,8 @@ class RomaVideoImageDataset(ImageDataset):
 
 def load_roma_resolution_pair(high_resolution_dataset, low_resolution_dataset, frame_index):
     """Decode one frame once and apply the established high/low RoMa preprocessing."""
+    if low_resolution_dataset is None:
+        return high_resolution_dataset[frame_index], None
     if high_resolution_dataset.root != low_resolution_dataset.root:
         raise ValueError("Paired RoMa datasets must share an image root")
     if high_resolution_dataset.names[frame_index] != low_resolution_dataset.names[frame_index]:

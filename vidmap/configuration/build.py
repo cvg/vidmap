@@ -172,10 +172,13 @@ def build_frontend_config(source, *, source_name, projected_cli_values=None, ove
     from vidmap.configuration.defaults import FrontendRunOptions, TargetSelectionOptions
     from vidmap.mapper.options import ReplayCacheOptions
 
+    defaults = FrontendConfig()
+    matcher_name = OmegaConf.select(raw, "matcher.name", default=defaults.matcher.name)
+    defaults = dataclasses.replace(defaults, matcher={"name": matcher_name})
     plain = materialize_config_values(
         raw,
         {
-            **dataclasses.asdict(FrontendConfig()),
+            **dataclasses.asdict(defaults),
             **dataclasses.asdict(TargetSelectionOptions()),
             **dataclasses.asdict(FrontendRunOptions()),
             "name": None,

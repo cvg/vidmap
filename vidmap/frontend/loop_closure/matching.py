@@ -10,6 +10,7 @@ Uses DataLoader for image prefetching, matching the streaming track propagator.
 """
 
 import logging
+from contextlib import closing
 from functools import partial
 
 import h5py
@@ -80,8 +81,8 @@ class RetrievalPairDataset(Dataset):
             "name1": name1,
             "im_A_hr": image0_highres["image"],
             "im_B_hr": image1_highres["image"],
-            "im_A_lr": image0_lowres["image"],
-            "im_B_lr": image1_lowres["image"],
+            "im_A_lr": None if image0_lowres is None else image0_lowres["image"],
+            "im_B_lr": None if image1_lowres is None else image1_lowres["image"],
         }
 
         return result
@@ -112,38 +113,42 @@ def queue_extended_matches(
     transitive_matches=(),
 ):
     """Sample in inference direction, then canonicalize only the persisted rows."""
-    select_matches = partial(
-        select_lc_matches_from_dense,
-        matches_dense=matches_dense,
-        certainty=certainty,
-        source_size=get_image_size(scene_parser, name0),
-        target_size=get_image_size(scene_parser, name1),
-        lc_match_thresh=match_threshold,
-    )
-    lc_result = select_matches(keypoints0, keypoints1)
-    matches0 = lc_result["matches0"]
-    matching_scores0 = lc_result["matching_scores0"]
-    # Retained features add matches after resolving original matches against tracking.
-    if num_tracking_keypoints is not None and num_tracking_keypoints != (len(keypoints0), len(keypoints1)):
-        n0, n1 = num_tracking_keypoints
-        original = select_matches(keypoints0[:n0], keypoints1[:n1])
-        # Original matches also pass the existing half-precision cache threshold.
-        original["matches0"][original["matching_scores0"].astype(np.float16) <= match_threshold] = -1
-        original_sources = np.flatnonzero(original["matches0"] >= 0)
-        original_pairs = np.column_stack((original_sources, original["matches0"][original_sources]))
-        tracking_pairs = np.asarray(transitive_matches, dtype=np.int64).reshape(-1, 2)
-        occupied = np.vstack((tracking_pairs, original_pairs[_unoccupied_matches(original_pairs, tracking_pairs)]))
+    if matches_dense is None:
+        matches0 = np.full(len(keypoints0), -1, dtype=np.int32)
+        matching_scores0 = np.zeros(len(keypoints0), dtype=np.float32)
+    else:
+        select_matches = partial(
+            select_lc_matches_from_dense,
+            matches_dense=matches_dense,
+            certainty=certainty,
+            source_size=get_image_size(scene_parser, name0),
+            target_size=get_image_size(scene_parser, name1),
+            lc_match_thresh=match_threshold,
+        )
+        lc_result = select_matches(keypoints0, keypoints1)
+        matches0 = lc_result["matches0"]
+        matching_scores0 = lc_result["matching_scores0"]
+        # Retained features add matches after resolving original matches against tracking.
+        if num_tracking_keypoints is not None and num_tracking_keypoints != (len(keypoints0), len(keypoints1)):
+            n0, n1 = num_tracking_keypoints
+            original = select_matches(keypoints0[:n0], keypoints1[:n1])
+            # Original matches also pass the existing half-precision cache threshold.
+            original["matches0"][original["matching_scores0"].astype(np.float16) <= match_threshold] = -1
+            original_sources = np.flatnonzero(original["matches0"] >= 0)
+            original_pairs = np.column_stack((original_sources, original["matches0"][original_sources]))
+            tracking_pairs = np.asarray(transitive_matches, dtype=np.int64).reshape(-1, 2)
+            occupied = np.vstack((tracking_pairs, original_pairs[_unoccupied_matches(original_pairs, tracking_pairs)]))
 
-        source = np.flatnonzero(matches0 >= 0)
-        candidates = np.column_stack((source, matches0[source]))
-        retained = (candidates[:, 0] >= n0) | (candidates[:, 1] >= n1)
-        added = candidates[retained & _unoccupied_matches(candidates, occupied)]
-        scores = matching_scores0[added[:, 0]]
+            source = np.flatnonzero(matches0 >= 0)
+            candidates = np.column_stack((source, matches0[source]))
+            retained = (candidates[:, 0] >= n0) | (candidates[:, 1] >= n1)
+            added = candidates[retained & _unoccupied_matches(candidates, occupied)]
+            scores = matching_scores0[added[:, 0]]
 
-        matches0 = np.pad(original["matches0"], (0, len(keypoints0) - n0), constant_values=-1)
-        matching_scores0 = np.pad(original["matching_scores0"], (0, len(keypoints0) - n0))
-        matches0[added[:, 0]] = added[:, 1]
-        matching_scores0[added[:, 0]] = scores
+            matches0 = np.pad(original["matches0"], (0, len(keypoints0) - n0), constant_values=-1)
+            matching_scores0 = np.pad(original["matching_scores0"], (0, len(keypoints0) - n0))
+            matches0[added[:, 0]] = added[:, 1]
+            matching_scores0[added[:, 0]] = scores
     pair = tuple(natsorted((name0, name1)))
     if pair != (name0, name1):
         source = np.flatnonzero(matches0 >= 0)
@@ -179,6 +184,8 @@ def _match_loop_closures_streaming(
     lc_match_thresh=0.5,
     non_retrieval_pairs=(),
     transitive_matches=None,
+    protected_pairs=(),
+    tracking_pairs=(),
 ):
     """
     Streaming LC frontend for retrieval pairs.
@@ -229,6 +236,8 @@ def _match_loop_closures_streaming(
         retrieval_images,
     )
     lowres_dataset.normalize = False
+    if not tracker_model.needs_lowres_images:
+        lowres_dataset = None
 
     name_to_idx = {name: i for i, name in enumerate(retrieval_images)}
 
@@ -251,11 +260,15 @@ def _match_loop_closures_streaming(
     from vidmap.frontend.loop_closure.feature_plan import retained_feature_names
 
     retention = retained_feature_names(retrieval_pairs, tracker_model.conf.lc_feature_capacity)
+    inputs = tracker_model.prefetch_images(
+        pair_loader, ("im_A_hr", "im_B_hr"), image_names={"im_A_hr": "name0", "im_B_hr": "name1"}
+    )
+
     # Stats for logging
     _stats = {"computed": 0, "total_matches": 0}
-    with H5KeypointReader(sparse_features_path, max_size=512) as keypoint_reader:
+    with H5KeypointReader(sparse_features_path, max_size=512) as keypoint_reader, closing(inputs):
         for batch in tqdm(
-            pair_loader,
+            inputs,
             desc="Streaming LC frontend for retrieval pairs",
             disable=not progress_bars_enabled(),
         ):
@@ -267,8 +280,8 @@ def _match_loop_closures_streaming(
             # Use prefetched images from DataLoader
             im_A_hr = batch["im_A_hr"].unsqueeze(0)
             im_B_hr = batch["im_B_hr"].unsqueeze(0)
-            im_A_lr = batch["im_A_lr"].unsqueeze(0)
-            im_B_lr = batch["im_B_lr"].unsqueeze(0)
+            im_A_lr = None if batch["im_A_lr"] is None else batch["im_A_lr"].unsqueeze(0)
+            im_B_lr = None if batch["im_B_lr"] is None else batch["im_B_lr"].unsqueeze(0)
 
             from vidmap.utils.profiling import record_timing, sync_time
 
@@ -282,23 +295,21 @@ def _match_loop_closures_streaming(
                 names=(name0, name1),
                 retained_names=retained,
                 lowres_resolution=_lr_res,
+                protect=frozenset((name0, name1)) in protected_pairs,
+                retrieval=frozenset((name0, name1)) not in tracking_pairs,
             )
             record_timing("lc_first_match", sync_time() - _mt, first=True)
             # Free input images immediately
             del im_A_hr, im_B_hr, im_A_lr, im_B_lr
 
-            matches_dense = match.matches[0]
-            certainty = match.certainty[0]
+            if match is None:
+                matches_dense, certainty = None, None
+            else:
+                matches_dense, certainty = match.matches[0], match.certainty[0]
+                if not torch.all(torch.isfinite(matches_dense)):
+                    logger.warning(f"[LC Streaming] NaN in dense warp for {pair_name}, skipping pair")
+                    continue
             del match
-
-            # Skip pair if network produced NaN (numerical instability on hard pairs)
-            if not torch.all(torch.isfinite(matches_dense)):
-                logger.warning(f"[LC Streaming] NaN in dense warp for {pair_name}, skipping pair")
-                continue
-
-            # Move to CPU for processing
-            matches_dense = matches_dense.cpu()
-            certainty = certainty.cpu()
 
             # Load sparse keypoints
             read_keypoints = (
@@ -352,6 +363,8 @@ def match_loop_closures_streaming(
     lc_match_thresh=0.5,
     non_retrieval_pairs=(),
     transitive_matches=None,
+    protected_pairs=(),
+    tracking_pairs=(),
 ):
     """Run LC frontend with deterministic writer teardown on every exit."""
     if not retrieval_pairs:
@@ -369,6 +382,8 @@ def match_loop_closures_streaming(
             lc_writer_queue=writer_queue,
             non_retrieval_pairs=non_retrieval_pairs,
             transitive_matches=transitive_matches,
+            protected_pairs=protected_pairs,
+            tracking_pairs=tracking_pairs,
         )
 
 
@@ -386,6 +401,8 @@ def repair_extended_match_pairs(
     device: torch.device,
     non_retrieval_pairs=(),
     transitive_matches=None,
+    protected_pairs=(),
+    tracking_pairs=(),
 ):
     """Repair and verify one planned set of extended-match pairs."""
     expected_names = canonical_pair_names(combine_and_deduplicate_pairs(pairs))
@@ -411,6 +428,8 @@ def repair_extended_match_pairs(
             lc_match_thresh=lc_match_thresh,
             non_retrieval_pairs=non_retrieval_pairs,
             transitive_matches=transitive_matches,
+            protected_pairs=protected_pairs,
+            tracking_pairs=tracking_pairs,
         )
         _, still_missing = inspect_incremental_items(
             paths.extended_matches_path,

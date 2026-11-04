@@ -35,7 +35,7 @@ from vidmap.frontend.image_dataset import FrameSequence
 from vidmap.frontend.keyframes import cache as keyframe_cache
 from vidmap.frontend.keyframes import matching as keyframe_matching
 from vidmap.frontend.keyframes import selector as keyframe_selector
-from vidmap.frontend.models.romav2 import LazyRoMaV2Tracker
+from vidmap.frontend.models.tracker import LazyTracker
 from vidmap.frontend.options.keyframes import DetectKeyframesOptions, SalientFeatureOptions
 from vidmap.frontend.options.matching import LowresMatchOptions
 from vidmap.frontend.paths import FrontendPaths
@@ -103,7 +103,7 @@ class KeyframeProcessor:
         paths: FrontendPaths,
         force_recompute: bool,
         repro_dir: Path | None,
-        tracker: LazyRoMaV2Tracker,
+        tracker: LazyTracker,
         lowres_options: LowresMatchOptions,
         keyframe_options: DetectKeyframesOptions,
         salient_options: SalientFeatureOptions,
@@ -197,6 +197,8 @@ class KeyframeProcessor:
             self.lowres_options,
         )
 
+        loader.dataset.image_dataset.normalize = tracker_model.normalize_keyframe_images
+
         aliked_model = None
         selector = None
         try:
@@ -214,13 +216,11 @@ class KeyframeProcessor:
             )
 
             with (
-                keyframe_matching.pipelined_matches(
-                    tracker_model,
+                tracker_model.keyframe_matches(
                     loader,
                     original_width,
                     original_height,
                     batch_size=self.lowres_options.batch_size,
-                    device=self.device,
                     coarse_only=self.lowres_options.coarse_only,
                 ) as batches,
                 tqdm(
@@ -229,9 +229,9 @@ class KeyframeProcessor:
                     disable=not progress_bars_enabled(),
                 ) as progress,
             ):
-                for matches, certainties in batches:
-                    for pair_match_lr, pair_cert_lr in zip(matches, certainties):
-                        selector.process_pair(pair_match_lr, pair_cert_lr)
+                for batch in batches:
+                    for match in batch:
+                        selector.process_pair(match)
                         progress.update(1)
 
             keyframe_ids = selector.finish()

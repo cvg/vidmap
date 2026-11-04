@@ -15,9 +15,9 @@ from vidmap.frontend.cache import fingerprint
 from vidmap.frontend.geocalib import CameraPriorEstimator
 from vidmap.frontend.image_dataset import FrameSequence
 from vidmap.frontend.keyframes import cache as keyframe_cache
-from vidmap.frontend.keyframes.processing import KeyframeProcessor
+from vidmap.frontend.keyframes.processing import KeyframeCandidates, KeyframeProcessor
 from vidmap.frontend.loop_closure.extended_matches import ExtendedMatchBuilder
-from vidmap.frontend.models.romav2 import create_lazy_romav2_tracker, romav2_cache_identity
+from vidmap.frontend.models.tracker import create_lazy_tracker, tracker_cache_identity, tracker_type
 from vidmap.frontend.paths import build_frontend_paths
 from vidmap.frontend.preparation.camera_priors import CalibrationResult, apply_calibration
 from vidmap.frontend.preparation.cameras import initialize_selected_camera_geometry
@@ -68,12 +68,12 @@ class TrackingPipeline:
         source = self.input_snapshot.capture
         working_capture = self.prepared_capture
         options = self.options
-        tracker_options = options.roma
+        tracker_options = options.matcher
+        lowres_options = tracker_type(tracker_options).keyframe_image_options(options.keyframes.matching)
         prior_options = self.preparation_plan.camera_priors
         use_geocalib = prior_options.estimator == "geocalib"
 
-        # Resolve every cache path from the frontend identity so all stages
-        # operate on one immutable artifact plan.
+        # Tracking artifacts are specific to the selected matching configuration.
         paths = build_frontend_paths(
             cache_dir=self.cache_dir,
             sample_name=self.sample_name,
@@ -81,7 +81,7 @@ class TrackingPipeline:
             use_geocalib=use_geocalib,
             frontend_tag=None,
             config_name=self.cache_namespace,
-            cache_variant="cache-" + fingerprint({"tracker": romav2_cache_identity(tracker_options)})[:16],
+            cache_variant="cache-" + fingerprint({"tracker": tracker_cache_identity(tracker_options)})[:16],
         )
         paths.admitted_frames_path.parent.mkdir(exist_ok=True, parents=True)
         logger.info("Input sparse features: %s", paths.sparse_features_path)
@@ -116,7 +116,27 @@ class TrackingPipeline:
         tracking_capture = working_capture if self.preparation_plan.bootstrap_required else source
 
         verification = None
-        with create_lazy_romav2_tracker(tracker_options, device=self.device) as tracker:
+        with create_lazy_tracker(tracker_options, device=self.device) as tracker:
+            admission_metadata = keyframe_cache.admitted_frames_cache_metadata(
+                input_snapshot=self.input_snapshot,
+                sequence=frames.streams[0],
+                frame_ids=frames.frame_ids,
+                tracker_options=tracker_options,
+                lowres_options=lowres_options,
+                highres_options=options.tracks.images,
+                keyframe_options=options.keyframes.selection,
+                salient_options=options.keyframes.features,
+                track_options=options.tracks.propagation,
+                bootstrap_camera=bootstrap_camera,
+            )
+            keyframe_dir = (
+                self.cache_dir / self.sample_name / f"keyframes-{admission_metadata['identity_fingerprint'][:16]}"
+            )
+            paths = replace(
+                paths,
+                admitted_frames_path=keyframe_dir / "selected_frames.h5",
+                salient_features_path=keyframe_dir / "salient_features.h5",
+            )
             keyframe_processor = KeyframeProcessor(
                 input_snapshot=self.input_snapshot,
                 frames=frames,
@@ -124,22 +144,10 @@ class TrackingPipeline:
                 force_recompute=self.force_recompute,
                 repro_dir=self.repro_dir,
                 tracker=tracker,
-                lowres_options=options.keyframes.matching,
+                lowres_options=lowres_options,
                 keyframe_options=options.keyframes.selection,
                 salient_options=options.keyframes.features,
                 device=self.device,
-                bootstrap_camera=bootstrap_camera,
-            )
-            admission_metadata = keyframe_cache.admitted_frames_cache_metadata(
-                input_snapshot=self.input_snapshot,
-                sequence=frames.streams[0],
-                frame_ids=frames.frame_ids,
-                tracker_options=tracker_options,
-                lowres_options=options.keyframes.matching,
-                highres_options=options.tracks.images,
-                keyframe_options=options.keyframes.selection,
-                salient_options=options.keyframes.features,
-                track_options=options.tracks.propagation,
                 bootstrap_camera=bootstrap_camera,
             )
             keyframes = keyframe_processor.load_cached(admission_metadata)
@@ -153,7 +161,7 @@ class TrackingPipeline:
                 keyframes=keyframes,
                 track_options=options.tracks.propagation,
                 highres_options=options.tracks.images,
-                lowres_match_resolution=options.keyframes.matching.resolution,
+                lowres_match_resolution=lowres_options.resolution,
                 extended_options=options.loop_closure,
                 device=self.device,
             )
@@ -164,17 +172,34 @@ class TrackingPipeline:
                 provisional_salient_metadata = keyframe_cache.salient_feature_cache_metadata(
                     salient_options=options.keyframes.features,
                 )
-                candidates = keyframe_processor.select_candidates(provisional_salient_metadata)
+                candidates = (
+                    keyframe_processor.select_candidates(provisional_salient_metadata)
+                    if keyframes is None
+                    else KeyframeCandidates(
+                        indices=frames.indices(keyframes.frame_ids),
+                        names=keyframes.streams[0],
+                        forced_indices=frozenset(),
+                        calibrations={},
+                    )
+                )
                 from vidmap.frontend.models.depth.da3_video import verify_da3_model_snapshot
 
                 verification = preparation.submit(verify_da3_model_snapshot)
                 keyframes, tracks = sparse_track_builder.admit_and_build_tracks(
                     candidates,
-                    options.keyframes.selection if options.keyframes.selection.lookahead_pruning else None,
-                    lambda admitted_ids: keyframe_processor.commit_keyframes(
-                        admitted_ids,
-                        candidates.forced_indices,
-                        admission_metadata,
+                    (
+                        options.keyframes.selection
+                        if keyframes is None and options.keyframes.selection.lookahead_pruning
+                        else None
+                    ),
+                    lambda admitted_ids: (
+                        keyframe_processor.commit_keyframes(
+                            admitted_ids,
+                            candidates.forced_indices,
+                            admission_metadata,
+                        )
+                        if keyframes is None
+                        else keyframes
                     ),
                     complete_salients=keyframe_processor.complete_salient_features,
                 )
@@ -199,7 +224,7 @@ class TrackingPipeline:
                 tracks=tracks,
                 transitive=transitive,
                 highres_options=options.tracks.images,
-                lowres_match_resolution=options.keyframes.matching.resolution,
+                lowres_match_resolution=lowres_options.resolution,
                 extended_options=options.loop_closure,
                 point_budget=options.tracks.propagation.max_kps,
                 image_content_fingerprint=image_content,

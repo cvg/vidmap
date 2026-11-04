@@ -34,6 +34,7 @@ dependencies = [
   "tomli==2.2.1; python_version < '3.11'",
   "pyceres @ git+https://github.com/cvg/pyceres.git@86ffa83b7099bdc46a0c8117f606b54f2d83ff03",
   "poselib @ git+https://github.com/PoseLib/PoseLib.git@48b0fdd032534f1d76ffb5bc1536b337d5517c50",
+  "flexglue @ git+https://github.com/cvg/FlexGlue.git@c6cbc7a933bb70ab58608e8835d99b6cc4adca1a",
   "lightglue @ git+https://github.com/cvg/LightGlue.git@c2f8561576f0160b2cdaa3e4634b6b61d6cf6cb8",
   "geocalib @ git+https://github.com/cvg/GeoCalib.git@982f625d822fbb2b50c65d123fd1362a5c01ec2c",
 ]

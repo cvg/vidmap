@@ -108,7 +108,6 @@ class KeyframeSelector:
         self.pair_source_idx = 0
         self.last_good_frame_idx = None
         self.prev_matches_lr = None
-        self.prev_cert_lr = None
         self.tracking_origin_frame_idx = 0
         self.ground_truth_intrinsics = None
         if keyframe_options.intrinsics_source == "ground_truth":
@@ -156,29 +155,21 @@ class KeyframeSelector:
         target_K = self.ground_truth_intrinsics[pair_target_frame_idx]
         return source_K, target_K
 
-    def process_pair(self, pair_match_lr, pair_cert_lr):
-        self._process_sparse_pair(pair_match_lr, pair_cert_lr)
+    def process_pair(self, pair_match_lr):
+        self._process_sparse_pair(pair_match_lr)
         self.prev_matches_lr = pair_match_lr
-        self.prev_cert_lr = pair_cert_lr
         self.pair_source_idx += 1
 
-    def _propagate_and_update_visibility(self, pair_match_lr, pair_cert_lr):
-        self.tracked_kps, _kps_cert, visible = keyframe_utils.propagate_keypoints(
-            self.tracked_kps,
-            pair_match_lr,
-            pair_cert_lr,
-            self.oW,
-            self.oH,
-            self.conf.certainty_threshold,
-        )
+    def _propagate_and_update_visibility(self, pair_match_lr):
+        self.tracked_kps, _kps_cert, visible = pair_match_lr.propagate(self.tracked_kps, self.conf.certainty_threshold)
         visible = visible.cpu().numpy() if isinstance(visible, torch.Tensor) else visible
         self.ever_invisible |= ~visible.astype(bool)
         self.visible_mask = visible & ~self.ever_invisible
 
-    def _process_sparse_pair(self, pair_match_lr, pair_cert_lr):
+    def _process_sparse_pair(self, pair_match_lr):
         from vidmap.utils.io import get_keypoints
 
-        self._propagate_and_update_visibility(pair_match_lr, pair_cert_lr)
+        self._propagate_and_update_visibility(pair_match_lr)
         pair_target_frame_idx = min(self.pair_source_idx + 1, len(self.sequence) - 1)
         source_K, target_K = self._scoring_intrinsics(pair_target_frame_idx)
         motion_score = keyframe_utils.compute_normalized_keypoint_motion_score(
@@ -208,9 +199,9 @@ class KeyframeSelector:
                     f"for source {self.pair_source_idx}"
                 )
             if frames_skipped == 1 and self.prev_matches_lr is not None:
-                self._propagate_and_update_visibility(self.prev_matches_lr, self.prev_cert_lr)
+                self._propagate_and_update_visibility(self.prev_matches_lr)
             if frames_skipped != -1:
-                self._propagate_and_update_visibility(pair_match_lr, pair_cert_lr)
+                self._propagate_and_update_visibility(pair_match_lr)
             self.seg_start_frame = new_keyframe if frames_skipped == -1 else self.pair_source_idx
             self.original_kps = (
                 self.tracked_kps.clone() if isinstance(self.tracked_kps, torch.Tensor) else self.tracked_kps.copy()

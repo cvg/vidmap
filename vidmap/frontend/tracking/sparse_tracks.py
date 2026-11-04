@@ -24,8 +24,8 @@ from vidmap.frontend.correspondences import combine_and_deduplicate_pairs, valid
 from vidmap.frontend.keyframes.processing import KeyframePlan
 from vidmap.frontend.loop_closure.cache import ExtendedMatchCache
 from vidmap.frontend.loop_closure.matching import EXTENDED_MATCH_DIRECTION_POLICY
-from vidmap.frontend.models.romav2 import LazyRoMaV2Tracker, romav2_cache_identity
-from vidmap.frontend.options.matching import RoMaImageOptions, RoMaV2Options
+from vidmap.frontend.models.tracker import LazyTracker, tracker_cache_identity
+from vidmap.frontend.options.matching import FlexGlueOptions, RoMaImageOptions, RoMaV2Options
 from vidmap.frontend.options.tracking import SparseTrackOptions
 from vidmap.frontend.paths import FrontendPaths
 from vidmap.frontend.tracking.multiflow import generate_multiflow_overlap_pairs
@@ -101,7 +101,7 @@ def track_output_cache_metadata(
     salient_features_fingerprint,
 ):
     common_config = {
-        "tracker": romav2_cache_identity(tracker_options),
+        "tracker": tracker_cache_identity(tracker_options),
         "trackprop": semantic_config(track_options, exclude_fields=_RUNTIME_CONFIG_FIELDS),
         "highres": _highres_cache_config(highres_options, lowres_match_resolution),
     }
@@ -146,7 +146,7 @@ def extended_matches_cache_metadata(
     return cache_metadata(
         stage="extended_matches",
         config={
-            "tracker": romav2_cache_identity(tracker_options),
+            "tracker": tracker_cache_identity(tracker_options),
             "highres": _highres_cache_config(highres_options, lowres_match_resolution),
             "inference_direction": EXTENDED_MATCH_DIRECTION_POLICY,
             "retrieval_direction": "temporal" if extended_options.lc_pair_nms else "canonical",
@@ -169,8 +169,8 @@ class SparseTrackBuilder:
         paths: FrontendPaths,
         force_recompute: bool,
         repro_dir: Path | None,
-        tracker: LazyRoMaV2Tracker,
-        tracker_options: RoMaV2Options,
+        tracker: LazyTracker,
+        tracker_options: RoMaV2Options | FlexGlueOptions,
         keyframes: KeyframePlan | None,
         track_options: SparseTrackOptions,
         highres_options: RoMaImageOptions,
