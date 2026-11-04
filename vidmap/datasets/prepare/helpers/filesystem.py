@@ -74,15 +74,20 @@ def extract_archive(
 
 
 @contextmanager
-def scene_staging(destination: Path) -> Iterator[Path]:
+def scene_staging(destination: Path, *, replace: bool = False) -> Iterator[Path]:
     temporary = destination.with_name(f".{destination.name}.preparing")
+    previous = temporary / "previous"
+    if previous.exists() and not destination.exists():
+        previous.rename(destination)
     shutil.rmtree(temporary, ignore_errors=True)
-    if destination.exists():
+    if destination.exists() and not replace:
         raise RuntimeError(f"Prepared scene already exists: {destination}")
     temporary.mkdir(parents=True)
     try:
         yield temporary
     finally:
+        if previous.exists() and not destination.exists():
+            previous.rename(destination)
         shutil.rmtree(temporary, ignore_errors=True)
 
 

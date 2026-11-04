@@ -1,10 +1,11 @@
-"""Download and exactly reproduce the established monocular EuRoC benchmark."""
+"""Prepare EuRoC camera streams and benchmark selections."""
 
 from __future__ import annotations
 
 import argparse
 import io
 import json
+import os
 import shutil
 import struct
 import zipfile
@@ -19,6 +20,8 @@ from scipy.spatial.transform import Rotation
 
 from vidmap.datasets.base import PreparedTestset
 from vidmap.datasets.layouts import get_dataset_layout
+from vidmap.datasets.prepare.helpers.filesystem import scene_staging
+from vidmap.datasets.prepare.helpers.rig_capture import camera_options, frame_image_ids, write_frame_table
 from vidmap.datasets.prepare.helpers.video_common import checksum, resumable_http_download
 from vidmap.datasets.resources import dataset_asset
 
@@ -65,7 +68,8 @@ class CameraCalibration:
 class ImagePose:
     image_id: int
     name: str
-    camera_from_world: np.ndarray
+    camera_from_world: np.ndarray | None
+    camera_id: int = 1
 
 
 def source_inventory() -> tuple[dict[str, SourceArchive], dict[str, SequenceSource]]:
@@ -101,7 +105,7 @@ def source_inventory() -> tuple[dict[str, SourceArchive], dict[str, SequenceSour
 
 
 def parse_sensor(text: str) -> CameraCalibration:
-    """Parse one official EuRoC cam0 ``sensor.yaml``."""
+    """Parse one official EuRoC ``sensor.yaml``."""
     payload = yaml.safe_load(text)
     camera_model = payload["camera_model"]
     distortion_model = payload["distortion_model"]
@@ -129,7 +133,7 @@ def parse_sensor(text: str) -> CameraCalibration:
 
 
 def parse_image_index(text: str) -> tuple[tuple[int, str], ...]:
-    """Parse the ordered official cam0 timestamp/filename CSV."""
+    """Parse the ordered official camera timestamp/filename CSV."""
     images = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         if not line or line.startswith("#"):
@@ -235,7 +239,7 @@ def _rectification(
 def _rectify_png(encoded: bytes, map1: np.ndarray, map2: np.ndarray, size: tuple[int, int]) -> bytes:
     raw = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
     if raw is None:
-        raise ValueError("Could not decode an official EuRoC cam0 PNG")
+        raise ValueError("Could not decode an official EuRoC PNG")
     if (raw.shape[1], raw.shape[0]) != size:
         raise ValueError(f"EuRoC image/calibration size mismatch: {(raw.shape[1], raw.shape[0])} vs {size}")
     image = cv2.remap(raw, map1, map2, interpolation=cv2.INTER_LINEAR)
@@ -245,15 +249,13 @@ def _rectify_png(encoded: bytes, map1: np.ndarray, map2: np.ndarray, size: tuple
     return output.tobytes()
 
 
-def _camera_bytes(calibration: CameraCalibration, rectified: np.ndarray) -> bytes:
-    fx, fy, cx, cy = rectified[[0, 1, 0, 1], [0, 1, 2, 2]]
-    return b"".join(
-        (
-            struct.pack("<Q", 1),
-            struct.pack("<IiQQ", 1, _CAMERA_MODEL_PINHOLE, calibration.width, calibration.height),
-            struct.pack("<dddd", fx, fy, cx, cy),
-        )
-    )
+def _camera_bytes(cameras) -> bytes:
+    output = io.BytesIO()
+    output.write(struct.pack("<Q", len(cameras)))
+    for camera in cameras:
+        output.write(struct.pack("<IiQQ", camera.camera_id, _CAMERA_MODEL_PINHOLE, camera.width, camera.height))
+        output.write(struct.pack("<dddd", *camera.params))
+    return output.getvalue()
 
 
 def _images_bytes(images: tuple[ImagePose, ...]) -> bytes:
@@ -261,13 +263,14 @@ def _images_bytes(images: tuple[ImagePose, ...]) -> bytes:
     output.write(struct.pack("<Q", len(images)))
     for image in images:
         transform = image.camera_from_world
-        quaternion_xyzw = Rotation.from_matrix(transform[:3, :3]).as_quat()
-        qx, qy, qz, qw = quaternion_xyzw
+        quaternion = [0.0, 0.0, 0.0, -1.0] if transform is None else Rotation.from_matrix(transform[:3, :3]).as_quat()
+        qx, qy, qz, qw = quaternion
+        translation = np.zeros(3) if transform is None else transform[:3, 3]
         output.write(struct.pack("<I", image.image_id))
         output.write(struct.pack("<dddd", qw, qx, qy, qz))
-        output.write(struct.pack("<ddd", *transform[:3, 3]))
-        output.write(struct.pack("<I", 1))
-        output.write(f"cam0/{image.name}".encode("utf-8") + b"\0")
+        output.write(struct.pack("<ddd", *translation))
+        output.write(struct.pack("<I", image.camera_id))
+        output.write(f"cam{image.camera_id - 1}/{image.name}".encode("utf-8") + b"\0")
         output.write(struct.pack("<Q", 0))
     return output.getvalue()
 
@@ -305,8 +308,12 @@ def _write_exact(destination: Path, contents: bytes) -> None:
 
 
 def _ensure_testset(scene: str) -> None:
+    legacy = EUROC_LAYOUT.testset_path(scene, "all")
+    destination = EUROC_LAYOUT.testset_path(scene, "mono")
+    if legacy.is_file() and not destination.exists():
+        legacy.rename(destination)
     _write_exact(
-        EUROC_LAYOUT.testset_path(scene, "all"),
+        destination,
         canonical_testset_bytes(scene),
     )
 
@@ -351,7 +358,7 @@ def _read_member(bundle: zipfile.ZipFile, member: str) -> bytes:
     return bundle.read(member)
 
 
-def _recording_is_prepared(recording_dir: Path, sequence: SequenceSource) -> bool:
+def _recording_is_prepared(recording_dir: Path, sequence: SequenceSource, *, mode="mono") -> bool:
     """Check the established image and reference-model contents for one recording."""
     images_dir = recording_dir / "rectified" / "images" / "cam0"
     rec_dir = recording_dir / "rectified" / "rec"
@@ -363,57 +370,83 @@ def _recording_is_prepared(recording_dir: Path, sequence: SequenceSource) -> boo
     ):
         return False
     preparation = json.loads(receipt.read_text(encoding="utf-8"))
-    if preparation["preparation_version"] != EUROC_PREPARATION_VERSION or preparation["variants"] != {
-        "rectified": {"rig": None, "force_gt_keyframes": True}
-    }:
+    if (
+        preparation["preparation_version"] != EUROC_PREPARATION_VERSION
+        or set(preparation["variants"]) != {"rectified"}
+        or not preparation["variants"]["rectified"]["force_gt_keyframes"]
+    ):
         return False
-    image_paths = tuple(sorted(path for path in images_dir.iterdir() if path.is_file()))
+    reconstruction = pycolmap.Reconstruction(rec_dir)
+    ordered = tuple(
+        (iid, reconstruction.images[iid]) for iid in range(sequence.canonical_images) if iid in reconstruction.images
+    )
+    image_paths = tuple(images_dir / Path(image.name).name for _, image in ordered)
     if (
         len(image_paths) != sequence.canonical_images
         or image_paths[0].name != sequence.first_image
         or image_paths[-1].name != sequence.last_image
     ):
         return False
-    reconstruction = pycolmap.Reconstruction(rec_dir)
-    ordered = tuple(sorted(reconstruction.images.items()))
-    camera = next(iter(reconstruction.cameras.values()), None)
+    if mode in {"stereo", "all"}:
+        rig = preparation["variants"]["rectified"]["rig"]
+        if rig is None or len(rig["cameras"]) != 2 or not (images_dir.parent / "frames.csv").is_file():
+            return False
+        if not frame_image_ids(recording_dir / "rectified"):
+            return False
+    camera = reconstruction.cameras[1] if 1 in reconstruction.cameras else None
     return (
         camera is not None
-        and len(reconstruction.cameras) == 1
+        and len(reconstruction.cameras) in (1, 2)
         and camera.model_name == "PINHOLE"
         and len(ordered) == sequence.canonical_images
         and tuple(image_id for image_id, _ in ordered) == tuple(range(sequence.canonical_images))
         and tuple(image.name for _, image in ordered) == tuple(f"cam0/{path.name}" for path in image_paths)
+        and all((images_dir.parent / image.name).is_file() for image in reconstruction.images.values())
     )
 
 
-def euroc_scene_is_prepared(scene_dir: Path) -> bool:
+def euroc_scene_is_prepared(scene_dir: Path, *, mode="mono") -> bool:
     """Check that every recording and the shared scene testset are prepared."""
     scene = scene_dir.name
     if scene not in EUROC_LAYOUT.scenes:
         return False
-    testset = EUROC_LAYOUT.testset_path(scene, "all")
+    testset = EUROC_LAYOUT.testset_path(scene, "mono")
     if not testset.is_file() or testset.read_bytes() != canonical_testset_bytes(scene):
         return False
     _, sequences = source_inventory()
-    return all(
-        _recording_is_prepared(scene_dir / sequence.recording, sequence)
+    if not all(
+        _recording_is_prepared(scene_dir / sequence.recording, sequence, mode=mode)
         for sequence in sequences.values()
         if sequence.scene == scene
-    )
+    ):
+        return False
+    if mode in {"stereo", "all"}:
+        expected = {
+            seq.recording: PreparedTestset(
+                seq.recording,
+                "rectified",
+                frame_image_ids(EUROC_LAYOUT.input_dir(scene, seq.recording, "rectified")),
+            )
+            for seq in sequences.values()
+            if seq.scene == scene
+        }
+        return EUROC_LAYOUT.read_testsets(scene, "stereo") == expected
+    return True
 
 
-def _write_preparation_record(recording_dir: Path, sequence: SequenceSource, aggregate: SourceArchive) -> None:
+def _write_preparation_record(recording_dir: Path, sequence: SequenceSource, aggregate: SourceArchive, rig) -> None:
     payload = {
         "dataset": "EuRoC MAV",
         "scene": sequence.scene,
         "recording": sequence.recording,
         "preparation_version": EUROC_PREPARATION_VERSION,
-        "variants": {"rectified": {"rig": None, "force_gt_keyframes": True}},
+        "variants": {"rectified": {"rig": rig, "force_gt_keyframes": True}},
         "gt_evaluable": True,
-        "camera": "cam0",
+        "cameras": [f"cam{i}" for i in range(len(rig["cameras"]))],
         "image_rectification": "opencv-radtan-alpha-0.0",
-        "temporal_sampling": "all-cam0-frames-within-ground-truth-range",
+        "temporal_sampling": (
+            "all-cam0-frames-within-ground-truth-range" if len(rig["cameras"]) == 1 else "synchronized-frames"
+        ),
         "source_archive": aggregate.filename,
         "source_archive_sha256": aggregate.sha256,
         "sequence_archive_sha256": sequence.sha256,
@@ -426,50 +459,97 @@ def _write_preparation_record(recording_dir: Path, sequence: SequenceSource, agg
     )
 
 
-def prepare_recording(sequence: SequenceSource, aggregate: SourceArchive, download_dir: Path) -> None:
-    """Prepare one official EuRoC sequence without replacing existing output."""
+def prepare_recording(sequence: SequenceSource, aggregate: SourceArchive, download_dir: Path, *, mode="mono") -> None:
+    """Prepare the selected camera streams together, reusing existing image files."""
     destination = EUROC_LAYOUT.recording_dir(sequence.scene, sequence.recording)
+    previous = destination.with_name(f".{destination.name}.preparing") / "previous"
+    if previous.exists() and not destination.exists():
+        previous.rename(destination)
     if destination.exists() or destination.is_symlink():
-        if _recording_is_prepared(destination, sequence):
+        if not _recording_is_prepared(destination, sequence):
+            raise RuntimeError(f"Existing EuRoC recording is not the canonical prepared output: {destination}")
+        if _recording_is_prepared(destination, sequence, mode=mode):
             return
-        raise RuntimeError(f"Existing EuRoC recording is not the canonical prepared output: {destination}")
 
     sequence_path = _sequence_archive(sequence, aggregate, download_dir)
-    staging = EUROC_LAYOUT.data_dir / ".euroc-preparing" / sequence.scene / sequence.recording
-    staging.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(sequence_path) as bundle:
-        calibration = parse_sensor(_read_member(bundle, "mav0/cam0/sensor.yaml").decode("utf-8"))
-        image_index = parse_image_index(_read_member(bundle, "mav0/cam0/data.csv").decode("utf-8"))
-        if len(image_index) != sequence.raw_cam0_images:
-            raise ValueError(
-                f"EuRoC {sequence.recording} raw cam0 count mismatch: {len(image_index)} != {sequence.raw_cam0_images}"
-            )
-        ground_truth = parse_ground_truth(
-            _read_member(bundle, "mav0/state_groundtruth_estimate0/data.csv").decode("utf-8")
-        )
-        poses = _canonical_poses(image_index, ground_truth, calibration.body_to_camera)
+    count = 2 if mode in {"stereo", "all"} else 1
+    with (
+        scene_staging(destination, replace=destination.exists()) as temporary,
+        zipfile.ZipFile(sequence_path) as bundle,
+    ):
+        staging = temporary / "recording"
+        calibrations = [parse_sensor(_read_member(bundle, f"mav0/cam{i}/sensor.yaml").decode()) for i in range(count)]
+        indices = [
+            dict(parse_image_index(_read_member(bundle, f"mav0/cam{i}/data.csv").decode())) for i in range(count)
+        ]
+        if len(indices[0]) != sequence.raw_cam0_images:
+            raise ValueError(f"EuRoC {sequence.recording} raw cam0 count mismatch")
+        ground_truth = parse_ground_truth(_read_member(bundle, "mav0/state_groundtruth_estimate0/data.csv").decode())
+        poses = list(_canonical_poses(tuple(indices[0].items()), ground_truth, calibrations[0].body_to_camera))
         if (
             len(poses) != sequence.canonical_images
             or poses[0].name != sequence.first_image
             or poses[-1].name != sequence.last_image
         ):
             raise ValueError(f"EuRoC {sequence.recording} canonical GT-range inventory mismatch")
-        rectified, map1, map2 = _rectification(calibration)
-        for image in poses:
-            contents = _read_member(bundle, f"mav0/cam0/data/{image.name}")
-            _write_exact(
-                staging / "rectified" / "images" / "cam0" / image.name,
-                _rectify_png(contents, map1, map2, (calibration.width, calibration.height)),
+        stamps = sorted(set.intersection(*(set(index) for index in indices)))
+        primary_names = {image.name for image in poses}
+        streams, cameras, options = [], [], []
+        for cid, calibration in enumerate(calibrations):
+            matrix, map1, map2 = _rectification(calibration)
+            camera = pycolmap.Camera(
+                camera_id=cid + 1,
+                model="PINHOLE",
+                width=calibration.width,
+                height=calibration.height,
+                params=[matrix[0, 0], matrix[1, 1], matrix[0, 2], matrix[1, 2]],
             )
-
-    _write_exact(staging / "rectified" / "rec" / "cameras.bin", _camera_bytes(calibration, rectified))
-    _write_exact(staging / "rectified" / "rec" / "images.bin", _images_bytes(poses))
-    _write_exact(staging / "rectified" / "rec" / "points3D.bin", struct.pack("<Q", 0))
-    _write_preparation_record(staging, sequence, aggregate)
-    if not _recording_is_prepared(staging, sequence):
-        raise RuntimeError(f"Prepared EuRoC recording failed final validation: {sequence.recording}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    staging.replace(destination)
+            cameras.append(camera)
+            names = {indices[cid][stamp] for stamp in stamps} if count > 1 else primary_names
+            if cid == 0:
+                names |= primary_names
+            images_dir = staging / "rectified" / "images" / f"cam{cid}"
+            images_dir.mkdir(parents=True)
+            for name in sorted(names):
+                previous = destination / "rectified" / "images" / f"cam{cid}" / name
+                if previous.is_file():
+                    os.link(previous, images_dir / name)
+                else:
+                    _write_exact(
+                        images_dir / name,
+                        _rectify_png(
+                            _read_member(bundle, f"mav0/cam{cid}/data/{name}"),
+                            map1,
+                            map2,
+                            (calibration.width, calibration.height),
+                        ),
+                    )
+                if cid != 0 or name not in primary_names:
+                    poses.append(ImagePose(len(poses), name, None, cid + 1))
+            streams.append({stamp: f"cam{cid}/{indices[cid][stamp]}" for stamp in stamps})
+            # EuRoC T_BS maps cameras into the body frame; OpenCV uses integer pixel centres.
+            cam_from_ref = (
+                pycolmap.Rigid3d((np.linalg.inv(calibration.body_to_camera) @ calibrations[0].body_to_camera)[:3])
+                if cid
+                else None
+            )
+            params = camera.params.copy()
+            params[2:4] += 0.5
+            runtime_camera = pycolmap.Camera(model="PINHOLE", width=camera.width, height=camera.height, params=params)
+            options.append(camera_options(runtime_camera, cam_from_ref))
+        root = staging / "rectified"
+        _write_exact(root / "rec" / "cameras.bin", _camera_bytes(cameras))
+        _write_exact(root / "rec" / "images.bin", _images_bytes(tuple(poses)))
+        _write_exact(root / "rec" / "points3D.bin", struct.pack("<Q", 0))
+        if count > 1:
+            write_frame_table(root / "images", streams)
+        rig = dict(cameras=options, frames="frames.csv" if count > 1 else None)
+        _write_preparation_record(staging, sequence, aggregate, rig)
+        if not _recording_is_prepared(staging, sequence, mode=mode):
+            raise RuntimeError(f"Prepared EuRoC recording failed final validation: {sequence.recording}")
+        if destination.exists():
+            destination.rename(temporary / "previous")
+        staging.rename(destination)
 
 
 def _validate_zip_response(response) -> None:
@@ -483,8 +563,11 @@ def main(
     *,
     download: bool = True,
     delete_files: bool = False,
+    mode: str = "mono",
 ) -> None:
     """Download official bundles and prepare every recording in the selected scenes."""
+    if mode not in {"mono", "stereo", "all"}:
+        raise ValueError(f"Unknown EuRoC mode: {mode}")
     selected = EUROC_LAYOUT.select_scenes(scenes)
     archives, sequences = source_inventory()
     pending = []
@@ -497,10 +580,10 @@ def main(
         if destination.exists() or destination.is_symlink():
             if not _recording_is_prepared(destination, sequence):
                 raise RuntimeError(f"Existing EuRoC recording is not the canonical prepared output: {destination}")
+            if not _recording_is_prepared(destination, sequence, mode=mode):
+                pending.append(sequence)
         else:
             pending.append(sequence)
-    if not pending:
-        return
 
     download_dir = EUROC_LAYOUT.data_dir / "downloads"
     needed_archives = tuple(dict.fromkeys(sequence.scene for sequence in pending))
@@ -518,7 +601,19 @@ def main(
         archive = archives[archive_name]
         _validate_archive(download_dir / archive.filename, size=archive.size, sha256=archive.sha256)
     for sequence in pending:
-        prepare_recording(sequence, archives[sequence.scene], download_dir)
+        prepare_recording(sequence, archives[sequence.scene], download_dir, mode=mode)
+    if mode in {"stereo", "all"}:
+        for scene in selected:
+            cases = {
+                seq.recording: PreparedTestset(
+                    seq.recording,
+                    "rectified",
+                    frame_image_ids(EUROC_LAYOUT.input_dir(scene, seq.recording, "rectified")),
+                ).as_dict()
+                for seq in sequences.values()
+                if seq.scene == scene
+            }
+            _write_exact(EUROC_LAYOUT.testset_path(scene, "stereo"), yaml.safe_dump(cases, sort_keys=False).encode())
     if delete_files:
         for sequence in pending:
             (download_dir / "sequences" / f"{sequence.recording}.zip").unlink(missing_ok=True)
@@ -529,6 +624,7 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenes", nargs="+", choices=EUROC_LAYOUT.scenes)
+    parser.add_argument("--mode", choices=("mono", "stereo", "all"), default="mono")
     parser.add_argument(
         "--no-download",
         action="store_true",
@@ -544,4 +640,5 @@ if __name__ == "__main__":
         arguments.scenes,
         download=not arguments.no_download,
         delete_files=arguments.delete_downloads,
+        mode=arguments.mode,
     )

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Literal
+
+from vidmap.datasets.resources import dataset_asset
 
 EvaluationMetric = Literal["pose_auc", "wate_auc"]
 
@@ -28,6 +31,8 @@ class DatasetDefinition:
             raise ValueError(f"Invalid manifest reference for dataset {self.name!r}: {self.manifest_reference!r}")
 
 
+_CAPTURE_SUITES = json.loads(dataset_asset("benchmark_suites.json").read_text())
+
 DATASET_DEFINITIONS = (
     DatasetDefinition(
         name="crocodl",
@@ -39,23 +44,37 @@ DATASET_DEFINITIONS = (
     DatasetDefinition(
         name="eth3d_slam",
         manifest_reference="vidmap.datasets.eth3d_slam:ETH3D_SLAM_MANIFEST",
-        default_mode="all",
+        default_mode="mono",
         default_evaluation_metric="pose_auc",
         preparer_module="vidmap.datasets.prepare.eth3d_slam",
     ),
     DatasetDefinition(
         name="euroc",
         scenes=("machine_hall", "vicon_room1", "vicon_room2"),
-        default_mode="all",
+        default_mode="mono",
         default_evaluation_metric="pose_auc",
         preparer_module="vidmap.datasets.prepare.euroc",
     ),
     DatasetDefinition(
+        name="hilti",
+        scenes=tuple(_CAPTURE_SUITES["hilti"]["scenes"]),
+        default_mode="panorama",
+        default_evaluation_metric="wate_auc",
+        preparer_module="vidmap.datasets.prepare.hilti",
+    ),
+    DatasetDefinition(
         name="lamar",
         scenes=("CAB", "HGE", "LIN"),
-        default_mode="sample",
+        default_mode="complete",
         default_evaluation_metric="wate_auc",
         preparer_module="vidmap.datasets.prepare.lamar",
+    ),
+    DatasetDefinition(
+        name="spires",
+        scenes=tuple(_CAPTURE_SUITES["spires"]["scenes"]),
+        default_mode="undistorted-mono",
+        default_evaluation_metric="wate_auc",
+        preparer_module="vidmap.datasets.prepare.spires",
     ),
 )
 

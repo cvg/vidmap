@@ -51,11 +51,6 @@ class PreparedTargetSelection:
     def iter_scene_targets(self) -> Iterator[tuple[str, tuple[PreparedTarget, ...]]]:
         scenes = self.dataset_layout.scenes if self.options.scene is None else self.options.scene
         for scene in scenes:
-            if not self.scene_has_public_ground_truth(scene) and self.options.mode != "all":
-                raise ValueError(
-                    f"{self.dataset_spec.name}/{scene} is reconstruction-only and supports mode=all; "
-                    "pose-selected testsets require public ground truth"
-                )
             testsets = self.dataset_spec.select_testsets(scene, self.options.mode, self.options.testset_id)
             targets = tuple(
                 PreparedTarget(
@@ -71,11 +66,6 @@ class PreparedTargetSelection:
             yield scene, targets
 
     def _configure_testset_reconstructions(self, scene_parser, reference_image_ids, source_reconstruction):
-        if self.options.mode == "all":
-            reference_image_names = [scene_parser.rec.images[image_id].name for image_id in reference_image_ids]
-            scene_parser.kf_names = reference_image_names
-            return reference_image_names
-
         scene_parser.rec = pycolmap.Reconstruction()
         for image_id in reference_image_ids:
             source_image = source_reconstruction.images[image_id]

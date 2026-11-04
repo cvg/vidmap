@@ -38,6 +38,9 @@ dependencies = [
   "geocalib @ git+https://github.com/cvg/GeoCalib.git@982f625d822fbb2b50c65d123fd1362a5c01ec2c",
 ]
 
+[project.optional-dependencies]
+dataset-preparation = ["rosbags>=0.10,<0.12"]
+
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 cmake.version = ">=3.28"

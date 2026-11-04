@@ -1,0 +1,7 @@
+defaults:
+  - rig
+
+rig:
+  keyframe_camera: 0
+  match_same_timestamp: [[0, 1]]
+  flag_same_timestamp_as_sequential: [[0, 1]]

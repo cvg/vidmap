@@ -353,10 +353,12 @@ By default, prepared data, caches, and experiments live under
 where the command is run. To use other paths, create `./vidmap-paths.toml` or
 set `VIDMAP_<DATASET>_{DATA,CACHE,EXP,TESTSETS}_DIR`.
 
+Spires and Hilti require the ROS bag reader (`pip install -e '.[dataset-preparation]'`).
+
 Then select and prepare a benchmark dataset:
 
 ```bash
-DATASET=lamar  # or: euroc, eth3d_slam, crocodl
+DATASET=lamar  # or: euroc, eth3d_slam, crocodl, spires, hilti
 python -m vidmap.datasets.prepare --dataset "$DATASET"
 ```
 
@@ -366,7 +368,9 @@ prepares only the images referenced by its benchmark testset: sessions and
 images absent from that testset are not retained. Downloads resume after
 interruption and completed sequences are reused. Validated source archives are
 retained by default; pass `--delete-downloads` to remove them after successful
-preparation.
+preparation. EuRoC and ETH3D-SLAM prepare only cam0 by default; `--mode stereo`
+or `--mode all` prepares both cameras, reusing existing cam0 images in the same
+folder. For Spires and Hilti, add `--workers N` to prepare N recordings concurrently.
 
 <details>
 <summary>[Expected prepared dataset layouts - click to expand]</summary>
@@ -375,16 +379,24 @@ Storage for the supported evaluation inventories:
 
 | Dataset | Download | Prepared |
 | --- | ---: | ---: |
-| LaMAR | 45.2 GB | 24.0 GB |
-| EuRoC | 24.7 GB | 4.7 GB |
-| ETH3D-SLAM | 18.6 GB | 18.6 GB |
+| LaMAR (sample-300) | 45.2 GB | 24.0 GB |
+| LaMAR (complete) | 144.5 GB | 76.7 GB |
+| EuRoC (monocular) | 24.7 GB | 4.7 GB |
+| EuRoC (rig) | 24.7 GB | 9.6 GB |
+| ETH3D-SLAM (monocular) | 18.6 GB | 18.6 GB |
+| ETH3D-SLAM (rig) | 37.3 GB | 37.3 GB |
 | CroCoDL | 15.0 GB | 14.0 GB |
+| Oxford Spires (rectified monocular, default) | 89.7 GB | 29.3 GB |
+| Oxford Spires (fisheye monocular) | 89.7 GB | 15.8 GB |
+| Oxford Spires (rectified rig) | 89.7 GB | 89.8 GB |
+| Hilti 360° | 132.1 GB | 120 GB |
 
 Download sizes are the checksum-pinned source archives; prepared sizes cover
 the canonical dataset after conversion. LaMAR archives are session-level, so
 the download includes unused frames inside each required session ZIP; only the
-94,489 testset images are retained. Retaining downloads requires roughly the sum
-of both columns, plus conversion staging.
+selected testset images are retained. Retaining downloads requires roughly the sum
+of both columns, plus conversion staging. Hilti's prepared size is estimated from
+120 panoramas sampled across all 30 recordings.
 
 After preparation, the selected dataset is available under
 `./local/datasets/<dataset>/`, with its benchmark definitions under
@@ -404,6 +416,8 @@ local/
 | --- | --- |
 | LaMAR, ETH3D-SLAM, CroCoDL | `native` |
 | EuRoC | `rectified` |
+| Oxford Spires | `native`, `rectified` |
+| Hilti 360° | `panorama` |
 
 <details>
 <summary>[Examples for each dataset - click to expand]</summary>
@@ -418,24 +432,45 @@ local/datasets/
 ├── euroc/machine_hall/MH_01_easy/
 │   ├── preparation.json
 │   └── rectified/
-│       ├── images/cam0/...
+│       ├── images/cam0/...         # cam1/ when stereo is prepared
 │       └── rec/
 ├── eth3d_slam/plant_1/0/
 │   ├── preparation.json
 │   └── native/
+│       ├── images/cam0/...         # cam1/ when stereo is prepared
+│       └── rec/
+├── crocodl/ios-ARCHE_D2/ios_2023-07-12_20.46.14_000/
+│   ├── preparation.json
+│   └── native/
 │       ├── images/cam0/...
 │       └── rec/
-└── crocodl/ios-ARCHE_D2/ios_2023-07-12_20.46.14_000/
+├── spires/2024-03-12-keble-college-02/0/
+│   ├── preparation.json
+│   ├── native/
+│   │   ├── images/cam0/...
+│   │   └── rec/
+│   └── rectified/
+│       ├── images/
+│       │   ├── cam0/...
+│       │   ├── cam1/...
+│       │   └── cam2/...
+│       └── rec/
+└── hilti/floor_1_2025-05-05_run_1/0/
     ├── preparation.json
-    └── native/
+    └── panorama/
         ├── images/cam0/...
         └── rec/
 
 local/testsets/
 ├── lamar/CAB/sample.yaml
-├── euroc/machine_hall/all.yaml
-├── eth3d_slam/plant_1/all.yaml
-└── crocodl/ios-ARCHE_D2/complete.yaml  # Also sample-*.yaml
+├── euroc/machine_hall/mono.yaml
+├── eth3d_slam/plant_1/mono.yaml
+├── crocodl/ios-ARCHE_D2/complete.yaml  # Also sample-*.yaml
+├── spires/2024-03-12-keble-college-02/
+│   ├── undistorted-mono.yaml
+│   ├── fisheye-mono.yaml
+│   └── undistorted-rig.yaml
+└── hilti/floor_1_2025-05-05_run_1/panorama.yaml
 ```
 
 </details>
@@ -448,8 +483,7 @@ Select a benchmark with `--mode`; its testset specifies the recording, image var
 ### Run and evaluate
 
 ```bash
-# Use uncalib/base for datasets other than LaMAR.
-FRONTEND_CONF=uncalib/gtkf-base
+FRONTEND_CONF=uncalib/base
 MAPPING_CONF=uncalib/base
 # Omit --name below to derive the output name from the config pair.
 OUTPUT_NAME=default
@@ -471,9 +505,7 @@ skip only this final report; per-trajectory evaluation still runs.
 <details>
 <summary>[LaMAR - click to expand]</summary>
 
-Evaluate the default `sample` benchmark, a representative subset of each
-ground-truth trajectory as outlined in the paper. LaMAR selects `wate_auc` by
-default.
+LaMAR defaults to `complete` with `wate_auc` evaluation.
 
 ```bash
 python -m vidmap.run_for_benchmark \
@@ -482,12 +514,25 @@ python -m vidmap.run_for_benchmark \
   --mapping-conf uncalib/base
 ```
 
+For the trajectories used in the paper, prepare `sample-300` and run `sample`:
+
+```bash
+python -m vidmap.datasets.prepare -d lamar --profile sample-300
+
+python -m vidmap.run_for_benchmark \
+  --dataset lamar --mode sample \
+  --frontend-conf uncalib/gtkf-base \
+  --mapping-conf uncalib/base
+```
+
+Use separate dataset/testset roots to keep both profiles.
+
 </details>
 
 <details>
 <summary>[EuRoC - click to expand]</summary>
 
-Evaluate the complete EuRoC benchmark. EuRoC selects `pose_auc` by default.
+EuRoC defaults to `mono` with `pose_auc` evaluation.
 
 ```bash
 python -m vidmap.run_for_benchmark \
@@ -496,19 +541,36 @@ python -m vidmap.run_for_benchmark \
   --mapping-conf uncalib/base
 ```
 
+For calibrated stereo:
+
+```bash
+python -m vidmap.run_for_benchmark \
+  --dataset euroc --mode stereo \
+  --frontend-conf calib/stereo \
+  --mapping-conf calib/base
+```
+
 </details>
 
 <details>
 <summary>[ETH3D-SLAM - click to expand]</summary>
 
-Evaluate the complete ETH3D-SLAM benchmark. ETH3D-SLAM selects `pose_auc` by
-default.
+ETH3D-SLAM defaults to `mono` with `pose_auc` evaluation.
 
 ```bash
 python -m vidmap.run_for_benchmark \
   --dataset eth3d_slam \
   --frontend-conf uncalib/base \
   --mapping-conf uncalib/base
+```
+
+For calibrated stereo:
+
+```bash
+python -m vidmap.run_for_benchmark \
+  --dataset eth3d_slam --mode stereo \
+  --frontend-conf calib/stereo \
+  --mapping-conf calib/base
 ```
 
 </details>
@@ -528,6 +590,47 @@ python -m vidmap.run_for_benchmark \
 </details>
 
 <details>
+<summary>[Oxford Spires - click to expand]</summary>
+
+Oxford Spires has 13 scenes and defaults to rectified monocular images
+(`undistorted-mono`). Select a mode with `--mode`.
+
+| Mode | Frontend config | Mapping config |
+| --- | --- | --- |
+| `undistorted-mono` (default) | `uncalib/base` | `uncalib/base` |
+| `undistorted-mono` | `calib/base` | `calib/base` |
+| `fisheye-mono` | `uncalib/fisheye` | `uncalib/geocalib` |
+| `undistorted-rig` | `calib/rig` | `calib/base` |
+
+```bash
+python -m vidmap.datasets.prepare --dataset spires --mode undistorted-rig
+
+python -m vidmap.run_for_benchmark \
+  --dataset spires --mode undistorted-rig \
+  --frontend-conf calib/rig --mapping-conf calib/base
+```
+
+Evaluation uses scale-aligned WATE-AUC on cam0.
+
+</details>
+
+<details>
+<summary>[Hilti 360° - click to expand]</summary>
+
+Hilti has 30 sequences and defaults to `panorama` mode. Select perspective views
+with [`rig.projection`](docs/cameras.md#panoramas).
+
+```bash
+python -m vidmap.run_for_benchmark \
+  --dataset hilti \
+  --frontend-conf calib/panorama --mapping-conf calib/base
+```
+
+Evaluation uses scale-aligned WATE-AUC on view 0.
+
+</details>
+
+<details>
 <summary>[Results - click to expand]</summary>
 
 WATE-AUC with late principal point refinement, at 5% error thresholds (%, higher
@@ -539,6 +642,10 @@ better), evaluated at GT-supported estimated poses:
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
 | LaMAR (sample-300, 50 sequences) | 0.878 | 92.43 | 93.08 | 91.79 | 91.03 | 90.41 |
 | CroCoDL (64 sequences) | 0.233 | 95.72 | 97.27 | 97.39 | 96.56 | 98.21 |
+| LaMAR (complete, 53 evaluated sequences) | 1.452 | 92.42 | 92.83 | 92.38 | 92.59 | 89.76 |
+| Oxford Spires (rectified monocular, 10 sequences) | 0.130 | 98.98 | 99.10 | 99.11 | 99.10 | 99.54 |
+| Oxford Spires (three-camera rig, 13 sequences) | Pending | Pending | Pending | Pending | Pending | Pending |
+| Hilti (three-view, 30 sequences) | Pending | Pending | Pending | Pending | Pending | Pending |
 
 Pose AUC, averaged equally across sequences (%, higher is better):
 

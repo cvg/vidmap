@@ -172,6 +172,7 @@ class DatasetCapabilities:
 class DatasetPreparation:
     module: str
     profiles: tuple[tuple[str, str], ...] = ()
+    uses_mode: bool = False
 
     def profile(self, mode: str) -> str:
         profiles = dict(self.profiles)
@@ -183,6 +184,8 @@ class DatasetPreparation:
         module = importlib.import_module(self.module)
         if self.profiles:
             module.main(scenes=scenes, profile=self.profile(mode))
+        elif self.uses_mode:
+            module.main(scenes=scenes, mode=mode)
         else:
             module.main(scenes=scenes)
 
@@ -342,6 +345,11 @@ class PreparedSceneParser:
         """Copy input geometry without exposing ground-truth poses to the frontend."""
         from vidmap.datasets.capture import PreparedCapture, copy_unposed_reconstruction
 
+        forced_keyframe_names = (
+            frozenset(image.name for image in self.rec.images.values() if image.has_pose)
+            if self.input_metadata["force_gt_keyframes"]
+            else frozenset()
+        )
         if self.input_metadata["rig"] is not None:
             from vidmap.datasets.prepare.helpers.rig_capture import load_capture
             from vidmap.frontend.options.rig import RigOptions
@@ -358,6 +366,7 @@ class PreparedSceneParser:
                 capture,
                 rec=selected,
                 frame_timestamps_ns={fid: capture.frame_timestamps_ns[fid] for fid in selected.frames},
+                forced_keyframe_names=forced_keyframe_names,
             )
 
         return PreparedCapture(
@@ -366,11 +375,7 @@ class PreparedSceneParser:
             frame_timestamps_ns=None,
             provenance={},
             preserve_calibration=False,
-            forced_keyframe_names=(
-                frozenset(image.name for image in self.rec.images.values() if image.has_pose)
-                if self.input_metadata["force_gt_keyframes"]
-                else frozenset()
-            ),
+            forced_keyframe_names=forced_keyframe_names,
         )
 
     def camera(self, imid: int) -> pycolmap.Camera:

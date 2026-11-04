@@ -1,5 +1,6 @@
 """Load camera-folder inputs and prepare supplied calibration with COLMAP undistortion."""
 
+import csv
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,10 +11,41 @@ from vidmap.datasets.capture import (
     CaptureSnapshot,
     PreparedCapture,
     build_capture_reconstruction,
+    read_frame_table,
     resolve_capture_frames,
 )
 from vidmap.datasets.local import select_images
 from vidmap.datasets.prepare.helpers.filesystem import prepare_image_directory
+
+
+def camera_options(camera, cam_from_ref=None):
+    result = dict(camera_model_name=camera.model_name, camera_params=camera.params.tolist())
+    if cam_from_ref is not None:
+        x, y, z, w = cam_from_ref.rotation.quat
+        result.update(cam_from_rig_rotation=[w, x, y, z], cam_from_rig_translation=cam_from_ref.translation.tolist())
+    return result
+
+
+def write_frame_table(image_dir, streams):
+    """Associate requested camera streams by their exact source timestamps."""
+    stamps = sorted(set.intersection(*(set(stream) for stream in streams)))
+    if len(stamps) < 2:
+        raise ValueError("Insufficient synchronized timestamps")
+    with (image_dir / "frames.csv").open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["frame_id", "timestamp_ns", "camera_id", "image_name"])
+        for frame_id, stamp in enumerate(stamps, start=1):
+            for camera_id, stream in enumerate(streams):
+                writer.writerow([frame_id, stamp, camera_id, stream[stamp]])
+
+
+def frame_image_ids(root):
+    """Select the reference-model image IDs belonging to complete rig frames."""
+    import pycolmap
+
+    rec = pycolmap.Reconstruction(root / "rec")
+    ids = {image.name: iid for iid, image in rec.images.items()}
+    return tuple(ids[row["image_name"]] for row in read_frame_table(root / "images" / "frames.csv"))
 
 
 def load_capture(image_dir: str | Path, options=None, *, imnames=None) -> PreparedCapture:

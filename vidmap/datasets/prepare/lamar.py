@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import logging
 import re
@@ -40,6 +41,7 @@ _GROUND_TRUTH_MODELS_URL = (
 _PREPARATION_VERSION = 1
 _EXPECTED_GT_IMAGE_COUNTS = {"CAB": 206_161, "HGE": 130_953, "LIN": 117_970}
 _EXPECTED_SAMPLE_IMAGE_COUNTS = {"CAB": 36_334, "HGE": 27_289, "LIN": 30_866}
+_EXPECTED_COMPLETE_IMAGE_COUNTS = {"CAB": 111862, "HGE": 109891, "LIN": 108450}
 _MODEL_FILES = ("cameras.bin", "images.bin", "points3D.bin")
 _SAMPLE_TARGET = re.compile(r"^(ios_.+)_\d{3}-\d+$")
 
@@ -80,7 +82,7 @@ def _ground_truth_models_archive(downloads: Path, *, download: bool) -> Path:
     )
 
 
-def source_inventory(profile: str = "sample-300") -> dict[str, tuple[SourceArchive, ...]]:
+def source_inventory(profile: str = "complete") -> dict[str, tuple[SourceArchive, ...]]:
     """Load checksum-pinned official session archives for the requested profile."""
     payload = json.loads(dataset_asset("lamar", "source_archives.json").read_text(encoding="utf-8"))
     base_url = payload["base_url"]
@@ -174,13 +176,15 @@ def rotate_camera(camera: RawCamera, rotations: int) -> RawCamera:
     return RawCamera(width, height, (fx, fy, cx, cy))
 
 
-def infer_rotation(camera: RawCamera, target: pycolmap.Camera) -> int:
+def infer_rotation(camera: RawCamera, target: pycolmap.Camera, *, principal_point_tolerance: float = 1e-9) -> int:
     """Infer the unique image rotation that maps raw calibration to the GT camera."""
     matches = []
     for rotations in range(4):
         candidate = rotate_camera(camera, rotations)
-        if (candidate.width, candidate.height) == (target.width, target.height) and np.allclose(
-            candidate.params, target.params, rtol=0.0, atol=1e-9
+        if (
+            (candidate.width, candidate.height) == (target.width, target.height)
+            and np.allclose(candidate.params[:2], target.params[:2], rtol=0.0, atol=1e-9)
+            and np.allclose(candidate.params[2:], target.params[2:], rtol=0.0, atol=principal_point_tolerance)
         ):
             matches.append(rotations)
     if len(matches) != 1:
@@ -205,8 +209,12 @@ def generate_testsets(scene: str, image_ids: set[int]) -> dict[str, dict[str, li
     return result
 
 
-def canonical_testsets(scene: str, profile: str = "sample-300") -> dict[str, bytes]:
+def canonical_testsets(scene: str, profile: str = "complete") -> dict[str, bytes]:
     """Read the exact canonical testset YAML bytes for one scene."""
+    if profile == "complete":
+        return {
+            "complete": gzip.decompress(dataset_asset("lamar", "testsets", scene, "complete.yaml.gz").read_bytes())
+        }
     if profile != "sample-300":
         raise ValueError(f"Unknown LaMAR profile: {profile}")
     return {"sample": dataset_asset("lamar", "testsets", scene, "sample-300.yaml").read_bytes()}
@@ -218,7 +226,7 @@ def _parse_selection(contents: bytes) -> dict[str, list[int]]:
 
 
 def _sample_mapping(scene: str) -> dict[str, list[int]]:
-    mapping = _parse_selection(canonical_testsets(scene)["sample"])
+    mapping = _parse_selection(canonical_testsets(scene, "sample-300")["sample"])
     if not isinstance(mapping, dict):
         raise ValueError(f"Bundled LaMAR sample-300 testset is malformed for {scene}")
     return mapping
@@ -234,7 +242,7 @@ def _sample_sessions(scene: str) -> set[str]:
     return sessions
 
 
-def _selected_image_names(scene: str, ground_truth: pycolmap.Reconstruction, profile: str = "sample-300") -> set[str]:
+def _selected_image_names(scene: str, ground_truth: pycolmap.Reconstruction, profile: str = "complete") -> set[str]:
     mapping = _parse_selection(next(iter(canonical_testsets(scene, profile).values())))
     image_ids = {image_id for values in mapping.values() for image_id in values}
     by_id = {int(image.image_id): str(image.name) for image in ground_truth.images.values()}
@@ -242,7 +250,9 @@ def _selected_image_names(scene: str, ground_truth: pycolmap.Reconstruction, pro
     if missing:
         raise ValueError(f"LaMAR {scene} selection references missing image IDs: {sorted(missing)[:3]}")
     names = {by_id[image_id] for image_id in image_ids}
-    expected = _EXPECTED_SAMPLE_IMAGE_COUNTS[scene]
+    expected = (
+        _EXPECTED_SAMPLE_IMAGE_COUNTS[scene] if profile == "sample-300" else _EXPECTED_COMPLETE_IMAGE_COUNTS[scene]
+    )
     if len(names) != expected:
         raise ValueError(f"LaMAR {scene} {profile} image count mismatch: expected {expected}, got {len(names)}")
     sessions = {Path(name).parent.as_posix() for name in names}
@@ -251,7 +261,7 @@ def _selected_image_names(scene: str, ground_truth: pycolmap.Reconstruction, pro
     return names
 
 
-def _ensure_testsets(scenes: Iterable[str], profile: str = "sample-300") -> None:
+def _ensure_testsets(scenes: Iterable[str], profile: str = "complete") -> None:
     """Install benchmark cases with explicit recording and variant references."""
     for scene in scenes:
         selections = {mode: {} for mode in canonical_testsets(scene, profile)}
@@ -330,7 +340,7 @@ def _recording_testsets(scene, profile, ground_truth):
     return result
 
 
-def _write_recording_model(destination, records, cameras):
+def _write_recording_model(destination, records, cameras, official_poses):
     """Preserve source IDs and pose sentinels while flattening recording-local names."""
     destination.mkdir(parents=True)
     selected_cameras = sorted({values[-1] for values in records.values()})
@@ -343,13 +353,18 @@ def _write_recording_model(destination, records, cameras):
     with (destination / "images.bin").open("xb") as stream:
         stream.write(struct.pack("<Q", len(records)))
         for name, values in records.items():
-            pose = values[1:8]
+            if official_poses is None:
+                pose = values[1:8]
+            elif name in official_poses:
+                pose = official_poses[name]
+            else:
+                pose = (-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             stream.write(struct.pack("<i7di", values[0], *pose, values[-1]))
             stream.write(f"cam0/{Path(name).name}".encode() + b"\0" + struct.pack("<Q", 0))
     (destination / "points3D.bin").write_bytes(struct.pack("<Q", 0))
 
 
-def _convert_recording(scene, archive, destination, ground_truth, records, testsets, profile):
+def _convert_recording(scene, archive, destination, ground_truth, records, testsets, profile, official_poses):
     recording = archive.stem
     seen_names = set()
     rotated = 0
@@ -375,8 +390,10 @@ def _convert_recording(scene, archive, destination, ground_truth, records, tests
     if seen_names != records.keys():
         missing = sorted(records.keys() - seen_names)
         raise ValueError(f"LaMAR {scene}/{recording} omitted {len(missing)} selected images: {missing[:3]}")
+    if official_poses is not None and not seen_names.intersection(official_poses):
+        raise ValueError(f"LaMAR recording has no official GT anchor: {recording}")
     rec_dir = destination / "native/rec"
-    _write_recording_model(rec_dir, records, ground_truth.cameras)
+    _write_recording_model(rec_dir, records, ground_truth.cameras, official_poses)
     manifest = {
         "dataset": "LaMAR",
         "data_version": "2.2",
@@ -393,6 +410,9 @@ def _convert_recording(scene, archive, destination, ground_truth, records, tests
         "testsets": testsets,
         "model_sha256": {name: _sha256(rec_dir / name) for name in _MODEL_FILES},
     }
+    if profile == "complete":
+        manifest["official_pose_sha256"] = _official_source(scene)["pose_sha256"]
+        manifest["official_camera_sha256"] = _official_source(scene)["camera_sha256"]
     with (destination / "preparation.json").open("x", encoding="utf-8") as file:
         json.dump(manifest, file, indent=2, sort_keys=True)
         file.write("\n")
@@ -404,7 +424,8 @@ def _convert_scene(
     destination: Path,
     ground_truth_models: Path,
     *,
-    profile: str = "sample-300",
+    profile: str = "complete",
+    official_models: Path | None = None,
 ) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=f".{scene}-", dir=destination) as temporary:
@@ -422,6 +443,12 @@ def _convert_scene(
             for name, values in _image_records(stream):
                 if name in required_names:
                     records[Path(name).parent.as_posix()][name] = values
+        official_poses = None
+        if profile == "complete":
+            if official_models is None:
+                raise ValueError("The official pose archive is required")
+            images = {image.name: image for image in ground_truth.images.values() if image.name in required_names}
+            official_poses = _official_poses(scene, official_models, images)
         for archive in archives:
             recording = archive.stem
             if recording not in testsets:
@@ -437,6 +464,7 @@ def _convert_scene(
                     records[recording],
                     testsets[recording],
                     profile,
+                    official_poses,
                 )
                 if not lamar_recording_is_prepared(staging, profile=profile, recording=recording):
                     raise RuntimeError(f"LaMAR preparation did not produce a complete recording: {recording}")
@@ -471,6 +499,11 @@ def lamar_recording_is_prepared(
         or recording not in _profile_sessions(scene, manifest["profile"])
     ):
         return False
+    if manifest["profile"] == "complete" and (
+        manifest["official_pose_sha256"] != _official_source(scene)["pose_sha256"]
+        or manifest["official_camera_sha256"] != _official_source(scene)["camera_sha256"]
+    ):
+        return False
     if manifest["model_sha256"] != {name: _sha256(rec_dir / name) for name in _MODEL_FILES}:
         return False
     canonical = {
@@ -494,7 +527,7 @@ def lamar_recording_is_prepared(
     return names == records.keys() and all(Path(name).parent.as_posix() == "cam0" for name in records)
 
 
-def lamar_scene_is_prepared(dataset_root: Path, scene: str, profile: str = "sample-300") -> bool:
+def lamar_scene_is_prepared(dataset_root: Path, scene: str, profile: str = "complete") -> bool:
     """Return whether all recordings selected by one benchmark group are ready."""
     return all(
         lamar_recording_is_prepared(dataset_root / scene / recording, profile=profile)
@@ -519,9 +552,9 @@ def _pending_recordings(scenes, profile):
 
 
 def _profile_sessions(scene: str, profile: str) -> set[str]:
-    if profile != "sample-300":
-        raise ValueError(f"Unknown LaMAR profile: {profile}")
-    return _sample_sessions(scene)
+    if profile == "sample-300":
+        return _sample_sessions(scene)
+    return set(_parse_selection(canonical_testsets(scene, profile)["complete"]))
 
 
 def _image_records(stream):
@@ -538,12 +571,64 @@ def _image_records(stream):
         yield name.decode(), values
 
 
+def _official_source(scene):
+    return json.loads(dataset_asset("lamar", "official_pose_sources.json").read_text())[scene]
+
+
+def _pinhole_cameras(stream):
+    cameras = {}
+    for _ in range(struct.unpack("<Q", stream.read(8))[0]):
+        camera_id, model, width, height = struct.unpack("<iiQQ", stream.read(24))
+        if model != int(pycolmap.CameraModelId.PINHOLE):
+            raise ValueError("Expected PINHOLE cameras in the official LaMAR model")
+        cameras[camera_id] = RawCamera(width, height, struct.unpack("<4d", stream.read(32)))
+    return cameras
+
+
+def _official_poses(scene, archive, images):
+    source = _official_source(scene)
+    with zipfile.ZipFile(archive) as bundle:
+        with bundle.open(f"{scene}/sparse/images.bin") as stream:
+            records = list(_image_records(stream))
+        camera_data = bundle.read(f"{scene}/sparse/cameras.bin")
+    if hashlib.sha256(camera_data).hexdigest() != source["camera_sha256"]:
+        raise ValueError("Official LaMAR cameras differ from the pinned benchmark")
+    cameras = _pinhole_cameras(io.BytesIO(camera_data))
+    poses = {name: values[1:8] for name, values in records}
+    if len(records) != len(poses) or len(poses) != source["pose_count"]:
+        raise ValueError("Official LaMAR pose inventory changed")
+    digest = hashlib.sha256()
+    for name, pose in sorted(poses.items()):
+        digest.update(name.encode() + b"\0" + struct.pack("<7d", *pose))
+    if digest.hexdigest() != source["pose_sha256"]:
+        raise ValueError("Official LaMAR poses differ from the pinned benchmark")
+    aligned = {}
+    for name, values in records:
+        if name not in images:
+            continue
+        # The exports can differ by one principal-point pixel; focal lengths
+        # and dimensions must still match a unique quarter-turn orientation.
+        turns = infer_rotation(cameras[values[-1]], images[name].camera, principal_point_tolerance=1 + 1e-9)
+        pose = poses[name]
+        if turns:
+            qw, qx, qy, qz, tx, ty, tz = pose
+            camera_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d([qx, qy, qz, qw]), [tx, ty, tz])
+            # Match the clockwise pixel rotation, including the translation.
+            image_from_camera = pycolmap.Rigid3d(
+                pycolmap.Rotation3d(np.array([0.0, 0.0, turns * np.pi / 2])), np.zeros(3)
+            )
+            camera_from_world = image_from_camera * camera_from_world
+            pose = (*camera_from_world.rotation.quat[[3, 0, 1, 2]], *camera_from_world.translation)
+        aligned[name] = pose
+    return aligned
+
+
 def main(
     scenes: Iterable[str] | None = None,
     *,
     download: bool = True,
     delete_files: bool = False,
-    profile: str = "sample-300",
+    profile: str = "complete",
 ) -> None:
     """Download official iOS sessions and prepare selected or all LaMAR scenes."""
     selected = LAMAR_LAYOUT.select_scenes(scenes)
@@ -571,15 +656,24 @@ def main(
             elif not path.is_file() or path.stat().st_size != source.size or _sha256(path) != source.sha256:
                 raise FileNotFoundError(f"Missing checksum-valid LaMAR archive: {path}")
             archive_paths.append(path)
+        official_models = None
+        if profile == "complete":
+            official_models = downloads / "official-colmap" / f"{scene}.zip"
+            if not download and not official_models.is_file():
+                raise FileNotFoundError(f"Missing official pose archive: {official_models}")
+            resumable_http_download(_official_source(scene)["url"], official_models)
         _convert_scene(
             scene,
             tuple(archive_paths),
             LAMAR_LAYOUT.scene_dir(scene),
             ground_truth_models,
             profile=profile,
+            official_models=official_models,
         )
         _ensure_testsets((scene,), profile)
         if delete_files:
+            if official_models is not None:
+                official_models.unlink()
             for path in archive_paths:
                 path.unlink()
             scene_downloads = downloads / scene
@@ -594,7 +688,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenes", nargs="+", choices=LAMAR_LAYOUT.scenes)
-    parser.add_argument("--profile", choices=["sample-300"], default="sample-300")
+    parser.add_argument("--profile", choices=["sample-300", "complete"], default="complete")
     parser.add_argument(
         "--no-download",
         action="store_true",
