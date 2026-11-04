@@ -43,9 +43,10 @@ def build_evaluation_parser():
 
     add_evaluation_arguments(parser)
     parser.add_argument(
-        "--only-wate-auc",
-        action="store_true",
-        help="Only print WATE-AUC tables/CSV; suppress WATE median/mean/count and WRRE output.",
+        "--metrics",
+        nargs="+",
+        choices=("ate", "pose-auc", "wate-auc"),
+        help="Metrics to print in text and CSV (default: ATE and the dataset's AUC metric).",
     )
     return parser
 
@@ -147,6 +148,7 @@ class ReconstructionEvaluationReport:
         prints: dict,
         colls: dict,
         wate_colls: dict,
+        ate_colls: dict,
     ):
         self.args = args
         self.modes = modes
@@ -154,6 +156,7 @@ class ReconstructionEvaluationReport:
         self.prints = prints
         self.colls = colls
         self.wate_colls = wate_colls
+        self.ate_colls = ate_colls
 
     @classmethod
     def collect(
@@ -180,6 +183,7 @@ class ReconstructionEvaluationReport:
         prints = {}
         colls = {}
         wate_colls = {}
+        ate_colls = {}
         wate_auc_full_thresholds = sorted({percent / 100.0 for percent in (args.wate_auc_percents or [])})
         for mode in modes:
             args.mode = mode
@@ -203,7 +207,7 @@ class ReconstructionEvaluationReport:
                 output_name=args.name,
                 run_options=run_options,
             )
-            out, counts, _, out_wate = result_evaluator.evaluate_saved()
+            out, counts, _, out_wate, ate_colls[mode] = result_evaluator.evaluate_saved()
             prints[mode] = {}
             colls[mode] = {}
             for scene, _AUCs in out.items():
@@ -261,6 +265,7 @@ class ReconstructionEvaluationReport:
             prints=prints,
             colls=colls,
             wate_colls=wate_colls,
+            ate_colls=ate_colls,
         )
 
     def render(self) -> None:
@@ -275,8 +280,10 @@ class ReconstructionEvaluationReport:
         from vidmap.datasets.registry import get_dataset_spec
 
         default_metric = get_dataset_spec(args.dataset).default_evaluation_metric
-        show_pose_auc = default_metric == "pose_auc" and not args.only_wate_auc
-        show_wate_auc = default_metric == "wate_auc" or args.only_wate_auc
+        metrics = args.metrics if args.metrics is not None else ("ate", default_metric.replace("_", "-"))
+        show_ate = "ate" in metrics
+        show_pose_auc = "pose-auc" in metrics
+        show_wate_auc = "wate-auc" in metrics
         wate_alignment_label = "Sim(3)-window scale-aligned"
 
         for mode in modes:
@@ -302,6 +309,16 @@ class ReconstructionEvaluationReport:
                 comp_sum = np.sum([counts["completed"] for values, counts in coll.values()])
                 failed_sum = np.sum([counts["failed"] for values, counts in coll.values()])
                 print(f"     recs total: {comp_sum}/{comp_sum + failed_sum}")
+
+            if show_ate:
+                print("  ATE RMSE (m, mean across trajectories):")
+                for scene in scenes:
+                    values = self.ate_colls[mode][scene]
+                    value = f"{np.mean(values):.3f}" if values else "missing"
+                    print(f"     {scene}: {value}    trajectories: {len(values)}")
+                values = [value for scene in scenes for value in self.ate_colls[mode][scene]]
+                value = f"{np.mean(values):.3f}" if values else "missing"
+                print(f"     total: {value}    trajectories: {len(values)}")
 
             # Windowed ATE
             wcoll = wate_colls[mode]
@@ -400,6 +417,18 @@ class ReconstructionEvaluationReport:
                             values, _ = coll[scene]
                             auc_str = " / ".join(f"{v:.1f}" for v in values)
                         print(sep.join([scene, auc_str]))
+
+        if show_ate:
+            print("\n<!-- ate csv -->")
+            print(sep.join(["Mode", "Scene", "ATE RMSE (m)", "Trajectories"]))
+            for mode in modes:
+                for scene in scenes:
+                    values = self.ate_colls[mode][scene]
+                    value = f"{np.mean(values):.3f}" if values else ""
+                    print(sep.join([mode, scene, value, str(len(values))]))
+                values = [value for scene in scenes for value in self.ate_colls[mode][scene]]
+                value = f"{np.mean(values):.3f}" if values else ""
+                print(sep.join([mode, "total", value, str(len(values))]))
 
         # WATE CSV (separate from AUC/Recall)
         all_window_sizes_csv = sorted(

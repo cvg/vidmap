@@ -52,7 +52,7 @@ class BenchmarkResultEvaluator:
             return f"{case.scene}-{case.recording}"
         return case.scene
 
-    def evaluate_case(self, case, scene_parser, outputs, recalls, wates):
+    def evaluate_case(self, case, scene_parser, outputs, recalls, wates, ates):
         """Load, evaluate, and aggregate one persisted benchmark reconstruction."""
         group = self._report_group(case)
         try:
@@ -86,6 +86,8 @@ class BenchmarkResultEvaluator:
             )
 
             summary = evaluation.summarize(verbose=logger.isEnabledFor(logging.INFO))
+            if evaluation.ate is not None:
+                ates[group].append(evaluation.ate["rmse"])
             outputs[group][case.testset_type].append(summary["all"])
             if "recall" in summary:
                 recalls[group][case.testset_type].append(summary["recall"])
@@ -111,6 +113,7 @@ class BenchmarkResultEvaluator:
             )
         outputs = {group: defaultdict(list) for group in groups}
         recalls = {group: defaultdict(list) for group in groups}
+        ates = {group: [] for group in groups}
         wates = {group: defaultdict(lambda: defaultdict(list)) for group in groups}
         counts = {group: {"completed": 0, "failed": 0} for group in groups}
         for case, scene_parser, _ in tqdm(
@@ -124,6 +127,6 @@ class BenchmarkResultEvaluator:
                 testset=case.testset_desc,
                 config=self.conf.name,
             ):
-                ok, group = self.evaluate_case(case, scene_parser, outputs, recalls, wates)
+                ok, group = self.evaluate_case(case, scene_parser, outputs, recalls, wates, ates)
                 counts[group]["completed" if ok else "failed"] += 1
-        return outputs, counts, recalls, wates
+        return outputs, counts, recalls, wates, ates

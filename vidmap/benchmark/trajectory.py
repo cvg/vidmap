@@ -456,25 +456,19 @@ class AbsoluteTrajectoryEvaluator:
     ) -> AbsoluteTrajectoryResult:
         """Evaluate cam0, matching estimates to GT by image name.
 
-        With align_in_place, also align the full reconstruction for saving and
-        return its cam0 trajectories and ATE using the paper's two-pass alignment.
+        Return cam0 trajectories and ATE using the paper's two-pass alignment.
+        With align_in_place, also align the full reconstruction for saving.
         Otherwise, leave both input reconstructions unchanged.
         """
         full_reconstruction = estimated_reconstruction
         estimated_reconstruction, ground_truth_reconstruction = _prepare_evaluation_pair(
             estimated_reconstruction, ground_truth_reconstruction, self.reference_from_gt
         )
-        ate = estimated_trajectory = ground_truth_trajectory = None
         if align_in_place:
             _align_reconstruction_for_evaluation(
                 estimated_reconstruction, ground_truth_reconstruction, full_reconstruction=full_reconstruction
             )
-            estimated_trajectory = reconstruction_to_evo_trajectory(estimated_reconstruction)
-            supported_ground_truth = remap_poses_to_timeline(
-                estimated_reconstruction, ground_truth_reconstruction, interpolate_missing_poses=False
-            ).reconstruction
-            ground_truth_trajectory = reconstruction_to_evo_trajectory(supported_ground_truth)
-            ate = compute_ate_statistics(ground_truth_trajectory, estimated_trajectory)
+            ate_reconstruction = estimated_reconstruction
         num_images = estimated_reconstruction.num_images()
         num_registered_images = estimated_reconstruction.num_reg_images()
         estimated_reconstruction, _ = align_reconstruction_to_reference_sequence(
@@ -506,6 +500,18 @@ class AbsoluteTrajectoryEvaluator:
 
         data["results"]["scale"] = self.options.gt_scale
         data["success"] = True
+        if not align_in_place:
+            ate_reconstruction, _ = align_reconstruction_to_reference_sequence(
+                estimated_reconstruction, ground_truth_reconstruction
+            )
+        supported_ground_truth = remap_poses_to_timeline(
+            ate_reconstruction, ground_truth_reconstruction, interpolate_missing_poses=False
+        ).reconstruction
+        ate = estimated_trajectory = ground_truth_trajectory = None
+        if supported_ground_truth.num_reg_images():
+            estimated_trajectory = reconstruction_to_evo_trajectory(ate_reconstruction)
+            ground_truth_trajectory = reconstruction_to_evo_trajectory(supported_ground_truth)
+            ate = compute_ate_statistics(ground_truth_trajectory, estimated_trajectory)
         return AbsoluteTrajectoryResult(
             options=self.options,
             data=data,
