@@ -645,10 +645,12 @@ better), evaluated at GT-supported estimated poses:
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
 | LaMAR (sample-300, 50 sequences) | 0.916 | 92.78 | 93.87 | 92.90 | 91.99 | 90.83 |
 | CroCoDL (64 sequences) | 0.284 | 95.38 | 96.75 | 96.70 | 96.60 | 98.03 |
-| LaMAR (complete, 53 evaluated sequences) | 1.361 | 92.51 | 93.18 | 93.08 | 92.91 | 90.88 |
+| LaMAR (older selection, 53 evaluated sequences) | 1.361 | 92.51 | 93.18 | 93.08 | 92.91 | 90.88 |
 | Oxford Spires (rectified monocular, 10 sequences) | 0.123 | 98.98 | 99.08 | 99.06 | 99.06 | 99.52 |
 | Oxford Spires (three-camera rig, 13 sequences) | 0.088 | 99.17 | 99.30 | 99.36 | 99.43 | 99.68 |
 | Hilti (three-view, 30 sequences) | Pending | Pending | Pending | Pending | Pending | Pending |
+
+The LaMAR older-selection results do not cover the current `complete` testset (128 recordings).
 
 Pose AUC, averaged equally across sequences (%, higher is better):
 
