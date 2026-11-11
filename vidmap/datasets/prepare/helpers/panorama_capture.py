@@ -177,7 +177,8 @@ def _render(identity, source_root, target, cameras, rotations):
             pixels = np.asarray(image.convert("RGB"))
         for directory, xy in maps:
             rendered = cv2.remap(pixels, xy, None, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
-            Image.fromarray(rendered).save(directory / f"{Path(frame['image_name']).stem}.png")
+            # Lossless either way; level 1 encodes ~4.5x faster than PIL's default 6 for ~8% larger files.
+            Image.fromarray(rendered).save(directory / f"{Path(frame['image_name']).stem}.png", compress_level=1)
 
 
 def prepare_panorama_capture(
