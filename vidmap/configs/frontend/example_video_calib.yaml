@@ -1,0 +1,9 @@
+# Prototype only: assets/example_video.mp4 as a calibrated monocular rig, with the intrinsics that the
+# uncalibrated reference run (example_out/rec) estimated. Used by the section-join prototype in
+# jarvis_research/.../reconstruction-handoff/prototype-pose-join so every section shares one calibration,
+# like the deploy/ panorama rig does.
+defaults: [calib/base]
+rig:
+  cameras:
+    - camera_model_name: PINHOLE
+      camera_params: [775.9, 768.1, 258.0, 444.0]
