@@ -7,6 +7,24 @@ import poselib
 import pycolmap
 
 MIN_MDRP_VALID_DEPTH_CORRESPONDENCES = 3
+NON_FINITE_POSE_REASON = "non_finite_relative_pose"
+_UNIT_QUATERNION_TOLERANCE = 1e-6
+
+
+def is_usable_relative_pose(quaternion, translation, scale) -> bool:
+    """Whether a solver pose can enter the view graph.
+
+    Estimators can return NaN on weak pairs; a NaN edge makes rotation averaging fail. Zero translation is
+    allowed, because pure-rotation pairs still constrain rotation.
+    """
+    quaternion = np.asarray(quaternion, dtype=np.float64)
+    translation = np.asarray(translation, dtype=np.float64)
+    return bool(
+        np.isfinite(quaternion).all()
+        and np.isfinite(translation).all()
+        and np.isfinite(scale)
+        and abs(np.linalg.norm(quaternion) - 1.0) <= _UNIT_QUATERNION_TOLERANCE
+    )
 
 
 class InvalidPairPoseResult(TypedDict):
@@ -140,8 +158,10 @@ def estimate_relative_pose_for_pair(
     pose_rel_calc = monodepth_geometry.pose
     scale = monodepth_geometry.scale
     q_coeffs = np.asarray(list(pose_rel_calc.q[1:]) + [pose_rel_calc.q[0]])
-    rot = pycolmap.Rotation3d(q_coeffs.astype(np.float64))
     t_vec = np.asarray(pose_rel_calc.t).astype(np.float64)
+    if not is_usable_relative_pose(q_coeffs, t_vec, scale):
+        return image_pair_id, {"is_valid": False, "invalid_reason": NON_FINITE_POSE_REASON}
+    rot = pycolmap.Rotation3d(q_coeffs.astype(np.float64))
     cam2_from_cam1 = pycolmap.Rigid3d(translation=t_vec, rotation=rot)
     inlier_mask = inliers_info["inliers"]
     inliers = np.where(inlier_mask)[0].astype(np.int32)
@@ -191,6 +211,8 @@ def _estimate_with_depthless_matches(points1, points2, depths1, depths2, valid, 
     if refined is None:
         return {"is_valid": False, "invalid_reason": "relative_pose_refinement_failed"}
     pose = refined["cam2_from_cam1"]
+    if not is_usable_relative_pose(pose.rotation.quat, pose.translation, scale):
+        return {"is_valid": False, "invalid_reason": NON_FINITE_POSE_REASON}
     inliers = native.relative_pose_residuals(pose, camera1, points1, camera2, points2) <= threshold**2
     return {
         "is_valid": True,
