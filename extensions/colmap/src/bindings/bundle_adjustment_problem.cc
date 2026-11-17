@@ -6,6 +6,7 @@
 #include "stages/depth_prior.h"
 #include "stages/intrinsics_prior.h"
 #include "stages/rig_geometry.h"
+#include "stages/temporal_smoothing.h"
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -13,6 +14,12 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(bundle_adjustment, m) {
+  m.def("temporal_acceleration_cost",
+        [](double dt_prev, double dt_next, double stddev) {
+          return std::shared_ptr<ceres::CostFunction>(
+              vidmap::TemporalPoseAccelerationCostFunctor::Create(
+                  dt_prev, dt_next, 1.0 / stddev));
+        });
   py::module_::import("pyceres");
   m.def("append_depth_observations",
         [](ceres::Problem& problem,

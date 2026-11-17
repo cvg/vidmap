@@ -46,4 +46,25 @@ struct TemporalAccelerationCostFunctor
   const double residual_scale_;
 };
 
+// BA stores rig-from-world poses rather than world-space centers.
+struct TemporalPoseAccelerationCostFunctor
+    : public colmap::AutoDiffCostFunctor<TemporalPoseAccelerationCostFunctor,
+                                        3, 7, 7, 7> {
+  TemporalPoseAccelerationCostFunctor(double dt_prev, double dt_next,
+                                      double residual_scale)
+      : acceleration(dt_prev, dt_next, residual_scale) {}
+
+  template <typename T>
+  bool operator()(const T* prev, const T* curr, const T* next,
+                  T* residuals) const {
+    const auto center = [](const T* pose) -> Eigen::Matrix<T, 3, 1> {
+      return -(Eigen::Map<const Eigen::Quaternion<T>>(pose).conjugate() *
+               Eigen::Map<const Eigen::Matrix<T, 3, 1>>(pose + 4));
+    };
+    const auto a = center(prev), b = center(curr), c = center(next);
+    return acceleration(a.data(), b.data(), c.data(), residuals);
+  }
+  TemporalAccelerationCostFunctor acceleration;
+};
+
 }  // namespace vidmap

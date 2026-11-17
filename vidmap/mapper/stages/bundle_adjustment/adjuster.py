@@ -19,6 +19,7 @@ from vidmap.mapper.options.positioning import LossConfig
 from vidmap.mapper.options.refinement import BAOptions, BATriangulationOptions
 from vidmap.mapper.playback_trace import PlaybackTraceRecorder, SolverPlaybackOptions
 from vidmap.mapper.replay.cache import ReplayCache
+from vidmap.mapper.stages.global_positioning.problem import TemporalAccelerationPrior
 from vidmap.utils.multiview_geometry import point_has_positive_depth
 from vidmap.utils.profiling import log_memory, record_timing, sync_time
 
@@ -75,6 +76,7 @@ class BundleAdjuster:
     replay: ReplayCache
     focal_prior: dict[int, tuple[tuple[float, float], ...]] | None = None
     point_budget_scale: float = 1.0
+    temporal_priors: list[TemporalAccelerationPrior] = field(default_factory=list)
     persist_intermediate_reconstructions: bool = False
     playback_trace: PlaybackTraceRecorder | None = None
     observation_graph: pycolmap.CorrespondenceGraph = field(init=False)
@@ -557,6 +559,8 @@ class BundleAdjuster:
             depth_scales,
             intrinsics_priors,
             self.solve_state,
+            temporal_priors=self.temporal_priors,
+            temporal_options=self.options.temporal,
             playback_callback=playback_sink,
             playback_options=playback_options,
         )
@@ -578,7 +582,7 @@ class BundleAdjuster:
         if not policy.fix_all_poses:
             frame_order = dict.fromkeys(self.reconstruction.images[i].frame_id for i in optimized_image_ids)
             for frame_id in frame_order:
-                if frame_id not in observed_frames:
+                if frame_id not in observed_frames and frame_id not in result.temporally_constrained_frames:
                     self.reconstruction.deregister_frame(frame_id)
         logger.debug(
             "BA solved: residuals=%d, initial_cost=%.8g, final_cost=%.8g",

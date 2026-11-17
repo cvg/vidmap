@@ -14,7 +14,7 @@
 
 #include "stages/metric_depth.h"
 #include "stages/rig_geometry.h"
-#include "stages/weighted_motion_averaging.h"
+#include "stages/temporal_smoothing.h"
 #include "vidmap_native/mapping_sidecars.h"
 #include <Eigen/LU>
 #include <ceres/loss_function.h>

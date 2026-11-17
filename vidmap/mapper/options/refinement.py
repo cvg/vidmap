@@ -81,6 +81,17 @@ class BAFocalPriorOptions:
 
 
 @pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
+class BATrajectorySmoothingOptions:
+    """Smooth camera positions across consecutive keyframes."""
+
+    enabled: bool = True
+    weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 42.0
+    stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 3.0
+    relative_dead_zone: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 3.0
+    huber_width: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1e9
+
+
+@pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid", strict=True))
 class BAOptions:
     normal: BANormalOptions = dc_field(default_factory=BANormalOptions)
     annealing: BAAnnealingOptions = dc_field(default_factory=BAAnnealingOptions)
@@ -88,6 +99,7 @@ class BAOptions:
     depth: BADepthOptions = dc_field(default_factory=BADepthOptions)
     intrinsics: BAIntrinsicsOptions = dc_field(default_factory=BAIntrinsicsOptions)
     focal_prior: BAFocalPriorOptions = dc_field(default_factory=BAFocalPriorOptions)
+    temporal: BATrajectorySmoothingOptions = dc_field(default_factory=BATrajectorySmoothingOptions)
     solver_backend: SolverBackendOptions = dc_field(default_factory=SolverBackendOptions)
 
     retriangulation_reproj_multiplier: float = 8.0
@@ -109,6 +121,7 @@ class BAOptions:
                 "depth": BADepthOptions,
                 "intrinsics": BAIntrinsicsOptions,
                 "focal_prior": BAFocalPriorOptions,
+                "temporal": BATrajectorySmoothingOptions,
                 "triangulation": BATriangulationOptions,
                 "solver_backend": SolverBackendOptions,
             },

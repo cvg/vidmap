@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,6 +12,7 @@ import numpy as np
 import pycolmap
 from vidmap_native import global_positioning as gp_costs
 
+from vidmap.configuration.defaults import CANONICAL_POINT_BUDGET
 from vidmap.mapper.checkpoints import reconstruction_checkpoint_directory
 from vidmap.mapper.inputs.timeline import MappingTimeline
 from vidmap.mapper.native.extension import native
@@ -71,6 +72,7 @@ def _build_temporal_acceleration_prior_specs(
     consecutive_pair_ids,
     timeline: MappingTimeline,
     coordinate: str = "timestamp",
+    point_budget: int = CANONICAL_POINT_BUDGET,
 ) -> list:
     """Build smoothness priors across valid consecutive tracking edges."""
     if coordinate not in ("timestamp", "keyframe_index"):
@@ -106,13 +108,14 @@ def _build_temporal_acceleration_prior_specs(
             valid_edges.add(frozenset((frame_id1, frame_id2)))
 
     observation_counts = gp_costs.track_observation_counts(reconstruction, solve_state.sidecars)
-    frame_counts = {
-        fid: sum(
-            observation_counts[data.id]
+    supported_frames = {
+        fid
+        for fid in ordered_frame_ids
+        if any(
+            observation_counts[data.id] > 0
             for data in reconstruction.frame(fid).image_ids
             if data.id in observation_counts
         )
-        for fid in ordered_frame_ids
     }
     priors = []
     for prev_frame_id, frame_id, next_frame_id in zip(
@@ -127,8 +130,7 @@ def _build_temporal_acceleration_prior_specs(
             continue
         if frozenset((frame_id, next_frame_id)) not in valid_edges:
             continue
-        mean_observation_count = sum(frame_counts[candidate] for candidate in triplet) / 3.0
-        if mean_observation_count <= 0.0:
+        if not supported_frames.intersection(triplet):
             continue
         dt_prev = float(coordinates[frame_id] - coordinates[prev_frame_id])
         dt_next = float(coordinates[next_frame_id] - coordinates[frame_id])
@@ -139,10 +141,41 @@ def _build_temporal_acceleration_prior_specs(
             )
         priors.append(
             TemporalAccelerationPrior(
-                prev_frame_id, frame_id, next_frame_id, dt_prev, dt_next, float(np.sqrt(mean_observation_count))
+                prev_frame_id, frame_id, next_frame_id, dt_prev, dt_next, float(np.sqrt(point_budget))
             )
         )
     return priors
+
+
+def _freeze_temporal_motion_scales(priors, reconstruction, frame_ids):
+    """Freeze outer-median movement on the original nine-keyframe neighborhoods."""
+    centers = np.full((len(frame_ids), 3), np.nan)
+    indices = {fid: i for i, fid in enumerate(frame_ids)}
+    for i, fid in enumerate(frame_ids):
+        if fid in reconstruction.frames and reconstruction.frame(fid).has_pose():
+            centers[i] = reconstruction.frame(fid).rig_from_world.tgt_origin_in_src()
+    steps = np.linalg.norm(np.diff(centers, axis=0), axis=1)
+    frozen = []
+    boundary = missing = zero = 0
+    for prior in priors:
+        i = indices[prior.frame_id]
+        scale = 0.0
+        if i < 4 or i + 4 >= len(centers):
+            boundary += 1
+        elif not np.isfinite(centers[i - 4 : i + 5]).all():
+            missing += 1
+        else:
+            scale = float(np.median(np.r_[steps[i - 4 : i - 1], steps[i + 1 : i + 4]]))
+            zero += scale == 0
+        frozen.append(replace(prior, local_motion_scale=scale))
+    logger.info(
+        "Frozen post-GP1 temporal scales: %d positive; ungated: %d boundary, %d missing, %d zero-motion",
+        len(frozen) - boundary - missing - zero,
+        boundary,
+        missing,
+        zero,
+    )
+    return frozen
 
 
 def _depth_prior_outlier_masks(solve_state: SolveState, max_depth: float | None):
@@ -188,8 +221,11 @@ class GlobalPositioner:
     options: GPOptions
     output_dir: Path
     replay: ReplayCache
+    point_budget: int = CANONICAL_POINT_BUDGET
+    retain_temporal_priors: bool = False
     persist_intermediate_reconstructions: bool = False
     playback_trace: PlaybackTraceRecorder | None = None
+    temporal_priors: list[TemporalAccelerationPrior] = field(default_factory=list, init=False)
 
     @property
     def reconstruction(self) -> pycolmap.Reconstruction:
@@ -334,20 +370,23 @@ class GlobalPositioner:
             if self.replay.write_enabled("gp1") or self.replay.write_enabled("gp2")
             else None
         )
-        temporal_prior_specs = []
-        temporal = self.options.temporal_acceleration
-        if temporal.first_pass_weight > 0.0 or temporal.second_pass_weight > 0.0:
-            temporal_prior_specs = _build_temporal_acceleration_prior_specs(
+        self.temporal_priors = []
+        temporal = self.options.temporal
+        if (
+            temporal.enabled and (temporal.first_pass_weight > 0.0 or temporal.second_pass_weight > 0.0)
+        ) or self.retain_temporal_priors:
+            self.temporal_priors = _build_temporal_acceleration_prior_specs(
                 solve_state=self.solve_state,
                 reconstruction=working,
                 consecutive_pair_ids=self.consecutive_pair_ids,
                 timeline=self.timeline,
                 coordinate=temporal.coordinate,
+                point_budget=self.point_budget,
             )
             logger.info(
                 "Temporal acceleration (%s coordinate) has %d valid adjacent triplets",
                 temporal.coordinate,
-                len(temporal_prior_specs),
+                len(self.temporal_priors),
             )
 
         max_depth = self.options.track_filter.depth_prior_outlier_max_depth
@@ -355,7 +394,11 @@ class GlobalPositioner:
         prepared = prepare_observations(working, self.solve_state.sidecars, self.options, self.timeline.frame_ids)
         # GP1: initialize and solve, with optional warmup.
         logger.info("Running first global positioning ...")
-        result = self.run_pass("gp1", working, prepared, replay_images, depth_masks, temporal_prior_specs)
+        result = self.run_pass("gp1", working, prepared, replay_images, depth_masks, self.temporal_priors)
+        if (temporal.enabled and temporal.second_pass_relative_dead_zone > 0) or self.retain_temporal_priors:
+            self.temporal_priors = _freeze_temporal_motion_scales(
+                self.temporal_priors, working, self.timeline.frame_ids
+            )
         # GP2: refine GP1 geometry and reuse its depth scales.
         if self.options.second_pass.enabled:
             if self.options.track_filter.depth_prior_outlier_stages == "gp1":
@@ -367,7 +410,7 @@ class GlobalPositioner:
                 prepared,
                 replay_images,
                 depth_masks,
-                temporal_prior_specs,
+                self.temporal_priors,
                 initial_depth_map_scales=result.depth_map_scales,
             )
         self.filter_tracks(working)

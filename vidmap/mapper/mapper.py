@@ -55,6 +55,7 @@ class Mapper:
         self.conf = conf
         if isinstance(point_budget, bool) or not isinstance(point_budget, Integral) or point_budget <= 0:
             raise ValueError("Point budget must be a positive integer")
+        self.point_budget = point_budget
         self.point_budget_scale = point_budget / CANONICAL_POINT_BUDGET
         self.mapper_inputs = mapper_inputs
         self.sfm_outputs_dir = sfm_outputs_dir
@@ -247,6 +248,8 @@ class Mapper:
         # Solve positions from the fixed rotations and tracks, then refine the
         # complete reconstruction with bundle adjustment.
         global_positioner = GlobalPositioner(
+            point_budget=self.point_budget,
+            retain_temporal_priors=self.conf.ba.temporal.enabled and self.conf.ba.temporal.weight > 0.0,
             solve_state=solve_state,
             consecutive_pair_ids=mapping_stage_inputs.consecutive_pair_ids,
             timeline=mapping_stage_inputs.timeline,
@@ -261,6 +264,7 @@ class Mapper:
         global_positioner.position()
 
         bundle_adjuster = BundleAdjuster(
+            temporal_priors=global_positioner.temporal_priors,
             solve_state=solve_state,
             options=self.conf.ba,
             point_budget_scale=self.point_budget_scale,
