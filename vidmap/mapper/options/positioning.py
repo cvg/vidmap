@@ -32,16 +32,13 @@ class GPCommonOptions:
     use_metric_depth_constraint: bool = True
     bearing_kp_stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 8.0
     optimize_depth_map_scales: bool = True
-    use_log_scale_for_depth_map_scales: bool = False
-    smooth_log_linear_transition: bool = False
-    log_linear_threshold: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.1
+    log_linear_threshold: Annotated[float, Field(gt=0, lt=1, allow_inf_nan=False)] = 0.1
     random_seed: Annotated[int, Field(ge=-1)] = 1
     loss_function_type: NativeLossName = "huber"
     loss_function_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0
     loss_function_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.1
     apply_uncalibrated_loss_downweight: bool = False
     num_threads: Optional[int] = None
-    zero_residuals_behind_camera: bool = False
 
     @model_validator(mode="after")
     def validate_threads(self):
@@ -97,7 +94,6 @@ class GPSecondPassOptions:
     enabled: bool = True
     scale_prior_stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.05
     max_iterations: Annotated[int, Field(gt=0)] = 100
-    use_log_depth_residual: bool = True
     relax_angular_stddevs: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
     scale_reg_loss_name: ScaleLossName = "huber"
     scale_reg_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 1.0
