@@ -84,6 +84,13 @@ class MapperOptions:
         return raw
 
     @model_validator(mode="after")
+    def validate_temporal_coordinates(self):
+        if self.ba.temporal.enabled and self.ba.temporal.weight > 0 and self.ba.temporal.relative_dead_zone > 0:
+            if self.gp.temporal.coordinate != "keyframe_index":
+                raise ValueError("Relative BA smoothing requires keyframe_index coordinates")
+        return self
+
+    @model_validator(mode="after")
     def reject_replay_controls_when_disabled(self):
         """Keep replay/determinism controls out of raw production configs."""
         if self.replay_cache.mode != "off":

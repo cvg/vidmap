@@ -10,7 +10,10 @@ from vidmap_native import bundle_adjustment as ba_costs
 from vidmap.mapper.native.extension import native
 from vidmap.mapper.native.solver_backend import SolverDiagnostics
 from vidmap.mapper.options.positioning import LossConfig
+from vidmap.mapper.options.refinement import BATrajectorySmoothingOptions
 from vidmap.mapper.playback_trace import SolverPlaybackOptions
+
+from .temporal import append_temporal_priors
 
 
 @dataclass
@@ -56,6 +59,7 @@ class BundleAdjustmentResult:
     success: bool = False
     log_depth_scales: dict[int, float] = field(default_factory=dict)
     diagnostics: BundleAdjustmentDiagnostics = field(default_factory=BundleAdjustmentDiagnostics)
+    temporally_constrained_frames: set[int] = field(default_factory=set)
 
 
 def run_bundle_adjustment(
@@ -66,6 +70,8 @@ def run_bundle_adjustment(
     intrinsics_priors,
     state,
     *,
+    temporal_priors=(),
+    temporal_options=BATrajectorySmoothingOptions(),
     playback_callback=None,
     playback_options=None,
 ):
@@ -148,6 +154,9 @@ def run_bundle_adjustment(
             )
             diagnostics.num_scale_prior_residuals += 1
 
+    _temporal_owners, temporal_frames = append_temporal_priors(
+        problem, reconstruction, config, options, temporal_priors, temporal_options
+    )
     solver = pyceres.SolverOptions(ceres_options.create_solver_options(config, problem))
     solver.minimizer_progress_to_stdout = False
     capture = _Playback(playback_callback, playback_options, reconstruction)
@@ -159,7 +168,10 @@ def run_bundle_adjustment(
     pyceres.solve(solver, problem, summary)
     diagnostics.update(summary)
     result = BundleAdjustmentResult(
-        summary.IsSolutionUsable(), {image_id: float(scale[0]) for image_id, scale in scales.items()}, diagnostics
+        summary.IsSolutionUsable(),
+        {image_id: float(scale[0]) for image_id, scale in scales.items()},
+        diagnostics,
+        temporal_frames,
     )
     if result.success:
         capture.emit("final", diagnostics.num_iterations - 1)

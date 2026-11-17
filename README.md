@@ -307,15 +307,6 @@ python -m vidmap.run \
 
 </details>
 
-### Recommended configurations
-
-- [`default`](vidmap/configs/mapping/uncalib/base.yaml): The default reconstruction
-  pipeline, based on the method described in the paper.
-- [`smooth_trajectory`](vidmap/configs/mapping/uncalib/smooth_trajectory.yaml):
-  Experimental pipeline. Adds keyframe-coordinate trajectory smoothing to the
-  default pipeline for improved robustness on long sequences, as explored on
-  external datasets.
-
 ### Speed up VidMap
 
 Reducing the number of tracked points, using coarse-only keyframing, and using
@@ -644,9 +635,9 @@ better), evaluated at GT-supported estimated poses:
 | Dataset | ATE (m) ↓ | 10 m @ 0.5 m | 25 m @ 1.25 m | 50 m @ 2.5 m | 100 m @ 5 m | Full @ 5% |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
 | LaMAR (sample-300, 50 sequences) | 0.916 | 92.78 | 93.87 | 92.90 | 91.99 | 90.83 |
-| CroCoDL (64 sequences) | 0.284 | 95.38 | 96.75 | 96.70 | 96.60 | 98.03 |
-| LaMAR (complete, 128 sequences) | 2.095 | 91.47 | 92.77 | 91.85 | 90.90 | 89.71 |
-| Oxford Spires (rectified monocular, 10 sequences) | 0.123 | 98.98 | 99.08 | 99.06 | 99.06 | 99.52 |
+| CroCoDL (64 sequences) | 0.317 | 95.37 | 96.72 | 96.64 | 96.44 | 97.98 |
+| LaMAR (complete, 128 sequences) | 1.956 | 91.60 | 93.07 | 92.36 | 91.11 | 89.93 |
+| Oxford Spires (rectified monocular, 13 sequences) | 0.119 | 99.02 | 99.12 | 99.12 | 99.15 | 99.57 |
 | Oxford Spires (three-camera rig, 13 sequences) | 0.088 | 99.17 | 99.30 | 99.36 | 99.43 | 99.68 |
 | Hilti (three-view, 30 sequences) | 0.253 | 94.55 | 95.85 | 96.56 | 96.81 | 97.93 |
 
@@ -654,8 +645,8 @@ Pose AUC, averaged equally across sequences (%, higher is better):
 
 | Dataset | ATE (m) ↓ | 5 cm | 10 cm | 50 cm | 1 m | 10 m |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| EuRoC (11 sequences) | 0.044 | 29.32 | 60.40 | 92.04 | 96.02 | 99.60 |
-| ETH3D-SLAM (55 sequences) | 0.066 | 81.64 | 87.78 | 94.79 | 96.79 | 99.54 |
+| EuRoC (11 sequences) | 0.044 | 29.14 | 60.20 | 92.01 | 96.00 | 99.60 |
+| ETH3D-SLAM (55 sequences) | 0.066 | 81.43 | 87.68 | 94.89 | 96.82 | 99.54 |
 
 </details>
 

@@ -22,13 +22,28 @@ class TemporalAccelerationPrior:
     next_frame_id: int
     dt_prev: float
     dt_next: float
-    sqrt_observation_count: float
+    sqrt_point_budget: float
+    local_motion_scale: float | None = None
 
     def __post_init__(self):
         ids = (self.prev_frame_id, self.frame_id, self.next_frame_id)
-        values = (self.dt_prev, self.dt_next, self.sqrt_observation_count)
+        values = (self.dt_prev, self.dt_next, self.sqrt_point_budget)
         if len(set(ids)) != 3 or any(not np.isfinite(v) or v <= 0 for v in values):
             raise ValueError("invalid temporal acceleration prior")
+        if self.local_motion_scale is not None and (
+            not np.isfinite(self.local_motion_scale) or self.local_motion_scale < 0
+        ):
+            raise ValueError("invalid frozen temporal motion scale")
+
+    def loss(self, *, stddev, dead_zone, huber_width, relative_dead_zone=0.0):
+        if relative_dead_zone > 0:
+            if self.local_motion_scale is None:
+                raise ValueError("Relative temporal dead zone requires a frozen post-GP1 motion scale")
+            dead_zone = relative_dead_zone * self.local_motion_scale
+        if dead_zone == 0:
+            # The native dead-zone loss drops curvature at exactly zero residual.
+            return pyceres.HuberLoss(huber_width / stddev)
+        return gp_costs.dead_zone_huber_loss(dead_zone / stddev, huber_width / stddev)
 
 
 @dataclass
@@ -280,21 +295,21 @@ def run_global_positioning(
             if not common.use_log_scale_for_depth_map_scales:
                 problem.set_parameter_lower_bound(scale, 0, 1e-5)
         diagnostics.num_scale_prior_residuals = len(counts)
-    # Add optional temporal acceleration priors.
-    temporal = options.temporal_acceleration
+    # Add optional temporal smoothing priors.
+    temporal = options.temporal
     prefix = "second_pass" if second_pass else "first_pass"
     temporal_weight = getattr(temporal, prefix + "_weight")
-    if temporal_weight > 0:
-        if not temporal_priors:
-            raise ValueError("enabled temporal acceleration requires priors and positive weight")
-        loss = gp_costs.dead_zone_huber_loss(
-            getattr(temporal, prefix + "_dead_zone") / temporal.stddev,
-            getattr(temporal, prefix + "_huber_width") / temporal.stddev,
-        )
+    if temporal.enabled and temporal_weight > 0:
         for prior in temporal_priors:
+            loss = prior.loss(
+                stddev=temporal.stddev,
+                dead_zone=getattr(temporal, prefix + "_dead_zone"),
+                huber_width=getattr(temporal, prefix + "_huber_width"),
+                relative_dead_zone=temporal.second_pass_relative_dead_zone if second_pass else 0.0,
+            )
             frame_ids = (prior.prev_frame_id, prior.frame_id, prior.next_frame_id)
             cost = gp_costs.temporal_acceleration_cost(prior.dt_prev, prior.dt_next, temporal.stddev)
-            weighted = gp_costs.scaled_loss(loss, temporal_weight * prior.sqrt_observation_count**2)
+            weighted = gp_costs.scaled_loss(loss, temporal_weight * prior.sqrt_point_budget**2)
             problem.add_residual_block(
                 cost,
                 weighted,

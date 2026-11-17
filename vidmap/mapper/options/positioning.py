@@ -134,8 +134,8 @@ class GPTrackFilterOptions:
 
 
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
-class GPTemporalAccelerationOptions:
-    """Optional smoothness prior over adjacent video triplets.
+class GPTrajectorySmoothingOptions:
+    """Smooth camera positions across consecutive keyframes.
 
     ``timestamp`` uses physical elapsed seconds, so acceleration quantities are
     in world-units/s^2 (m/s^2 with a metric-scale anchor). ``keyframe_index``
@@ -143,14 +143,26 @@ class GPTemporalAccelerationOptions:
     displacement curvature in world-units/keyframe^2.
     """
 
-    coordinate: Literal["timestamp", "keyframe_index"] = "timestamp"
-    stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
-    first_pass_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
-    second_pass_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
+    enabled: bool = True
+    coordinate: Literal["timestamp", "keyframe_index"] = "keyframe_index"
+    stddev: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 3.0
+    first_pass_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 42.0
+    second_pass_weight: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 42.0
     first_pass_dead_zone: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
-    first_pass_huber_width: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    first_pass_huber_width: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1e9
     second_pass_dead_zone: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
-    second_pass_huber_width: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    second_pass_huber_width: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1e9
+    # Multiples of surrounding keyframe movement, frozen after GP1.
+    second_pass_relative_dead_zone: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
+
+    @model_validator(mode="after")
+    def validate_relative_dead_zone(self):
+        if self.second_pass_relative_dead_zone > 0:
+            if self.coordinate != "keyframe_index":
+                raise ValueError("Relative temporal dead zones require keyframe_index coordinates")
+            if self.second_pass_dead_zone != 0:
+                raise ValueError("Relative temporal dead zones cannot be combined with absolute dead zones")
+        return self
 
 
 @pydantic_dataclass(frozen=True, kw_only=True, config=ConfigDict(extra="forbid", strict=True))
@@ -160,7 +172,7 @@ class GPOptions:
     first_pass: GPFirstPassOptions = dc_field(default_factory=GPFirstPassOptions)
     second_pass: GPSecondPassOptions = dc_field(default_factory=GPSecondPassOptions)
     track_filter: GPTrackFilterOptions = dc_field(default_factory=GPTrackFilterOptions)
-    temporal_acceleration: GPTemporalAccelerationOptions = dc_field(default_factory=GPTemporalAccelerationOptions)
+    temporal: GPTrajectorySmoothingOptions = dc_field(default_factory=GPTrajectorySmoothingOptions)
 
     @model_validator(mode="before")
     @classmethod
@@ -173,7 +185,7 @@ class GPOptions:
                 "first_pass": GPFirstPassOptions,
                 "second_pass": GPSecondPassOptions,
                 "track_filter": GPTrackFilterOptions,
-                "temporal_acceleration": GPTemporalAccelerationOptions,
+                "temporal": GPTrajectorySmoothingOptions,
             },
         )
 
