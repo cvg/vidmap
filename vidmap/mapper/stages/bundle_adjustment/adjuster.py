@@ -46,7 +46,8 @@ class Point3DTable:
 
     def indices(self, point3D_ids) -> np.ndarray:
         """Row of each requested id; observed ids always exist in the reconstruction."""
-        positions = np.searchsorted(self.sorted_ids, np.asarray(point3D_ids, dtype=np.int64))
+        # Query in the ids' dtype: numpy compares uint64 with int64 as float64, which is inexact above 2^53.
+        positions = np.searchsorted(self.sorted_ids, np.asarray(point3D_ids).astype(self.sorted_ids.dtype))
         return self.order[positions]
 
 
