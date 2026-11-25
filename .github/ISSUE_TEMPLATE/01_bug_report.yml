@@ -1,0 +1,53 @@
+name: Bug or performance report
+description: Report a crash, incorrect result, slow run, or installation problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include enough detail for us to reproduce and investigate the problem.
+        Check the [README](https://github.com/cvg/vidmap#readme) and search existing issues first.
+        For slow runs, also check [Speed up VidMap](https://github.com/cvg/vidmap#speed-up-vidmap).
+        If a requested detail is unavailable or not applicable, explain why.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened, and what did you expect?
+      description: For performance problems, include the slow stage, elapsed time, and whether the run completed, failed, or is still running.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: VidMap version or commit
+      description: Run `git rev-parse HEAD` in your VidMap checkout. Mention any local code changes.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and hardware
+      description: Include OS, Python, PyTorch, CUDA, COLMAP/PyCOLMAP and Ceres versions where relevant; CPU, RAM, GPU and VRAM; and how you installed VidMap. For solver performance, say whether Ceres was built with CUDA/cuDSS, or if you do not know.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Exact commands and configuration
+      description: Paste the commands and steps that reproduce the issue, including configuration names and overrides. Attach the output folder's frontend_config.yaml and mapping_config.yaml if available. For installation failures, include the failing installation command.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input data
+      description: Describe the video or image sequence, image count and resolution, selected keyframe count if known, and camera setup (monocular, rig, fisheye, panorama; calibrated or uncalibrated). Share a small reproducing sample if possible; otherwise describe any sharing restrictions. For installation issues, write "Not applicable".
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and supporting evidence
+      description: Paste relevant console output as text or attach a log file, including the full traceback for crashes or solver iterations and timing for slow runs. Screenshots can help illustrate reconstruction problems. If there is no log output, say so.
+    validations:
+      required: true

@@ -1,0 +1,22 @@
+name: Usage question
+description: Ask about documented behavior, configuration, or using VidMap.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the [README](https://github.com/cvg/vidmap#readme) and search existing issues first.
+        For crashes, incorrect results, installation failures, or slow runs, use the **Bug or performance report** form.
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: Describe your goal and the specific question you need help with.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and what you have tried
+      description: Link the documentation or existing issues you checked and explain what remains unclear. Include your command, configuration, input type, and VidMap version when relevant.
+    validations:
+      required: true
