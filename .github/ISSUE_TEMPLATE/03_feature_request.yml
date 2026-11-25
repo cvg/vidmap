@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an improvement with a concrete use case.
+body:
+  - type: markdown
+    attributes:
+      value: Please search existing issues before proposing a feature.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe what you want to accomplish and the limitation you are running into.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the behavior you would like and any alternatives or workarounds you have considered.
+    validations:
+      required: true
